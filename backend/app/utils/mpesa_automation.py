@@ -1,7 +1,7 @@
 from playwright.sync_api import sync_playwright,Page,Locator,Download, TimeoutError as PlaywrightTimeoutError
 from flask import current_app
 from app.utils.script import fill_login_form, capture_and_solve_captcha
-from app.utils.email_utils import generate_scraping_report_email, send_scraping_report_email
+from app.utils.email_utils import generate_scraping_report_email, send_scraping_report_email,send_session_timeout_email
 from app.service.transaction_service import TransactionService
 from app.service.agentcompany_service import AgentCompanyService
 from app.model.user import User
@@ -11,7 +11,7 @@ from dotenv import load_dotenv
 from openai import OpenAI
 from bs4 import BeautifulSoup
 from datetime import datetime, timedelta
-from typing import List, Dict, Any, Optional, Tuple
+from typing import List, Dict, Any, Optional, Set, Tuple
 from decimal import Decimal
 import pandas as pd
 import re
@@ -20,21 +20,22 @@ import os
 import time
 import random
 import traceback
-
-
-
+import numpy as np
 
 
 transaction_service = TransactionService()
 agent_company_service = AgentCompanyService()
 company_shortcode = None
 user_id = None
+till_scraping_shortfall = {}
+context = None
+browser = None
 
 # Load environment variables
 load_dotenv()
 
 def login_to_mpesa(password: str = None, username: str = None, short_code: str = None, user_id_passed: str = None) -> None:
-    global company_shortcode, user_id
+    global company_shortcode, user_id,till_scraping_shortfall,context,browser
     password = password 
     # or os.getenv("AGENT_COMPANY_PASSWORD")
     username = username 
@@ -43,6 +44,8 @@ def login_to_mpesa(password: str = None, username: str = None, short_code: str =
     short_code = short_code 
     # or os.getenv("AGENT_COMPANY_SHORTCODE")
     company_shortcode = short_code
+
+    till_scraping_shortfall = transaction_service.get_last_scraped_per_shortcode()
     url = "https://org.ke.m-pesa.com/#/login?transaction_service=https%3A%2F%2Forg.ke.m-pesa.com%2Forgportal%2Fv1%2Fsso%2Fhome"
 
     with sync_playwright() as p:
@@ -115,7 +118,6 @@ def retry_captcha_login(page:Page) -> str:
     
     return captcha_solution
     
-
 def maximize_page(page: Page) -> None:
     """
     Maximizes the page by setting the viewport to a large size (e.g., 1920x1080).
@@ -420,7 +422,7 @@ def save_table_to_dataframe_download(page: Page,business_shortcode:int,additiona
     print(f"[EXPORT] Reading {download.suggested_filename} directly into pandas...")
     temp_path = download.path()  # Playwright saves it temporarily
     
-    df,columns = update_transactions_from_file(
+    df,success_value = update_transactions_from_file(
         file_path=temp_path,
         business_shortcode=business_shortcode,
         transaction_type=additional_category,
@@ -431,13 +433,14 @@ def save_table_to_dataframe_download(page: Page,business_shortcode:int,additiona
     print(f"[SUCCESS] Loaded DataFrame in-memory: {df.shape[0]} rows × {df.shape[1]} columns")
     print(f"   Columns: {list(df.columns)}")
 
-    return df, columns
+    return df, success_value
 
-# Example of direct usage
 def update_transactions_from_file(file_path, business_shortcode, transaction_type, company_shortcode, agent_id):
     """
     Update transactions directly from a file
     """
+    
+    success_value : bool = False
     
     print(f"Processing file: {file_path}")
     print(f"Business: {business_shortcode}")
@@ -458,8 +461,8 @@ def update_transactions_from_file(file_path, business_shortcode, transaction_typ
         agent_id=agent_id,
         business_shortcode=business_shortcode
     )
-    
-    if results.get('success', False):
+    success_value = results.get('success', False)
+    if success_value:
         summary = results.get('summary', {})
         print(f"\n✅ Success!")
         print(f"   Updated: {summary.get('updated_count', 0)}")
@@ -473,7 +476,7 @@ def update_transactions_from_file(file_path, business_shortcode, transaction_typ
     df.to_excel(f"{business_shortcode}_{transaction_type}.xlsx", index=False)
     print(f"💾 Saved to: {business_shortcode}_{transaction_type}.xlsx")
     
-    return df, df.columns
+    return df, success_value
 
 def is_till_frozen(page:Page)-> bool:
     
@@ -483,7 +486,6 @@ def is_till_frozen(page:Page)-> bool:
     except Exception as e:
         print(f"The till is not frozen {str(e)}")
         return False
-
 
 def clean_label_for_db(label: str) -> str:
     """
@@ -631,8 +633,7 @@ def scrape_till_details(page: Page, business_short_code: int) -> dict:
             'success': False,
             'error': str(e),
             'business_short_code': business_short_code
-        }
-        
+        }   
 
 def click_receipt_link(page:Page,transaction_id: str) -> bool:
     try:
@@ -797,7 +798,7 @@ def go_forth_on_organization(page: Page, row_count: int):
             print("[INFO] Clicking 'Next Page' button...")
             next_page_btn.click()
             page.wait_for_load_state("networkidle", timeout=20000)
-            time.sleep(2)
+            time.sleep(0.5)
             return  True  # Continue processing
         else:
             print(f"[INFO] Next page disabled. Finished all {row_count} rows on last page.")
@@ -805,6 +806,13 @@ def go_forth_on_organization(page: Page, row_count: int):
 
     except Exception as e:
         print(f"[WARNING] Error clicking next page: {e}")
+        user = User.query.filter_by(id=user_id).first()
+
+        if user:
+            # send_session_timeout_email(user.email, user.first_name)
+            send_session_timeout_email("martinmaati31@gmail.com")
+            context.close()
+            browser.close()
         page.screenshot(path="pagination_error.png")
         return False
         
@@ -819,16 +827,16 @@ def go_previous_on_organisation(page: Page):
             print("[INFO] Clicking 'Previous Page' button...")
             prev_page_btn.click()
             page.wait_for_load_state("networkidle", timeout=20000)
-            time.sleep(2)
-            return None  # Continue processing
+            time.sleep(0.5)
+            return True  # Continue processing
         else:
             print(f"[INFO] Previous page disabled.")
-            return None
+            return False
 
     except Exception as e:
         print(f"[WARNING] Error clicking previous page: {e}")
         page.screenshot(path="pagination_error.png")
-        return None
+        return False
     
 def rerun_failed_codes(page: Page, failed_codes: List[int], max_retries: int = 2) -> bool:
     """
@@ -893,7 +901,7 @@ def rerun_failed_codes(page: Page, failed_codes: List[int], max_retries: int = 2
                             else:
                                 print(f"[RETRY] Will retry {code} later (attempt {retry_count[code] + 1})")
 
-                        time.sleep(1.5)
+                        time.sleep(1)
 
                 except Exception as e:
                     print(f"[ERROR] Error during retry scan of row: {e}")
@@ -980,20 +988,13 @@ def process_float_account_details(page: Page, business_short_code: int, mapped_d
             return "frozen",False
 
         print(f"This is the date and time selection")
-        # Step 2: Set Start Time = 1st day of current month
-        # select_dates_and_submit_(page)
         
-        time.sleep(4)  # Wait for table to load
+        time.sleep(1)  # Wait for table to load
 
         print("We are trying to save to the dataframe")
-        # df, headers = save_table_to_dataframe_download(page, row_index=business_short_code, category="float")
-        # if(pass_value=="first"):
-        #     df, headers = save_table_to_dataframe_download(page,business_shortcode=business_short_code,additional_category="float")
-        # else:
-        #     df, headers = save_table_to_dataframe_(page,business_shortcode=business_short_code,category=pass_value)
         
-        df,headers = scrape_180_days_monthly(page,business_short_code=business_short_code,pass_value=pass_value,additional_category="float")
-        if df is not None:
+        df,success_value = scrape_180_days_monthly(page,business_short_code=business_short_code,pass_value=pass_value,additional_category="float")
+        if df is not None or success_value:
             print("[SUCCESS] Float table extracted")
             return "dataframe",True
         else:
@@ -1029,17 +1030,8 @@ def process_commission_account_details(page: Page, business_short_code: int, map
 
         extract_extra_till_info(page, mapped_data)
         
-        # Step 2: Click the Query/Search button
-        # click_search_button(page)
-
-        # df, headers = save_table_to_dataframe_download(page, row_index=business_short_code, category="commission")
-        # if(pass_value=="first"):
-        #     df, headers = save_table_to_dataframe_download(page,business_shortcode=business_short_code,additional_category="commission")
-        # else:
-        #     df, headers = save_table_to_dataframe_(page,business_shortcode=business_short_code,additional_category=pass_value)
-        
-        df,headers = scrape_180_days_monthly(page,business_short_code=business_short_code,pass_value=pass_value,additional_category="commission")
-        if df is not None:
+        df,success_value = scrape_180_days_monthly(page,business_short_code=business_short_code,pass_value=pass_value,additional_category="commission")
+        if df is not None or success_value:
             print("[SUCCESS] Commission table extracted")
             return True
         else:
@@ -1068,7 +1060,7 @@ def process_float_commission(page: Page, business_short_code: int , mapped_data:
             if success_inner:
                 print("[SUCCESS] Float Account step completed")
                 break
-            time.sleep(2)  # Wait before retrying
+            time.sleep(1)  # Wait before retrying
         else:
             print("[ERROR] All retries failed for Float Account step")
             return False
@@ -1079,7 +1071,7 @@ def process_float_commission(page: Page, business_short_code: int , mapped_data:
         
 
     # Small pause to let page stabilize
-    time.sleep(2)
+    time.sleep(1)
 
     if not process_commission_account_details(page, business_short_code,mapped_data=mapped_data, pass_value=pass_value):
         print(f"[ERROR] Failed at Commission Account step {business_short_code} - Retrying...")
@@ -1090,7 +1082,7 @@ def process_float_commission(page: Page, business_short_code: int , mapped_data:
             if process_commission_account_details(page, business_short_code,mapped_data=mapped_data, pass_value=pass_value):
                 print("[SUCCESS] Commission Account step completed")
                 break
-            time.sleep(2)  # Wait before retrying
+            time.sleep(1)  # Wait before retrying
         else:
             print("[ERROR] All retries failed for Commission Account step") 
             
@@ -1121,6 +1113,11 @@ def select_dates_and_submit_monthly(page: Page, month_offset: int = 0) -> bool:
         
     except Exception as e:
         print(f"[ERROR] Could not find date picker inputs: {e}")
+        user = User.query.filter_by(id=user_id).first()
+        if user:
+            send_session_timeout_email("martinmaati31@gmail.com")
+            context.close()
+            browser.close()
         return False
     
     try:
@@ -1168,14 +1165,14 @@ def select_dates_and_submit_monthly(page: Page, month_offset: int = 0) -> bool:
         
         # Clear input field
         start_time_input.fill("")
-        time.sleep(0.5)
+        time.sleep(0.2)
         
         # Type start date with time
         start_time_input.type(start_date_str)
         
         # Press Enter to confirm
         start_time_input.press("Enter")
-        time.sleep(1)
+        time.sleep(0.5)
         
         # --- SET END DATE WITH TIME ---
         print("[STEP 2] Setting End Date with time...")
@@ -1192,7 +1189,7 @@ def select_dates_and_submit_monthly(page: Page, month_offset: int = 0) -> bool:
         
         # Press Enter to confirm
         end_time_input.press("Enter")
-        time.sleep(1)
+        # time.sleep(1)
         
         # --- SUBMIT THE FORM ---
         print("[STEP 3] Submitting form...")
@@ -1201,7 +1198,12 @@ def select_dates_and_submit_monthly(page: Page, month_offset: int = 0) -> bool:
         click_search_button(page)
                 
         # Wait for results to load
-        time.sleep(4)
+        time.sleep(2)
+        too_large_error = page.locator("//button[@aria-label='Close this dialog']").first
+        if too_large_error.is_visible():
+            close_irritative_dialog_box(page)
+            select_dates_and_submit_monthly(page, month_offset=month_offset)
+            print("[ERROR] Date range too large error encountered")
         print("[✓] Form submitted successfully")
         return True
         
@@ -1211,6 +1213,21 @@ def select_dates_and_submit_monthly(page: Page, month_offset: int = 0) -> bool:
         traceback.print_exc()
         return False
 
+def _get_total_months_by_shortcode_shortfall(business_shortcode:str,till_scraping_shortfall: Dict) -> tuple:
+    """
+    Calculate the number of months to scrape based on shortfall
+    """
+    if not till_scraping_shortfall:
+        return 6,180
+    
+    if business_shortcode not in  till_scraping_shortfall.keys():
+        return 6,180
+    
+    # Get the maximum number of days since last scrape
+    days = float(till_scraping_shortfall.get(business_shortcode, 6))
+
+    return np.ceil(days/30).astype(int), days
+
 # Main function to scrape 180 days month by month
 def scrape_180_days_monthly(page:Page, business_short_code:int=0, pass_value:str="",additional_category=None) -> tuple:
     """
@@ -1218,9 +1235,13 @@ def scrape_180_days_monthly(page:Page, business_short_code:int=0, pass_value:str
     """
     all_data = []
     
+    success_value_ : bool = False
+        
     # 180 days divided into 6 chunks of 30 days each
-    total_months = 6
-    
+    total_months,days = _get_total_months_by_shortcode_shortfall(str(business_short_code),till_scraping_shortfall)
+    print(f"[INFO] Total months to scrape based on shortfall: {total_months}")
+    if(days<7):
+        return pd.DataFrame(),True
     for month_offset in range(total_months):
         close_irritative_dialog_box(page)
         print(f"\n{'='*60}")
@@ -1235,13 +1256,13 @@ def scrape_180_days_monthly(page:Page, business_short_code:int=0, pass_value:str
         
         if not success:
             close_irritative_dialog_box(page)
-            time.sleep(2)
+            time.sleep(1)
             print(f"[INFO] Retrying date selection for month offset {month_offset}...")
             success = select_dates_and_submit_monthly(page, month_offset=month_offset)
             if not success:
                 close_irritative_dialog_box(page)
                 print(f"[ERROR] Failed to select dates for month offset {month_offset}")
-                continue
+                break
         
         # Wait for table to load
         time.sleep(1)
@@ -1251,13 +1272,13 @@ def scrape_180_days_monthly(page:Page, business_short_code:int=0, pass_value:str
         # Get data for this period
         try:
             if pass_value == "first":
-                df, headers = save_table_to_dataframe_download(
+                df, success_value = save_table_to_dataframe_download(
                     page, 
                     business_shortcode=business_short_code,
                     additional_category=additional_category
                 )
             else:
-                df, headers = save_table_to_dataframe_(
+                df, success_value = save_table_to_dataframe_(
                     page,
                     business_shortcode=business_short_code,
                     category=pass_value
@@ -1276,16 +1297,18 @@ def scrape_180_days_monthly(page:Page, business_short_code:int=0, pass_value:str
                 all_data.append(df)
                 
                 print(f"[SUCCESS] Scraped {len(df)} rows for period {days_ago_start}-{days_ago_end} days ago")
+                success_value_ = success_value
             else:
                 print("[INFO] No data found in dataframe")
                 
         except Exception as e:
             print(f"[ERROR] Failed to save data for month offset {month_offset}: {e}")
+            success_value_ = False
         
         # Add delay between requests
         if month_offset < total_months - 1:
             print("[INFO] Waiting before next period...")
-            time.sleep(2)
+            time.sleep(1)
     
     # Combine all data
     if all_data:
@@ -1293,9 +1316,9 @@ def scrape_180_days_monthly(page:Page, business_short_code:int=0, pass_value:str
         print(f"\n{'='*60}")
         print(f"TOTAL DATA: {len(combined_df)} rows from {len(all_data)} periods")
         print('='*60)
-        return combined_df, headers if all_data else []
+        return combined_df, True if all_data else []
     
-    return pd.DataFrame(), []
+    return pd.DataFrame(), success_value_
 
 def select_dates_and_submit_(page: Page) -> bool:
         try:
@@ -1312,7 +1335,14 @@ def select_dates_and_submit_(page: Page) -> bool:
                 timeout=10000
             )
             print("[✓] Found End Time date picker input")
-            
+            user = User.query.filter_by(id=user_id).first()
+            if user:
+                # send_session_timeout_email(user.email)
+                send_session_timeout_email("martinmaati31@gmail.com")
+                context.close()
+                browser.close()
+                
+
         except Exception as e:
             print(f"[ERROR] Could not find date picker inputs: {e}")
             
@@ -1388,7 +1418,7 @@ def select_dates_and_submit_(page: Page) -> bool:
             page.keyboard.press("Enter")
             print("[✓] Pressed Enter to submit form")
             # page.wait_for_timeout(3000)  # Wait for page to load results
-            time.sleep(2)  # Wait for page to load results
+            time.sleep(1)  # Wait for page to load results
         except Exception as e:
             print(f"[ERROR] Could not complete Tab/Enter submission: {e}")
             traceback.print_exc()
@@ -1533,6 +1563,15 @@ def process_organization_rows(page: Page) -> None:
     total_processed = 0
     to_be_rerun: list[int] = []
     close_irritative_dialog_box(page)
+    all_shortcodes_ :Set[str] =set()
+    all_shortcodes = extract_all_business_short_codes(page,all_shortcodes_)
+    print(f"[INFO] Extracted {len(all_shortcodes)} business short codes on all pages")
+    
+    priority_short_codes = _get_priority_shortcodes_(all_shortcodes)
+    print(f"[INFO] {len(priority_short_codes)} priority short codes identified for processing")
+    
+    while go_previous_on_organisation(page):
+        pass # Go back to first page
 
     while True:
         print("\n[INFO] Starting new pagination page...")
@@ -1544,18 +1583,20 @@ def process_organization_rows(page: Page) -> None:
             print("[INFO] No organizations found.")
             break
 
-        print(f"[INFO] This page shows {total_in_list} organizations")
-
         processed_on_this_page = process_page_rows(
             page=page,
             total_in_list=total_in_list,
             total_processed_so_far=total_processed,
+            priority_short_codes=priority_short_codes,
             to_be_rerun=to_be_rerun
         )
 
         total_processed += processed_on_this_page
 
-        if total_processed >= total_in_list and len(to_be_rerun) == 0:
+
+        # Move to next pagination page
+        if not go_forth_on_organization(page, total_in_list):
+            print("[INFO] No more pages or navigation failed.")
             print(f"[SUCCESS] All {total_processed} organizations processed successfully!")
             stats = transaction_service.gather_scraping_statistics(
                 start_date=datetime.now() - timedelta(days=180),
@@ -1563,25 +1604,14 @@ def process_organization_rows(page: Page) -> None:
                 company_shortcode=company_shortcode
             )
 
-            # Generate and preview HTML
-            # html_content = generate_scraping_report_email(stats)
-            # with open("scraping_report_preview.html", "w") as f:
-            #     f.write(html_content)
-            # print("Preview saved: scraping_report_preview.html")
-
             user = User.query.filter_by(id=user_id).first()
-
-            # Send email
-            # send_scraping_report_email(user.email, stats)
+            
             send_scraping_report_email("martinmaati31@gmail.com", stats)
+            while go_previous_on_organisation(page):
+                pass
             break
 
-        # Move to next pagination page
-        if not go_forth_on_organization(page, total_in_list):
-            print("[INFO] No more pages or navigation failed.")
-            break
-
-        time.sleep(2)  # Gentle pause between pages
+        time.sleep(1)  # Gentle pause between pages
 
     if to_be_rerun:
         print(f"[WARN] {len(to_be_rerun)} organizations failed and need reprocessing: {to_be_rerun}")
@@ -1594,13 +1624,65 @@ def process_organization_rows(page: Page) -> None:
 def wait_for_table_load(page: Page, timeout: int = 15000) -> None:
     """Wait for network idle and allow lazy loading."""
     page.wait_for_load_state("networkidle", timeout=timeout)
-    time.sleep(2)
+    time.sleep(0.5)
+    
+def extract_all_business_short_codes(
+    page: Page,
+    short_codes: Optional[Set[str]] = None
+) -> Set[str]:
+
+    if short_codes is None:
+        short_codes = set()
+
+    rows_locator = page.locator("//tbody//tr[@class='el-table__row childTableRow']")
+    print(f"The length of the shortcodes is {len(short_codes)}")
+
+    for i in range(rows_locator.count()):
+        row = rows_locator.nth(i)
+
+        try:
+            row_text = row.text_content(timeout=3000) or ""
+            match = re.search(r'^(\d+)', row_text.strip())
+            if match:
+                short_codes.add(match.group(1))  # set auto-deduplicates
+        except Exception as e:
+            print(f"[ERROR] Error extracting short code from row: {e}")
+
+    if go_forth_on_organization(page, get_total_from_pagination(page)):
+        wait_for_table_load(page)
+        extract_all_business_short_codes(page, short_codes)
+
+    return short_codes
+
+def _get_priority_shortcodes_(all_shortcodes: Set[str]) -> Set[str]:
+    """Return shortcodes with scraping priority."""
+    priority_shortcode_indexes: Set[str] = set()
+
+    print(f"All shortcodes are of length {len(all_shortcodes)}")
+
+    for business_shortcode in all_shortcodes:
+        total_months, days = _get_total_months_by_shortcode_shortfall(
+            business_shortcode,
+            till_scraping_shortfall
+        )
+
+        print(
+            f"[INFO] Total months to scrape based on shortfall: "
+            f"{total_months} for shortcode {business_shortcode}"
+        )
+
+        if days > 7:
+            priority_shortcode_indexes.add(business_shortcode)
+
+    return priority_shortcode_indexes
+
 
 def process_page_rows(
     page: Page,
     total_in_list: int,
     total_processed_so_far: int,
-    to_be_rerun: list[int]
+    priority_short_codes: set[str],
+    to_be_rerun: list[int],
 ) -> int:
     """Process all visible rows on the current page with virtual scrolling support."""
     close_irritative_dialog_box(page)
@@ -1608,6 +1690,8 @@ def process_page_rows(
     rows_locator = page.locator("//tbody//tr[@class='el-table__row childTableRow']")
 
     visible_rows = get_visible_rows(rows_locator)
+    
+    print(f"The priority short codes are {priority_short_codes}")
         
     if not visible_rows:
         print("[INFO] No visible rows — scrolling to load more...")
@@ -1615,42 +1699,42 @@ def process_page_rows(
         time.sleep(2)
         
     visible_rows_size = len(visible_rows)
-    print(f"[INFO] Found {len(visible_rows)} visible rows to process on this page")
+    print(f"[INFO] Found {visible_rows_size} visible rows to process on this page")
             
-    while processed_on_page < visible_rows_size:
+    # while processed_on_page < visible_rows_size:
 
-        print(f"[INFO] Found {len(visible_rows)} visible rows to process")
+    for row in visible_rows:
+        if processed_on_page >= 10:
+            break
 
-        for row in visible_rows:
-            if processed_on_page >= 10:
-                break
-
-            business_short_code = extract_business_short_code(row)
-            if not business_short_code:
-                processed_on_page += 1
-                continue
-
-            row.click(timeout=15000)
-            page.wait_for_timeout(1000)
-
-            success = process_single_row(page, business_short_code, total_processed_so_far + processed_on_page + 1)
-
-            if success:
-                print(f"[SUCCESS] Completed row {total_processed_so_far + processed_on_page + 1}")
-                return_to_organization_list(page)
-                
-            else:
-                to_be_rerun.append(business_short_code)
-                return_to_organization_list(page)
-                print(f"[WARN] Row {business_short_code} failed, added to rerun list")
-
+        # I will think about this later
+        business_short_code = extract_business_short_code(row)
+        if not business_short_code or str(business_short_code) not in priority_short_codes:
+            print(f"[INFO] Skipping row {business_short_code} as it's not a priority shortcode.")
             processed_on_page += 1
-            time.sleep(1)
+            continue
 
-        # Scroll to load more rows if needed
-        if processed_on_page < total_in_list:
-            page.mouse.wheel(0, 1200)
-            time.sleep(2)
+        row.click(timeout=15000)
+        page.wait_for_timeout(1000)
+
+        success = process_single_row(page, business_short_code, total_processed_so_far + processed_on_page + 1)
+
+        if success:
+            print(f"[SUCCESS] Completed row {total_processed_so_far + processed_on_page + 1}")
+            return_to_organization_list(page)
+            
+        else:
+            to_be_rerun.append(business_short_code)
+            return_to_organization_list(page)
+            print(f"[WARN] Row {business_short_code} failed, added to rerun list")
+
+        # processed_on_page += 1
+        # time.sleep(1)
+
+    # Scroll to load more rows if needed
+    if processed_on_page < total_in_list:
+        page.mouse.wheel(0, 1200)
+        time.sleep(0.5)
 
     return processed_on_page
 
@@ -1716,7 +1800,3 @@ def process_single_row(page: Page, business_short_code: int, row_number: int) ->
         page.screenshot(path=f"error_row_{business_short_code}_{row_number}.png")
         close_detail_panel(page)
         return False
-
-# if __name__ == "__main__":
-#     # solveCaptchaXai()
-#     login_to_mpesa()

@@ -324,3 +324,46 @@ def send_scraping_report_email(recipient_email: str, stats_data: dict):
     except Exception as e:
         print(f"Failed to send scraping report email: {str(e)}")
         return False
+    
+def send_session_timeout_email(recipient_email: str) -> bool:
+    """
+    Send a plain-text email notifying the user that their session has timed out
+    and they need to re-login.
+    """
+    try:
+        subject = f"Session Timed Out – Action Required ({datetime.now().strftime('%d/%m/%Y')})"
+
+        body = (
+            "Hello,\n\n"
+            "This is to inform you that your current session has timed out due to inactivity "
+            "or session expiry.\n\n"
+            "For security reasons, the system automatically ends sessions after a defined "
+            "period. As a result, you are no longer authenticated and cannot continue with "
+            "the current session.\n\n"
+            "Please log out (if applicable) and log in again to start a new session and "
+            "continue using the system.\n\n"
+            "If you continue to experience this issue after re-logging in, kindly contact "
+            "the support team for assistance.\n\n"
+            "Thank you for your understanding.\n\n"
+            "Kind regards,\n"
+            "System Administration Team"
+        )
+
+        msg = MIMEMultipart()
+        msg["From"] = EMAIL_ADDRESS
+        msg["To"] = recipient_email
+        msg["Subject"] = subject
+
+        msg.attach(MIMEText(body, "plain"))
+
+        with smtplib.SMTP("smtp.gmail.com", 587) as server:
+            server.starttls()
+            server.login(EMAIL_ADDRESS, EMAIL_PASSWORD)
+            server.send_message(msg)
+
+        print(f"Session timeout email sent to {recipient_email}")
+        return True
+
+    except Exception as e:
+        print(f"Failed to send session timeout email: {str(e)}")
+        return False

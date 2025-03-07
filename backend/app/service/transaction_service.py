@@ -1,6 +1,6 @@
 import pandas as pd
 import os
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from sqlalchemy.exc import IntegrityError
 from app import db
@@ -28,6 +28,8 @@ company_service = CompanyService(db)
 class TransactionService:
     def __init__(self):
         self.allowed_extensions = {'csv', 'xlsx', 'xls', 'json'}
+        KENYA_TZ = timezone(timedelta(hours=3))
+        self.kenya_tz = KENYA_TZ
     
     def process_scraped_data_and_update(self, file_path: str, business_shortcode: str, 
                                        additional_category: str, company_id: int, 
@@ -290,8 +292,7 @@ class TransactionService:
                 mapped_data[standardized_key] = value
 
         return mapped_data
-    
-    
+     
     def _update_transactions_batch(self, transactions_data: List[Dict], 
                                   transaction_type: str, company_shortcode: str, 
                                   agent_id: int, business_shortcode: str = None) -> Dict:
@@ -366,6 +367,7 @@ class TransactionService:
                     'transaction_type': transaction_type,
                     'company_id': company_id,
                     'agent_id': agent_id,
+                    'business_shortcode': business_shortcode,
                     'updated_at': datetime.now()
                 }
                 
@@ -721,8 +723,7 @@ class TransactionService:
                 "error": f"Bulk update failed: {str(e)}",
                 "traceback": traceback.format_exc()
             }
-    
-    
+      
     def get_transactions(self, filters: Dict[str, Any], page: int = 1, per_page: int = 10) -> Dict[str, Any]:
         """
         Fetch transactions with support for multiple filters, search, date range, and pagination.
@@ -1083,7 +1084,17 @@ class TransactionService:
                 "success": False,
                 "error": f"Failed to get transaction statistics: {str(e)}"
             }
-
+    
+    def get_last_scraped_per_shortcode(self) -> Dict[str,int]:
+        """Get the last scraped transaction ID per business shortcode"""
+        try:
+            
+            with db_pool.get_cursor() as cursor:
+                return self._get_last_scraped_per_till(cursor)
+            
+        except Exception as e:
+            logger.error(f"Error getting last scraped per shortcode: {str(e)}", exc_info=True)
+            return {}
     def _get_basic_stats_raw(self, cursor, where_clause: str, params: list, transaction_type: str) -> Dict:
         """Get basic transaction statistics using raw SQL"""
         if transaction_type == 'float':
@@ -1156,6 +1167,17 @@ class TransactionService:
                 "avg_commission_rate": str(avg_commission_rate)
             }
 
+    def _get_transaction_by_id(self, transaction_id: int) -> Transaction:
+        """Get a transaction by ID"""
+        try:
+            transaction = Transaction.query.get(transaction_id)
+            if not transaction:
+                raise ValueError(f"Transaction with ID {transaction_id} not found")
+            return transaction
+        except Exception as e:
+            logger.error(f"Error fetching transaction by ID {transaction_id}: {str(e)}", exc_info=True)
+            raise
+        
     def _get_trend_stats_raw(self, cursor, where_clause: str, params: list, filters: Dict, transaction_type: str) -> Dict:
         """Get trend statistics grouped by time period using raw SQL"""
         group_by = filters.get('group_by', 'day')
@@ -1252,6 +1274,27 @@ class TransactionService:
             "growth_rates": growth_rates
         }
 
+    def _get_last_scraped_per_till(self, cursor) -> Dict[str, int]:
+        """Get number of days since last scrape for each till (Kenya time)"""
+        query = """
+            select business_short_code,
+                MAX(last_scraped_at) as last_scraped_time
+            from agentcompanies
+            GROUP BY business_short_code
+            ORDER BY last_scraped_time ASC;
+        """
+        cursor.execute(query)
+        results = cursor.fetchall()
+
+        now = datetime.now(self.kenya_tz)
+
+        return {
+            row['business_shortcode']: (
+                now - row['last_scraped_time'].replace(tzinfo=self.kenya_tz)
+            ).days
+            for row in results
+        }
+    
     def _get_category_stats_raw(self, cursor, where_clause: str, params: list, transaction_type: str) -> Dict:
         """Get statistics by category using raw SQL"""
         if transaction_type == 'float':
@@ -2152,7 +2195,7 @@ class TransactionService:
         
         return {"rank": len(period_amounts) + 1, "total": len(period_amounts), "percentile": 0}
 
-    def gather_scraping_statistics(start_date, end_date, company_shortcode):
+    def gather_scraping_statistics(self,start_date, end_date, company_shortcode):
         """
         Gather statistics from the database for the email report.
         """    

@@ -19,6 +19,7 @@ class Transaction(db.Model):
     other_party_info = db.Column(db.Text, nullable=True)
     linked_transaction_id = db.Column(db.String(100), nullable=True)
     account_number = db.Column(db.String(50), nullable=True)
+    business_shortcode = db.Column(db.String(50), nullable=True)
     currency = db.Column(db.String(10), default='KES')
     
     # Transaction type: 'float' or 'commission'
@@ -58,6 +59,7 @@ class Transaction(db.Model):
             'account_number': self.account_number,
             'currency': self.currency,
             'transaction_type': self.transaction_type,
+            'business_shortcode': self.business_shortcode,
             'company_id': self.company_id,
             'agent_id': self.agent_id,
             'company_name': self.company.company_name if self.company else None,

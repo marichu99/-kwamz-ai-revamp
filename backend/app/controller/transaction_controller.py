@@ -1,11 +1,111 @@
 from flask import Blueprint, request, jsonify, current_app, send_file
 from datetime import datetime
 from app.service.transaction_service import TransactionService
+from app.service.reports.commissions_report_service import CommissionReportService
+from app.service.export_service import ExportService
 import os
+
+
 
 transaction_bp = Blueprint('transaction', __name__, url_prefix='/transactions')
 
 transaction_service = TransactionService()
+
+commission_report_service = CommissionReportService()
+export_service = ExportService()
+
+@transaction_bp.route('/commissions-report', methods=['GET'])
+def get_commissions_report():
+    """Get commission report data"""
+    try:
+        # Get parameters
+        start_date = request.args.get('start_date')
+        end_date = request.args.get('end_date')
+        date_range = request.args.get('date_range', 'custom')
+        transaction_type = request.args.get('transaction_type', 'commission')
+        reason_type = request.args.get('reason_type')
+        transaction_status = request.args.get('transaction_status')
+        
+        # Generate report
+        report = commission_report_service.generate_report(
+            start_date=start_date,
+            end_date=end_date,
+            date_range=date_range,
+            transaction_type=transaction_type,
+            reason_type=reason_type,
+            transaction_status=transaction_status
+        )
+        
+        return jsonify({'success': True, 'report': report})
+        
+    except ValueError as e:
+        return jsonify({'success': False, 'error': str(e)}), 400
+    except Exception as e:
+        print(f"Error generating commission report: {str(e)}")
+        return jsonify({'success': False, 'error': 'Internal server error'}), 500
+
+
+@transaction_bp.route('/export-commissions', methods=['GET'])
+def export_commissions_report():
+    """Export commission report in various formats"""
+    try:
+        # Get parameters
+        format_type = request.args.get('format', 'csv')
+        start_date = request.args.get('start_date')
+        end_date = request.args.get('end_date')
+        date_range = request.args.get('date_range', 'custom')
+        transaction_type = request.args.get('transaction_type', 'commission')
+        reason_type = request.args.get('reason_type')
+        transaction_status = request.args.get('transaction_status')
+        
+        # Export report
+        export_data = export_service.export_commission_report(
+            format_type=format_type,
+            start_date=start_date,
+            end_date=end_date,
+            date_range=date_range,
+            transaction_type=transaction_type,
+            reason_type=reason_type,
+            transaction_status=transaction_status
+        )
+        
+        return export_data
+        
+    except ValueError as e:
+        return jsonify({'success': False, 'error': str(e)}), 400
+    except Exception as e:
+        print(f"Error exporting commission report: {str(e)}")
+        return jsonify({'success': False, 'error': 'Internal server error'}), 500
+
+@transaction_bp.route('/export', methods=['GET'])
+def export_transactions():
+    """Export transactions"""
+    try:
+        # Get parameters
+        company_id = request.args.get('company_id', type=int)
+        transaction_type = request.args.get('transaction_type', 'float')
+        start_date = request.args.get('start_date')
+        end_date = request.args.get('end_date')
+        reason_type = request.args.get('reason_type')
+        transaction_status = request.args.get('transaction_status')
+        
+        # Export transactions
+        export_data = export_service.export_transactions(
+            company_id=company_id,
+            transaction_type=transaction_type,
+            start_date=start_date,
+            end_date=end_date,
+            reason_type=reason_type,
+            transaction_status=transaction_status
+        )
+        
+        return export_data
+        
+    except ValueError as e:
+        return jsonify({'success': False, 'error': str(e)}), 400
+    except Exception as e:
+        print(f"Error exporting transactions: {str(e)}")
+        return jsonify({'success': False, 'error': 'Internal server error'}), 500
 
 
 # Handle OPTIONS requests separately
@@ -264,7 +364,7 @@ def get_transaction_stats():
 
 
 @transaction_bp.route('/export', methods=['GET'])
-def export_transactions():
+def export_transactions_():
     """
     Export transactions to CSV or JSON
     """

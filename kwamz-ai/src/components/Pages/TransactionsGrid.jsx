@@ -19,6 +19,7 @@ import config from '../../Config';
 import { useToast } from './ToastProvider';
 import TransactionDetailsModal from './TransactionDetailsModal.jsx';
 import TransactionStatsModal from './TransactionStatsModal.jsx';
+import CommissionsReportModal from './CommissionsReportModal.jsx';
 
 function TransactionsGrid() {
     const [transactionsResponse, setTransactionsResponse] = useState({
@@ -30,6 +31,7 @@ function TransactionsGrid() {
     const [searchTerm, setSearchTerm] = useState('');
     const [selectedTransactionIds, setSelectedTransactionIds] = useState([]);
     const [isTransactionModalOpen, setIsTransactionModalOpen] = useState(false);
+    const [isCommissionsReportOpen, setIsCommissionsReportOpen] = useState(false);
     const [isStatsModalOpen, setIsStatsModalOpen] = useState(false);
     const [isLoading, setIsLoading] = useState(false);
     const [currentPage, setCurrentPage] = useState(1);
@@ -502,6 +504,15 @@ function TransactionsGrid() {
                                         <Download className="w-4 h-4 mr-3" />
                                         Export to CSV
                                     </button>
+                                    <button
+                                        onClick={() => setIsCommissionsReportOpen(true)}
+                                        disabled={transactionType === 'float' ? true : false}
+                                        className="w-full flex items-center px-4 py-2 text-sm text-slate-800 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-600 transition-colors"
+                                        role="menuitem"
+                                    >
+                                        <DollarSign className="w-4 h-4 mr-3" />
+                                        Commissions Report
+                                    </button>
                                 </div>
                             </div>
                         )}
@@ -833,6 +844,13 @@ function TransactionsGrid() {
                 isOpen={isStatsModalOpen}
                 onClose={() => setIsStatsModalOpen(false)}
                 stats={stats}
+                transactionType={transactionType}
+            />
+
+            <CommissionsReportModal
+                isOpen={isCommissionsReportOpen}
+                onClose={() => setIsCommissionsReportOpen(false)}
+                filters={filters}
                 transactionType={transactionType}
             />
         </div>
