@@ -4,6 +4,7 @@ import viteLogo from '/vite.svg'
 import './App.css'
 import Sidebar from './components/Layout/Sidebar'
 import Header from './components/Layout/Header'
+import Dashboard from './components/Dashboard/Dashboard'
 
 function App() {
   const [count, setCount] = useState(0);
@@ -23,6 +24,12 @@ function App() {
           <Header sideBarCollapsed={sideBarCollapsed} 
                   onToggleSideBar = {()=> setSideBarCollapsed(!sideBarCollapsed)}/>
           {/* Main content would go here */}
+
+          <main className='flex-1 overflow-y-auto bg-transparent'>
+            <div className='p-6 space-y-6'>
+              {currentPage === "dashboard" && <Dashboard/>}
+            </div>
+          </main>
         </div>
       </div>
     </div>
