@@ -1,0 +1,257 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Welcome to Kwamz-AI!</title>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;500;600;700&display=swap');
+        
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: 'Poppins', sans-serif;
+            background-color: #fafafa;
+            color: #333333;
+            line-height: 1.6;
+        }
+        
+        .container {
+            max-width: 600px;
+            margin: 0 auto;
+            background: #ffffff;
+            border-radius: 20px;
+            overflow: hidden;
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.1);
+        }
+        
+        .header {
+            background: linear-gradient(135deg, #ff00cc 0%, #cc00ff 50%, #9900ff 100%);
+            padding: 40px 30px;
+            text-align: center;
+            color: white;
+        }
+        
+        .logo {
+            font-size: 32px;
+            font-weight: 700;
+            margin-bottom: 10px;
+            letter-spacing: 1px;
+        }
+        
+        .tagline {
+            font-size: 18px;
+            opacity: 0.9;
+            font-weight: 300;
+        }
+        
+        .content {
+            padding: 40px 30px;
+        }
+        
+        .welcome-text {
+            font-size: 24px;
+            font-weight: 600;
+            color: #333;
+            margin-bottom: 20px;
+        }
+        
+        .message {
+            color: #666;
+            margin-bottom: 30px;
+            font-size: 16px;
+        }
+        
+        .features {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 20px;
+            margin-bottom: 30px;
+        }
+        
+        .feature {
+            background: #f9f7ff;
+            padding: 20px;
+            border-radius: 12px;
+            text-align: center;
+            border-left: 4px solid #cc00ff;
+        }
+        
+        .feature-icon {
+            font-size: 24px;
+            margin-bottom: 10px;
+            color: #cc00ff;
+        }
+        
+        .feature-title {
+            font-weight: 600;
+            margin-bottom: 5px;
+            color: #333;
+        }
+        
+        .feature-desc {
+            font-size: 14px;
+            color: #666;
+        }
+        
+        .cta-button {
+            display: block;
+            width: 100%;
+            background: linear-gradient(135deg, #ff00cc 0%, #cc00ff 100%);
+            color: white;
+            text-align: center;
+            padding: 16px;
+            border-radius: 50px;
+            text-decoration: none;
+            font-weight: 600;
+            font-size: 18px;
+            margin: 30px 0;
+            transition: transform 0.3s, box-shadow 0.3s;
+        }
+        
+        .cta-button:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 10px 20px rgba(204, 0, 255, 0.3);
+        }
+        
+        .divider {
+            height: 1px;
+            background: linear-gradient(to right, transparent, #eee, transparent);
+            margin: 30px 0;
+        }
+        
+        .social-links {
+            display: flex;
+            justify-content: center;
+            gap: 15px;
+            margin-bottom: 20px;
+        }
+        
+        .social-link {
+            display: inline-block;
+            width: 40px;
+            height: 40px;
+            background: #f0f0f0;
+            border-radius: 50%;
+            text-align: center;
+            line-height: 40px;
+            color: #666;
+            text-decoration: none;
+            transition: all 0.3s;
+        }
+        
+        .social-link:hover {
+            background: linear-gradient(135deg, #ff00cc 0%, #cc00ff 100%);
+            color: white;
+            transform: translateY(-3px);
+        }
+        
+        .footer {
+            background: #f5f5f5;
+            padding: 25px 30px;
+            text-align: center;
+            color: #666;
+            font-size: 14px;
+        }
+        
+        .footer-links {
+            margin-top: 10px;
+        }
+        
+        .footer-link {
+            color: #cc00ff;
+            text-decoration: none;
+            margin: 0 10px;
+        }
+        
+        .footer-link:hover {
+            text-decoration: underline;
+        }
+        
+        @media (max-width: 600px) {
+            .features {
+                grid-template-columns: 1fr;
+            }
+            
+            .header, .content, .footer {
+                padding: 25px 20px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <div class="logo">Kwamz-AI</div>
+            <div class="tagline">Intelligent Solutions for the Future</div>
+        </div>
+        
+        <div class="content">
+            <h1 class="welcome-text">Welcome aboard, {{ username }}! 🎉</h1>
+            
+            <p class="message">
+                Thank you for joining the Kwamz-AI community! We're thrilled to have you on board 
+                and can't wait to see what you'll accomplish with our platform.
+            </p>
+            
+            <div class="features">
+                <div class="feature">
+                    <div class="feature-icon">🚀</div>
+                    <div class="feature-title">Get Started Quickly</div>
+                    <div class="feature-desc">Easy setup and intuitive interface</div>
+                </div>
+                
+                <div class="feature">
+                    <div class="feature-icon">💡</div>
+                    <div class="feature-title">Automated Agency Management</div>
+                    <div class="feature-desc">Powerful tools at your fingertips</div>
+                </div>
+                
+                <div class="feature">
+                    <div class="feature-icon">🔒</div>
+                    <div class="feature-title">Secure & Private</div>
+                    <div class="feature-desc">Your data is always protected</div>
+                </div>
+                
+                <div class="feature">
+                    <div class="feature-icon">🌐</div>
+                    <div class="feature-title">Always Available</div>
+                    <div class="feature-desc">Access from anywhere, anytime</div>
+                </div>
+            </div>
+            
+            <a href="{{ dashboard_url }}" class="cta-button">Launch Your Dashboard</a>
+            
+            <div class="divider"></div>
+            
+            <p style="text-align: center; color: #666; margin-bottom: 20px;">
+                Need help getting started? Check out our resources:
+            </p>
+        </div>
+        
+        <div class="footer">
+            <p>© {{ year }} Kwamz-AI. All rights reserved.</p>
+            
+            <div class="footer-links">
+                <a href="{{ terms_url }}" class="footer-link">Terms of Service</a> • 
+            </div>
+            
+            <div class="social-links">
+                <a href="#" class="social-link">📱</a>
+                <a href="#" class="social-link">💻</a>
+                <a href="#" class="social-link">📘</a>
+                <a href="#" class="social-link">🐦</a>
+            </div>
+            
+            <p style="font-size: 12px; margin-top: 15px; color: #999;">
+                You're receiving this email because you recently created a Kwamz-AI account.<br>
+                Our mailing address is: support@kwamz-ai.com
+            </p>
+        </div>
+    </div>
+</body>
+</html>

@@ -8,9 +8,11 @@ import {
     ChevronDown, 
     ChevronRight,
     Zap, 
-    Wallet
+    Wallet,
+    LogOut // Added LogOut icon
 } from 'lucide-react';
 import React, { useState } from 'react'
+import { useNavigate } from 'react-router-dom';
 
 const menuItems = [
     {
@@ -85,6 +87,7 @@ const menuItems = [
 
 function Sidebar({ collapsed, onToggle, currentPage, onPageChange }) {
     const [openSubmenus, setOpenSubmenus] = useState({ analytics: true });
+    const navigate = useNavigate()
 
     const toggleSubmenu = (itemId) => {
         setOpenSubmenus(prev => ({
@@ -99,6 +102,10 @@ function Sidebar({ collapsed, onToggle, currentPage, onPageChange }) {
         } else {
             onPageChange(itemId);
         }
+    };
+
+    const handleLogout = () => {
+        navigate("/logout")
     };
 
     if (collapsed) {
@@ -130,9 +137,18 @@ function Sidebar({ collapsed, onToggle, currentPage, onPageChange }) {
                     ))}
                 </nav>
                 
-                {/* User profile */}
-                <div className='p-2 border-t border-slate-200/50 dark:border-slate-700/50 flex justify-center'>
-                    <div className='w-10 h-10 rounded-full bg-gray-300 ring-2 ring-blue-500'></div>
+                {/* User profile and Logout */}
+                <div className='p-2 border-t border-slate-200/50 dark:border-slate-700/50 space-y-2'>
+                    <div className='flex justify-center'>
+                        <div className='w-10 h-10 rounded-full bg-gray-300 ring-2 ring-blue-500'></div>
+                    </div>
+                    <button 
+                        className='w-full flex items-center justify-center p-3 rounded-xl text-slate-600 dark:text-slate-300 hover:bg-red-50 dark:hover:bg-red-900/20 hover:text-red-600 dark:hover:text-red-400 transition-colors duration-200'
+                        onClick={handleLogout}
+                        title="Logout"
+                    >
+                        <LogOut className='w-5 h-5' />
+                    </button>
                 </div>
             </div>
         );
@@ -223,8 +239,8 @@ function Sidebar({ collapsed, onToggle, currentPage, onPageChange }) {
                 })}
             </nav>
             
-            {/* User profile */}
-            <div className='p-4 border-t border-slate-200/50 dark:border-slate-700/50'>
+            {/* User profile and Logout */}
+            <div className='p-4 border-t border-slate-200/50 dark:border-slate-700/50 space-y-4'>
                 <div className='flex items-center space-x-3 p-3 rounded-xl bg-slate-50 dark:bg-slate-800/50'>
                     <div className='w-10 h-10 rounded-full bg-gray-300 ring-2 ring-blue-500'></div>
                     <div className='flex-1 min-w-0'>
@@ -232,6 +248,15 @@ function Sidebar({ collapsed, onToggle, currentPage, onPageChange }) {
                         <p className='text-xs text-slate-500 dark:text-slate-400 truncate'>Administrator</p>
                     </div>
                 </div>
+                
+                {/* Logout Button */}
+                <button 
+                    className='w-full flex items-center space-x-3 p-3 rounded-xl text-slate-600 dark:text-slate-300 hover:bg-red-50 dark:hover:bg-red-900/20 hover:text-red-600 dark:hover:text-red-400 transition-colors duration-200 group'
+                    onClick={handleLogout}
+                >
+                    <LogOut className='w-5 h-5 group-hover:scale-110 transition-transform' />
+                    <span className='font-medium'>Logout</span>
+                </button>
             </div>
         </div>
     );

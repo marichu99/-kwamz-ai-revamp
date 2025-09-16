@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import axios from 'axios';
 import config from '../../Config';
 import { Eye, EyeOff, User, Mail, Phone, Calendar, Lock, CheckCircle, AlertCircle } from 'lucide-react';
+import OtpVerificationModal from './OtpVerificationModal';
 
 const SignUpForm = ({ onSuccess }) => {
   const [formData, setFormData] = useState({
@@ -15,6 +16,7 @@ const SignUpForm = ({ onSuccess }) => {
   });
   const [errors, setErrors] = useState({});
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [showOtpModal, setShowOtpModal] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
   const [showConfirmPassword, setShowConfirmPassword] = useState(false);
   const [focusedField, setFocusedField] = useState('');
@@ -123,6 +125,129 @@ const SignUpForm = ({ onSuccess }) => {
     const { name, value } = e.target;
     setFormData((prev) => ({ ...prev, [name]: value }));
     validate(name, value);
+  };
+
+  const handleResendOTP = async () =>{
+    
+    // Clear previous errors
+    setErrors(prev => ({ ...prev, general: undefined }));
+
+    // Perform initial validation
+    const isValid = validateAll();
+    const allFieldsFilled = Object.values(formData).every(field => field.trim() !== '');
+
+    if (!allFieldsFilled || !isValid) {
+      setErrors(prev => ({ ...prev, general: 'Please fix the errors before proceeding.' }));
+      return;
+    }
+
+    setIsSubmitting(true);
+    try {
+      // Ask the backend to send an OTP to the user's email
+      await axios.post(`${config.API_URL}/users/resend-otp`, { email: formData.email });
+      setShowOtpModal(true); // Open the modal on success
+    } catch (error) {
+      console.error('OTP Request error:', error);
+      const errorMessage = error.response?.data?.message || 'Failed to send OTP..';
+      setErrors(prev => ({ ...prev, general: errorMessage }));
+    } finally {
+      setIsSubmitting(false);
+    }
+  }
+
+  const handleRequestOtp = async (e) => {
+    e.preventDefault();
+    
+    // Clear previous errors
+    setErrors(prev => ({ ...prev, general: undefined }));
+
+    // Perform initial validation
+    const isValid = validateAll();
+    const allFieldsFilled = Object.values(formData).every(field => field.trim() !== '');
+
+    if (!allFieldsFilled || !isValid) {
+      setErrors(prev => ({ ...prev, general: 'Please fix the errors before proceeding.' }));
+      return;
+    }
+
+    setIsSubmitting(true);
+    try {
+      // Ask the backend to send an OTP to the user's email
+      await axios.post(`${config.API_URL}/users/request-otp`, { email: formData.email });
+      setShowOtpModal(true); // Open the modal on success
+    } catch (error) {
+      console.error('OTP Request error:', error);
+      const errorMessage = error.response?.data?.message || 'Failed to send OTP..';
+      setErrors(prev => ({ ...prev, general: errorMessage }));
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  const handleFinalSubmit = async (enteredOtp) => {
+
+    const newErrors = { ...errors };
+    delete newErrors.general;
+    setErrors(newErrors);
+
+    const isValid = validateAll();
+    const allFieldsFilled = Object.values(formData).every(field => field.trim() !== '');
+
+    if (!allFieldsFilled) {
+      setErrors(prev => ({ ...prev, general: 'Please fill in all fields.' }));
+      return;
+    }
+
+    if (!isValid) {
+      setErrors(prev => ({ ...prev, general: 'Please fix the errors before submitting.' }));
+      return;
+    }
+
+    setIsSubmitting(true);
+
+    try {
+      // Send all form data PLUS the OTP for final verification and user creation
+      const payload = { ...formData, otp: enteredOtp };
+      const response = await axios.post(`${config.API_URL}/users/`, payload);
+      
+      const { access_token, username: user, id, email: userEmail, phone_number, date_of_birth } = response.data;
+      // Store token and user data in localStorage
+      localStorage.setItem('token', access_token);
+      localStorage.setItem('user', JSON.stringify({
+        id,
+        username: user,
+        email: userEmail,
+        phone_number,
+        date_of_birth
+      }));
+
+      setShowOtpModal(false);
+      if (onSuccess) {
+        setShowSuccess(true);
+        setTimeout(() => {
+          onSuccess();
+        }, 2000);
+      }
+
+    } catch (error) {
+      console.error('Signup error:', error);
+      let errorMessage = 'Signup failed. Please try again.';
+
+      if (error.response?.data?.error) {
+        errorMessage = error.response.data.error;
+      } else if (error.response?.data?.message) {
+        errorMessage = error.response.data.message;
+      } else if (error.message) {
+        errorMessage = error.message;
+      }
+
+      setErrors(prev => ({
+        ...prev,
+        general: errorMessage
+      }));
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   const handleSubmit = async (e) => {
@@ -342,7 +467,7 @@ const SignUpForm = ({ onSuccess }) => {
 
             <div className="flex gap-3 pt-4">
               <button
-                onClick={handleSubmit}
+                onClick={handleRequestOtp}
                 disabled={isSubmitting}
                 className="flex-1 bg-gradient-to-r from-indigo-500 to-purple-600 hover:from-indigo-600 hover:to-purple-700 text-white font-semibold py-3 px-6 rounded-xl transition-all duration-200 transform hover:scale-[1.02] active:scale-[0.98] disabled:opacity-50 disabled:cursor-not-allowed disabled:transform-none shadow-lg hover:shadow-xl flex items-center justify-center gap-2"
               >
@@ -386,6 +511,13 @@ const SignUpForm = ({ onSuccess }) => {
           </div>
         </div>
       </div>
+      <OtpVerificationModal
+        isOpen={showOtpModal}
+        onClose={() => setShowOtpModal(false)}
+        onVerify={handleFinalSubmit}
+        email={formData.email}
+        resendOtp={handleResendOTP} 
+      />
     </div>
   );
 };

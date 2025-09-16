@@ -1,8 +1,12 @@
 from flask import Blueprint, jsonify, request
 from flask_jwt_extended import create_access_token, jwt_required, get_jwt_identity
 from app.model.user import User
+from app.model.otp import Otp
 from app import db,bcrypt
-from datetime import datetime
+from datetime import datetime,timedelta
+from app.utils.email_utils import send_otp_email,send_welcome_email
+import random
+
 
 user_bp = Blueprint('user', __name__)
 
@@ -52,6 +56,10 @@ def create_user():
         
     if User.query.filter_by(email=form_data['email']).first():
         return jsonify({'error': 'Email already exists'}), 400
+    
+    existing_otp = Otp.query.filter_by(otp=form_data['otp']).first()
+    if existing_otp == None:
+        return jsonify({'error': 'Invalid OTP'}), 400
 
     # Handle phone number - check both possible field names
     phone_number = form_data.get('phoneNumber') or form_data.get('phone_number')
@@ -77,6 +85,11 @@ def create_user():
     
     db.session.add(user)
     db.session.commit()
+
+    try:
+        send_welcome_email(user.email, user.username)
+    except Exception as e:
+        print(f"Welcome email failed to send: {e}")
 
     # Generate JWT token for auto-login
     access_token = create_access_token(identity=str(user.id))
@@ -166,3 +179,63 @@ def verify_token():
         'phone_number': user.phone_number,
         'date_of_birth': str(user.date_of_birth) if user.date_of_birth else None
     }), 200
+
+@user_bp.route('/request-otp', methods=['POST'])
+def request_otp():
+    data = request.get_json()
+    email = data.get('email')
+
+    if not email:
+        return jsonify({'message': 'Email is required'}), 400
+
+    # Generate a random 6-digit OTP
+    otp = str(random.randint(100000, 999999))
+    expiration_time = datetime.utcnow() + timedelta(minutes=5)
+
+    # Save or update OTP in the database
+    existing_otp = Otp.query.filter_by(email=email).first()
+    if existing_otp:
+        return jsonify({'message': 'Email is already exists'}), 400
+    else:
+        new_otp = Otp(email=email, otp=otp, time_generated=datetime.utcnow())
+        db.session.add(new_otp)
+
+    db.session.commit()
+
+    # Send OTP via email
+    email_sent = send_otp_email(email, otp)
+
+    if not email_sent:
+        return jsonify({'message': 'Failed to send OTP email'}), 500
+
+    return jsonify({'message': 'OTP sent successfully!'}), 200
+
+@user_bp.route('/resend-otp', methods=['POST'])
+def resend_otp():
+    data = request.get_json()
+    email = data.get('email')
+
+    if not email:
+        return jsonify({'message': 'Email is required'}), 400
+
+    # Generate a random 6-digit OTP
+    otp = str(random.randint(100000, 999999))
+
+    # Look for an existing OTP entry
+    existing_otp = Otp.query.filter_by(email=email).first()
+
+    if existing_otp:
+        existing_otp.otp = otp
+        existing_otp.time_generated = datetime.utcnow()
+    else:
+        new_otp = Otp(email=email, otp=otp, time_generated=datetime.utcnow())
+        db.session.add(new_otp)
+
+    db.session.commit()
+
+    email_sent = send_otp_email(email, otp)
+
+    if not email_sent:
+        return jsonify({'message': 'Failed to send OTP email'}), 500
+
+    return jsonify({'message': 'OTP sent successfully!'}), 200

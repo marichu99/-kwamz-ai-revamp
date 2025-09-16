@@ -1,0 +1,203 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>Your Kwamz-AI Verification Code</title>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;500;600;700&display=swap');
+        
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: 'Poppins', sans-serif;
+            background-color: #faf7fc;
+            margin: 0;
+            padding: 20px;
+            color: #333333;
+        }
+        
+        .container {
+            background-color: #ffffff;
+            max-width: 500px;
+            margin: 30px auto;
+            border-radius: 20px;
+            overflow: hidden;
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.1);
+        }
+        
+        .header {
+            background: linear-gradient(135deg, #ff00cc 0%, #cc00ff 50%, #9900ff 100%);
+            padding: 30px;
+            color: white;
+            text-align: center;
+        }
+        
+        .logo {
+            font-size: 28px;
+            font-weight: 700;
+            margin-bottom: 10px;
+            letter-spacing: 1px;
+        }
+        
+        .tagline {
+            font-size: 16px;
+            opacity: 0.9;
+            font-weight: 300;
+        }
+        
+        .content {
+            padding: 30px;
+        }
+        
+        .message {
+            color: #666;
+            line-height: 1.6;
+            margin-bottom: 25px;
+        }
+        
+        .otp-container {
+            text-align: center;
+            margin: 30px 0;
+            padding: 20px;
+            background: linear-gradient(135deg, #fce4f5 0%, #f4e6ff 100%);
+            border-radius: 15px;
+            border: 2px dashed #cc00ff;
+        }
+        
+        .otp-label {
+            font-size: 16px;
+            color: #666;
+            margin-bottom: 10px;
+        }
+        
+        .otp {
+            font-size: 42px;
+            font-weight: 700;
+            color: #cc00ff;
+            letter-spacing: 8px;
+            margin: 15px 0;
+            text-shadow: 2px 2px 4px rgba(204, 0, 255, 0.1);
+        }
+        
+        .expiry {
+            font-size: 14px;
+            color: #ff00cc;
+            font-weight: 500;
+        }
+        
+        .button {
+            display: block;
+            width: 100%;
+            background: linear-gradient(135deg, #ff00cc 0%, #cc00ff 100%);
+            color: white;
+            text-align: center;
+            padding: 16px;
+            border-radius: 50px;
+            text-decoration: none;
+            font-weight: 600;
+            font-size: 16px;
+            margin: 30px 0;
+            transition: transform 0.3s, box-shadow 0.3s;
+            border: none;
+            cursor: pointer;
+        }
+        
+        .button:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 10px 20px rgba(204, 0, 255, 0.3);
+        }
+        
+        .security-note {
+            background-color: #f9f7ff;
+            padding: 15px;
+            border-radius: 10px;
+            border-left: 4px solid #cc00ff;
+            margin: 20px 0;
+            font-size: 14px;
+        }
+        
+        .security-icon {
+            color: #cc00ff;
+            font-weight: 600;
+            margin-right: 5px;
+        }
+        
+        .footer {
+            background: #f5f5f5;
+            padding: 20px;
+            text-align: center;
+            color: #666;
+            font-size: 12px;
+        }
+        
+        .footer-links {
+            margin-top: 10px;
+        }
+        
+        .footer-link {
+            color: #cc00ff;
+            text-decoration: none;
+            margin: 0 8px;
+        }
+        
+        .footer-link:hover {
+            text-decoration: underline;
+        }
+        
+        @media (max-width: 600px) {
+            .container {
+                margin: 15px;
+                border-radius: 15px;
+            }
+            
+            .header, .content {
+                padding: 20px;
+            }
+            
+            .otp {
+                font-size: 32px;
+                letter-spacing: 6px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <div class="logo">Kwamz-AI</div>
+            <div class="tagline">Intelligent Verification</div>
+        </div>
+        
+        <div class="content">
+            <p class="message">Hi there,</p>
+            
+            <p class="message">
+                You're one step away from completing your verification! Use the security code below 
+                to access your Kwamz-AI account. This code ensures your account remains secure.
+            </p>
+            
+            <div class="otp-container">
+                <div class="otp-label">Your verification code:</div>
+                <div class="otp">{{ otp }}</div>
+                <div class="expiry">⏰ Valid for 5 minutes</div>
+            </div>            
+            <div class="security-note">
+                <span class="security-icon">🔒</span>
+                For your security, never share this code with anyone. Kwamz-AI will never ask for your verification code.
+            </div>
+        </div>
+        
+        <div class="footer">
+            <p>© {{ year }} Kwamz-AI. All rights reserved.</p>            
+            <p style="font-size: 11px; margin-top: 15px; color: #999;">
+                This is an automated message. Please do not reply to this email.<br>
+                Our mailing address is: security@kwamz-ai.com
+            </p>
+        </div>
+    </div>
+</body>
+</html>
