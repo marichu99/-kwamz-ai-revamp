@@ -68,9 +68,9 @@ function UserDropdown({ user, onLogout }) {
   ]
 
   return (
-    <div className='relative z-10' ref={dropdownRef}>
+    <div className='relative z-[9999]' ref={dropdownRef}>
       {/* User Profile Trigger */}
-      <div 
+      <div
         className='flex items-center space-x-3 pl-3 border-l border-slate-200 dark:border-slate-700 cursor-pointer hover:bg-slate-50 dark:hover:bg-slate-800/50 rounded-lg p-2 transition-colors duration-200'
         onClick={toggleDropdown}
       >
@@ -83,13 +83,16 @@ function UserDropdown({ user, onLogout }) {
           <p className='text-sm font-medium text-slate-700 dark:text-slate-300'>{user?.name || 'Martin Mabera'}</p>
           <p className='text-xs text-slate-500 dark:text-slate-400'>{user?.role || 'Admin'}</p>
         </div>
-        <ChevronDown className={`w-4 h-4 text-slate-400 transition-transform duration-200 ${isOpen ? 'rotate-180' : ''}`}/>
+        <ChevronDown className={`w-4 h-4 text-slate-400 transition-transform duration-200 ${isOpen ? 'rotate-180' : ''}`} />
       </div>
 
       {/* Dropdown Menu */}
       {isOpen && (
-        <div className='absolute right-0 top-full mt-2 w-64 bg-white/95 dark:bg-slate-800/95 backdrop-blur-xl rounded-2xl border border-slate-200/50 dark:border-slate-700/50 shadow-2xl shadow-slate-200/20 dark:shadow-slate-900/20 py-2 z-[100] animate-fadeIn'>
-          
+        <div
+          className='absolute right-0 top-full mt-2 w-64 bg-white/95 dark:bg-slate-800/95 backdrop-blur-xl 
+      rounded-2xl border border-slate-200/50 dark:border-slate-700/50 shadow-2xl 
+      shadow-slate-200/20 dark:shadow-slate-900/20 py-2 z-[99999] animate-fadeIn'
+        >
           {/* User Info Header */}
           <div className='px-4 py-3 border-b border-slate-100 dark:border-slate-700'>
             <div className='flex items-center space-x-3'>
@@ -141,22 +144,22 @@ function UserDropdown({ user, onLogout }) {
       )}
 
       <style jsx>{`
-        @keyframes fadeIn {
-          from {
-            opacity: 0;
-            transform: translateY(-10px) scale(0.95);
-          }
-          to {
-            opacity: 1;
-            transform: translateY(0) scale(1);
-          }
-        }
-        
-        .animate-fadeIn {
-          animation: fadeIn 0.2s ease-out;
-        }
-      `}</style>
+    @keyframes fadeIn {
+      from {
+        opacity: 0;
+        transform: translateY(-10px) scale(0.95);
+      }
+      to {
+        opacity: 1;
+        transform: translateY(0) scale(1);
+      }
+    }
+    .animate-fadeIn {
+      animation: fadeIn 0.2s ease-out;
+    }
+  `}</style>
     </div>
+
   )
 }
 

@@ -1,6 +1,8 @@
 import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Eye, EyeOff, User, Lock, CheckCircle, AlertCircle, LogIn } from 'lucide-react';
+import config from '../../Config';
+import axios from 'axios';
 
 const LoginForm = ({ onSuccess }) => {
   const [formData, setFormData] = useState({
@@ -12,6 +14,8 @@ const LoginForm = ({ onSuccess }) => {
   const [showPassword, setShowPassword] = useState(false);
   const [focusedField, setFocusedField] = useState('');
   const [showSuccess, setShowSuccess] = useState(false);
+  const [username, setUsername] = useState('');
+  const [password, setPassword] = useState('');
   const navigate = useNavigate();
 
   const handleChange = (e) => {
@@ -40,18 +44,39 @@ const LoginForm = ({ onSuccess }) => {
 
     setIsSubmitting(true);
 
-    // Simulate API call
-    setTimeout(() => {
-      setShowSuccess(true);
-      setIsSubmitting(false);
-      
-      // Simulate success and redirect
-      setTimeout(() => {
-        if (onSuccess) {
+
+    try {
+      const response = await axios.post(`${config.API_URL}/users/login`, {
+        username: formData.username.trim(),
+        password: formData.password.trim()
+      });
+
+      const { access_token, username: user, id, email, phone_number, date_of_birth } = response.data;
+
+      // Store token and user data in localStorage
+      localStorage.setItem('token', access_token);
+      localStorage.setItem('user', JSON.stringify({
+        id,
+        username: user,
+        email,
+        phone_number,
+        date_of_birth
+      }));
+      if (onSuccess) {
+        setShowSuccess(true);
+        setTimeout(() => {
           onSuccess();
-        }
-      }, 1500);
-    }, 1500);
+        }, 1500);
+      }
+    } catch (error) {
+      console.error('Login error:', error);
+      setErrors({
+        general: error.response?.data?.error || error.response?.data?.message || 'Login failed. Please try again.'
+      });
+    } finally {
+      setIsSubmitting(false);
+    }
+
   };
 
   if (showSuccess) {
@@ -98,8 +123,8 @@ const LoginForm = ({ onSuccess }) => {
             <div className="relative">
               <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
                 <User className={`w-5 h-5 transition-all duration-200 ${errors.username ? 'text-red-400' :
-                    formData.username ? 'text-blue-500' :
-                      focusedField === 'username' ? 'text-blue-500' : 'text-gray-400'
+                  formData.username ? 'text-blue-500' :
+                    focusedField === 'username' ? 'text-blue-500' : 'text-gray-400'
                   }`} />
               </div>
               <input
@@ -113,10 +138,10 @@ const LoginForm = ({ onSuccess }) => {
                 placeholder="Enter your username"
                 disabled={isSubmitting}
                 className={`w-full pl-10 pr-4 py-3 border rounded-xl bg-white/50 backdrop-blur-sm transition-all duration-200 ${errors.username ?
-                    'border-red-300 focus:border-red-500 focus:ring-red-200 shadow-red-100' :
-                    formData.username ?
-                      'border-blue-300 focus:border-blue-500 focus:ring-blue-200 shadow-blue-100' :
-                      'border-gray-200 focus:border-blue-500 focus:ring-blue-200'
+                  'border-red-300 focus:border-red-500 focus:ring-red-200 shadow-red-100' :
+                  formData.username ?
+                    'border-blue-300 focus:border-blue-500 focus:ring-blue-200 shadow-blue-100' :
+                    'border-gray-200 focus:border-blue-500 focus:ring-blue-200'
                   } focus:ring-4 focus:ring-opacity-20 focus:outline-none disabled:opacity-50 disabled:cursor-not-allowed placeholder:text-gray-400 shadow-sm hover:shadow-md`}
               />
               {formData.username && !errors.username && (
@@ -141,8 +166,8 @@ const LoginForm = ({ onSuccess }) => {
             <div className="relative">
               <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
                 <Lock className={`w-5 h-5 transition-all duration-200 ${errors.password ? 'text-red-400' :
-                    formData.password ? 'text-blue-500' :
-                      focusedField === 'password' ? 'text-blue-500' : 'text-gray-400'
+                  formData.password ? 'text-blue-500' :
+                    focusedField === 'password' ? 'text-blue-500' : 'text-gray-400'
                   }`} />
               </div>
               <input
@@ -156,10 +181,10 @@ const LoginForm = ({ onSuccess }) => {
                 placeholder="Enter your password"
                 disabled={isSubmitting}
                 className={`w-full pl-10 pr-12 py-3 border rounded-xl bg-white/50 backdrop-blur-sm transition-all duration-200 ${errors.password ?
-                    'border-red-300 focus:border-red-500 focus:ring-red-200 shadow-red-100' :
-                    formData.password ?
-                      'border-blue-300 focus:border-blue-500 focus:ring-blue-200 shadow-blue-100' :
-                      'border-gray-200 focus:border-blue-500 focus:ring-blue-200'
+                  'border-red-300 focus:border-red-500 focus:ring-red-200 shadow-red-100' :
+                  formData.password ?
+                    'border-blue-300 focus:border-blue-500 focus:ring-blue-200 shadow-blue-100' :
+                    'border-gray-200 focus:border-blue-500 focus:ring-blue-200'
                   } focus:ring-4 focus:ring-opacity-20 focus:outline-none disabled:opacity-50 disabled:cursor-not-allowed placeholder:text-gray-400 shadow-sm hover:shadow-md`}
               />
               <button

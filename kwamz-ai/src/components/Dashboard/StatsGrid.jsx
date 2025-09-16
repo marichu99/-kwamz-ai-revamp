@@ -43,11 +43,12 @@ const statsData = [
 
 function StatsGrid() {
   return (
-    <div className='grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-6'>
+    <div className='grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-6 relative overflow-visible'>
       {statsData.map((stat, index) => (
-        <StatsCard key={stat.title} stat={stat} index={index} />
+        <StatsCard key={stat.title} stat={stat} index={index} isLast={index === statsData.length - 1} />
       ))}
     </div>
+
   )
 }
 

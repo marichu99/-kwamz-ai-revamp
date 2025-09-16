@@ -6,6 +6,7 @@ import Sidebar from './components/Layout/Sidebar'
 import Header from './components/Layout/Header'
 import Dashboard from './components/Dashboard/Dashboard'
 import AppRouter from './AppRouter'
+import config from './Config'
 
 function App() {
   const [count, setCount] = useState(0);
@@ -19,11 +20,11 @@ function App() {
   useEffect(() => {
     const verifyToken = async () => {
       const token = localStorage.getItem('token');
-      if (token) {
+      if (token) {              
         try {
           await axios({
             method: 'get',
-            url: `${process.env.REACT_APP_API_URL}/users/verify-token`,
+            url: `${config.API_URL}/users/verify-token`,
             headers: {
               Authorization: `Bearer ${token}`
             }
@@ -58,14 +59,14 @@ function App() {
 
   return (
     <div className='min-h-screen bg-gradient-to-br from-slate-50 via-blue-50 to-indigo-50 dark:from-slate-900 dark:via-slate-80 dark:to-slate-900 transition-all duration-500'>
-      <div className='flex h-screen overflow-hidden'>
+      <div className='flex h-screen overflow-visible'>
         {isAuthenticated  && <Sidebar 
           collapsed={sideBarCollapsed}
           onToggle={() => setSideBarCollapsed(!sideBarCollapsed)}
           currentPage={currentPage}
           onPageChange={setCurrentPage}
         />}
-        <div className='flex-1 flex flex-col overflow-hidden'>
+        <div className='flex-1 flex flex-col'>
           {isAuthenticated  && <Header sideBarCollapsed={sideBarCollapsed} 
                   onToggleSideBar = {()=> setSideBarCollapsed(!sideBarCollapsed)}/>}
           <main className='flex-1 overflow-y-auto bg-transparent'>
