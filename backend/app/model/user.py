@@ -7,14 +7,16 @@ class User(db.Model):
     username = db.Column(db.String(80), unique=True, nullable=False)
     email = db.Column(db.String(120), unique=True, nullable=False)
     password = db.Column(db.String(128), nullable=False)  
-    phone_number = db.Column(db.String(20), unique=True, nullable=True)  # Optional phone number
+    phone_number = db.Column(db.String(20), unique=True, nullable=True)  
+    image_loc = db.Column(db.String(50), unique=True, nullable=True)  
     date_of_birth = db.Column(db.Date, nullable=True)  # Optional date of birth
 
-    def __init__(self, username, email, password, phone_number=None, date_of_birth=None):
+    def __init__(self, username, email, password, phone_number=None,image_loc=None, date_of_birth=None):
         self.username = username
         self.email = email
         self.password = bcrypt.generate_password_hash(password).decode('utf-8')
         self.phone_number = phone_number
+        self.image_loc = image_loc
         self.date_of_birth = date_of_birth
 
     def check_password(self, password):

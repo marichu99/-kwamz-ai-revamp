@@ -294,6 +294,7 @@ const SignUpForm = ({ onSuccess }) => {
       }
     } catch (error) {
       console.error('Signup error:', error);
+      setShowOtpModal(false);
       let errorMessage = 'Signup failed. Please try again.';
 
       if (error.response?.data?.error) {

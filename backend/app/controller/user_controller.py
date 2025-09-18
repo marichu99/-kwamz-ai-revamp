@@ -1,11 +1,14 @@
-from flask import Blueprint, jsonify, request
+from flask import Blueprint, jsonify,current_app, request
 from flask_jwt_extended import create_access_token, jwt_required, get_jwt_identity
 from app.model.user import User
 from app.model.otp import Otp
+from werkzeug.utils import secure_filename
 from app import db,bcrypt
 from datetime import datetime,timedelta
 from app.utils.email_utils import send_otp_email,send_welcome_email
+from sqlalchemy import or_
 import random
+import os
 
 
 user_bp = Blueprint('user', __name__)
@@ -104,32 +107,94 @@ def create_user():
     }), 201
 
 # Update a user (protected)
-@user_bp.route('/<int:id>', methods=['PUT'])
+@user_bp.route('/<int:id>', methods=['PUT', 'OPTIONS'])     
 @jwt_required()
 def update_user(id):
+    # Handle OPTIONS preflight request for CORS
+    if request.method == 'OPTIONS':
+        return jsonify({}), 200
+    
     current_user_id = get_jwt_identity()
     user = User.query.get_or_404(id)
-    if user.id != current_user_id:
+
+    # Ensure user is authorized
+    if user.id != int(current_user_id):
         return jsonify({'error': 'Unauthorized'}), 403
-    data = request.get_json()
-    user.username = data.get('username', user.username)
-    user.email = data.get('email', user.email)
-    user.phone_number = data.get('phone_number', user.phone_number)
-    if data.get('date_of_birth'):
-        try:
-            user.date_of_birth = datetime.fromisoformat(data['date_of_birth']).date()
-        except ValueError:
-            return jsonify({'error': 'Invalid date_of_birth format. Use YYYY-MM-DD'}), 400
-    if data.get('password'):
-        user.password = bcrypt.generate_password_hash(data['password']).decode('utf-8')
-    db.session.commit()
-    return jsonify({
-        'id': user.id,
-        'username': user.username,
-        'email': user.email,
-        'phone_number': user.phone_number,
-        'date_of_birth': user.date_of_birth.isoformat() if user.date_of_birth else None
-    })
+
+    try:
+        # Handle form data and file upload
+        data = request.form.to_dict()  
+        file = request.files.get('profileImage')  
+
+        # Update basic fields
+        if 'username' in data:
+            user.username = data['username']
+        if 'email' in data:
+            user.email = data['email']
+        if 'phone_number' in data:
+            user.phone_number = data['phone_number']
+
+        # Update date_of_birth if provided
+        if data.get('date_of_birth'):
+            try:
+                user.date_of_birth = datetime.fromisoformat(data['date_of_birth']).date()
+            except ValueError:
+                return jsonify({'error': 'Invalid date_of_birth format. Use YYYY-MM-DD'}), 400
+
+        # Update password if provided
+        if data.get('currentPassword') and data.get('newPassword'):
+            # Check if current password is correct
+            if not user.check_password(data['currentPassword']):
+                return jsonify({'error': 'Current password is incorrect'}), 400
+            
+            # Hash and set new password
+            user.set_password(data['newPassword'])
+
+        # Handle profile image upload
+        if file:
+            # Validate file type
+            if not file.filename.lower().endswith(('.png', '.jpg', '.jpeg', '.gif')):
+                return jsonify({'error': 'Invalid file type. Only PNG, JPG, JPEG, GIF allowed'}), 400
+            
+            # Validate file size (max 5MB)
+            file.seek(0, os.SEEK_END)
+            file_length = file.tell()
+            file.seek(0)
+            if file_length > 5 * 1024 * 1024:  # 5MB
+                return jsonify({'error': 'File too large. Maximum size is 5MB'}), 400
+
+            # Ensure the 'profiles' folder exists
+            profiles_dir = os.path.join(current_app.root_path, 'profiles')
+            os.makedirs(profiles_dir, exist_ok=True)
+
+            # Secure the filename and use user ID as the base name
+            ext = os.path.splitext(secure_filename(file.filename))[1]
+            filename = f"{user.id}{ext}"
+            file_path = os.path.join(profiles_dir, filename)
+
+            # Save the file
+            file.save(file_path)
+
+            # Save relative file path in the database
+            relative_path = os.path.join('profiles', filename)
+            user.image_loc = relative_path
+
+        # Commit changes to the database
+        db.session.commit()
+
+        return jsonify({
+            'id': user.id,
+            'username': user.username,
+            'email': user.email,
+            'phone_number': user.phone_number,
+            'date_of_birth': user.date_of_birth.isoformat() if user.date_of_birth else None,
+            'image_loc': user.image_loc
+        }), 200
+
+    except Exception as e:
+        db.session.rollback()
+        current_app.logger.error(f"Error updating user: {str(e)}")
+        return jsonify({'error': 'Internal server error'}), 500
 
 # Delete a user (protected)
 @user_bp.route('/<int:id>', methods=['DELETE'])
@@ -149,8 +214,15 @@ def login():
     data = request.get_json()
     if not data or not data.get('username') or not data.get('password'):
         return jsonify({'error': 'Username and password are required'}), 400
+    
+    if not data or not data.get('otp'):
+        return jsonify({'error': 'OTP not supplied'}), 400
+    
+    existing_otp = Otp.query.filter_by(otp=data.get('otp')).first()
+    if existing_otp == None:
+        return jsonify({'error': 'Invalid OTP'}), 400
 
-    user = User.query.filter_by(username=data['username']).first()
+    user = User.query.filter(or_(User.username == data['username'], User.email == data['username'])).first()
     if user and user.check_password(data['password']):
         access_token = create_access_token(identity=str(user.id))
         return jsonify({
@@ -195,7 +267,8 @@ def request_otp():
     # Save or update OTP in the database
     existing_otp = Otp.query.filter_by(email=email).first()
     if existing_otp:
-        return jsonify({'message': 'Email is already exists'}), 400
+        existing_otp.otp = otp
+        existing_otp.time_generated = datetime.utcnow()
     else:
         new_otp = Otp(email=email, otp=otp, time_generated=datetime.utcnow())
         db.session.add(new_otp)
