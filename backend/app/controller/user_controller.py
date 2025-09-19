@@ -9,6 +9,7 @@ from app.utils.email_utils import send_otp_email,send_welcome_email
 from sqlalchemy import or_
 import random
 import os
+import re
 
 
 user_bp = Blueprint('user', __name__)
@@ -103,83 +104,70 @@ def create_user():
         'phone_number': user.phone_number,
         'date_of_birth': user.date_of_birth.isoformat() if user.date_of_birth else None,
         'access_token': access_token,
+        'image_loc': user.image_loc,
         'message': 'User created successfully'
     }), 201
 
-# Update a user (protected)
 @user_bp.route('/<int:id>', methods=['PUT', 'OPTIONS'])     
 @jwt_required()
 def update_user(id):
-    # Handle OPTIONS preflight request for CORS
     if request.method == 'OPTIONS':
         return jsonify({}), 200
     
     current_user_id = get_jwt_identity()
     user = User.query.get_or_404(id)
 
-    # Ensure user is authorized
     if user.id != int(current_user_id):
         return jsonify({'error': 'Unauthorized'}), 403
 
     try:
-        # Handle form data and file upload
         data = request.form.to_dict()  
         file = request.files.get('profileImage')  
 
-        # Update basic fields
-        if 'username' in data:
-            user.username = data['username']
-        if 'email' in data:
-            user.email = data['email']
-        if 'phone_number' in data:
-            user.phone_number = data['phone_number']
+        # Define allowed fields for update
+        allowed_fields = ['username', 'email', 'phone_number', 'date_of_birth']
+        
+        # Only update fields that are present AND not empty
+        for field in allowed_fields:
+            if field in data and data[field].strip():  # Check if field exists and is not empty
+                if field == 'date_of_birth':
+                    try:
+                        user.date_of_birth = datetime.fromisoformat(data['date_of_birth']).date()
+                    except ValueError:
+                        return jsonify({'error': 'Invalid date_of_birth format. Use YYYY-MM-DD'}), 400
+                else:
+                    setattr(user, field, data[field].strip())
 
-        # Update date_of_birth if provided
-        if data.get('date_of_birth'):
-            try:
-                user.date_of_birth = datetime.fromisoformat(data['date_of_birth']).date()
-            except ValueError:
-                return jsonify({'error': 'Invalid date_of_birth format. Use YYYY-MM-DD'}), 400
+        # Handle password update separately (requires both current and new password)
+        if 'currentPassword' in data and 'newPassword' in data:
+            if data['currentPassword'] and data['newPassword']:  # Both must be provided
+                if not user.check_password(data['currentPassword']):
+                    return jsonify({'error': 'Current password is incorrect'}), 400
+                user.set_password(data['newPassword'])
 
-        # Update password if provided
-        if data.get('currentPassword') and data.get('newPassword'):
-            # Check if current password is correct
-            if not user.check_password(data['currentPassword']):
-                return jsonify({'error': 'Current password is incorrect'}), 400
-            
-            # Hash and set new password
-            user.set_password(data['newPassword'])
-
-        # Handle profile image upload
-        if file:
-            # Validate file type
+        # Handle profile image upload (only if file is provided)
+        if file and file.filename:  
+           
             if not file.filename.lower().endswith(('.png', '.jpg', '.jpeg', '.gif')):
                 return jsonify({'error': 'Invalid file type. Only PNG, JPG, JPEG, GIF allowed'}), 400
             
-            # Validate file size (max 5MB)
             file.seek(0, os.SEEK_END)
             file_length = file.tell()
             file.seek(0)
-            if file_length > 5 * 1024 * 1024:  # 5MB
+            if file_length > 5 * 1024 * 1024:
                 return jsonify({'error': 'File too large. Maximum size is 5MB'}), 400
 
-            # Ensure the 'profiles' folder exists
             profiles_dir = os.path.join(current_app.root_path, 'profiles')
             os.makedirs(profiles_dir, exist_ok=True)
 
-            # Secure the filename and use user ID as the base name
             ext = os.path.splitext(secure_filename(file.filename))[1]
             filename = f"{user.id}{ext}"
             file_path = os.path.join(profiles_dir, filename)
 
-            # Save the file
             file.save(file_path)
-
-            # Save relative file path in the database
             relative_path = os.path.join('profiles', filename)
             user.image_loc = relative_path
 
-        # Commit changes to the database
         db.session.commit()
 
         return jsonify({
@@ -223,6 +211,7 @@ def login():
         return jsonify({'error': 'Invalid OTP'}), 400
 
     user = User.query.filter(or_(User.username == data['username'], User.email == data['username'])).first()
+    # user = User.query.filter(or_(User.email == data['username'])).first()
     if user and user.check_password(data['password']):
         access_token = create_access_token(identity=str(user.id))
         return jsonify({
@@ -232,6 +221,7 @@ def login():
             'phone_number': user.phone_number,
             'date_of_birth': user.date_of_birth.isoformat() if user.date_of_birth else None,
             'access_token': access_token,
+            'image_loc': user.image_loc,
             'message': 'Login successful'
         }), 200
     return jsonify({'error': 'Invalid username or password'}), 401
@@ -255,10 +245,23 @@ def verify_token():
 @user_bp.route('/request-otp', methods=['POST'])
 def request_otp():
     data = request.get_json()
-    email = data.get('email')
+    input_value = data.get('email')  # This can be either an email OR username
 
-    if not email:
-        return jsonify({'message': 'Email is required'}), 400
+    if not input_value:
+        return jsonify({'message': 'Email or username is required'}), 400
+
+    # Regex to validate if the input is an email
+    email_regex = r"^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$"
+
+    if re.match(email_regex, input_value):
+        # Input is already a valid email
+        email = input_value
+    else:
+        # Input is a username, look up the corresponding email
+        user = User.query.filter(or_(User.username == input_value, User.email == input_value)).first()
+        if not user or not user.email:
+            return jsonify({'message': 'User not found or has no email on record'}), 404
+        email = user.email
 
     # Generate a random 6-digit OTP
     otp = str(random.randint(100000, 999999))
@@ -277,7 +280,6 @@ def request_otp():
 
     # Send OTP via email
     email_sent = send_otp_email(email, otp)
-
     if not email_sent:
         return jsonify({'message': 'Failed to send OTP email'}), 500
 

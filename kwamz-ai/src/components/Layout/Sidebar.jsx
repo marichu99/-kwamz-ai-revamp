@@ -89,10 +89,12 @@ const menuItems = [
 function Sidebar({ collapsed, onToggle, currentPage, onPageChange }) {
     const [openSubmenus, setOpenSubmenus] = useState({ analytics: true });
     const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+    const user = JSON.parse(localStorage.getItem("user"));
+
     const [userData, setUserData] = useState({
-        username: 'Martin Mabera',
-        email: 'martin.mabera@example.com',
-        profileImage: null
+        username: user.username,
+        email: user.email,
+        profileImage: user.image_loc
     });
     const navigate = useNavigate()
 
@@ -249,7 +251,7 @@ function Sidebar({ collapsed, onToggle, currentPage, onPageChange }) {
                     <div className='flex items-center space-x-3 p-3 rounded-xl bg-slate-50 dark:bg-slate-800/50' onClick={() => setIsSettingsOpen(true)}>
                         <div className='w-10 h-10 rounded-full bg-gray-300 ring-2 ring-blue-500'></div>
                         <div className='flex-1 min-w-0'>
-                            <p className='text-sm font-medium text-slate-800 dark:text-white truncate'>Martin Mabera</p>
+                            <p className='text-sm font-medium text-slate-800 dark:text-white truncate'>{user.username} </p>
                             <p className='text-xs text-slate-500 dark:text-slate-400 truncate'>Administrator</p>
                         </div>
                     </div>

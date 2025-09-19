@@ -5,6 +5,7 @@ import { useNavigate } from 'react-router-dom'
 
 function Header({ sideBarCollapsed, onToggleSideBar }) {
     const navigate = useNavigate();
+    const user = JSON.parse(localStorage.getItem("user"))
     return (
         <div className='bg-white/80 dark:bg-slate-900/80 backdrop-blur-xl border-b border-slate-200/50 dark:border-slate-700/50 px-6 py-4'>
             <div className='flex items-center justify-between'>
@@ -14,12 +15,15 @@ function Header({ sideBarCollapsed, onToggleSideBar }) {
                         <Menu />
                     </button>
 
-                    <div className='hidden md:block'>
-                        <h1 className='text-2xl font-black text-slate-800 dark:text-white'>
+                    <div className="hidden md:block">
+                        <h1 className="text-2xl font-black text-slate-800 dark:text-white">
                             Dashboard
                         </h1>
-                        <p>Welcome back Mabera, Here's what's happening today</p>
+                        <p className="text-gray-600 dark:text-gray-300">
+                            Welcome back {user?.username || "Guest"}, here's what's happening today
+                        </p>
                     </div>
+
                 </div>
 
                 {/* center */}
@@ -71,10 +75,10 @@ function Header({ sideBarCollapsed, onToggleSideBar }) {
                     {/* user profile */}
                     <UserDropdown
                         user={{
-                            name: 'Martin Mabera',
-                            email: 'martin@example.com',
+                            name: user.username,
+                            email: user.email,
                             role: 'Admin',
-                            avatar: 'https://images.unsplash.com/photo-1472099645785-5658abf4ff4e?w=100&h=100&fit=crop&crop=face'
+                            avatar: user.image_log || ''
                         }}
                         onLogout={() => {
                             // Handle logout logic

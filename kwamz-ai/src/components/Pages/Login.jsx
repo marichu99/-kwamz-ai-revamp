@@ -129,13 +129,14 @@ const LoginForm = ({ onSuccess }) => {
         otp: enteredOtp,
       });
 
-      const { access_token, username: user, id, email, phone_number, date_of_birth } = response.data;
+      const { access_token, username: user, id, email, phone_number, date_of_birth,image_loc } = response.data;
 
       // Store token and user data in localStorage
       localStorage.setItem('token', access_token);
       localStorage.setItem('user', JSON.stringify({
         id,
         username: user,
+        image_loc: image_loc,
         email,
         phone_number,
         date_of_birth
