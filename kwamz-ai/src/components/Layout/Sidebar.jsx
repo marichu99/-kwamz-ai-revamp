@@ -9,9 +9,9 @@ import {
     ChevronRight,
     Zap,
     Wallet,
-    LogOut // Added LogOut icon
+    LogOut
 } from 'lucide-react';
-import React, { useState } from 'react'
+import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import UserSettingsModal from '../Pages/UserSettingsModal';
 
@@ -90,13 +90,7 @@ function Sidebar({ collapsed, onToggle, currentPage, onPageChange }) {
     const [openSubmenus, setOpenSubmenus] = useState({ analytics: true });
     const [isSettingsOpen, setIsSettingsOpen] = useState(false);
     const user = JSON.parse(localStorage.getItem("user"));
-
-    const [userData, setUserData] = useState({
-        username: user.username,
-        email: user.email,
-        profileImage: user.image_loc
-    });
-    const navigate = useNavigate()
+    const navigate = useNavigate();
 
     const toggleSubmenu = (itemId) => {
         setOpenSubmenus(prev => ({
@@ -114,7 +108,7 @@ function Sidebar({ collapsed, onToggle, currentPage, onPageChange }) {
     };
 
     const handleLogout = () => {
-        navigate("/logout")
+        navigate("/logout");
     };
 
     if (collapsed) {
@@ -136,7 +130,7 @@ function Sidebar({ collapsed, onToggle, currentPage, onPageChange }) {
                             className={`w-full flex items-center justify-center p-3 rounded-xl transition-all duration-200 ${currentPage === item.id
                                 ? 'bg-gradient-to-r from-blue-500 to-purple-600 text-white shadow-lg shadow-blue-500/25'
                                 : 'text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800/50'
-                                }`}
+                            }`}
                             onClick={() => handleItemClick(item.id)}
                             title={item.label}
                         >
@@ -192,7 +186,7 @@ function Sidebar({ collapsed, onToggle, currentPage, onPageChange }) {
                                     className={`w-full flex items-center justify-between p-3 rounded-xl transition-all duration-200 ${isActive
                                         ? 'bg-gradient-to-r from-blue-500 to-purple-600 text-white shadow-lg shadow-blue-500/25'
                                         : 'text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800/50'
-                                        }`}
+                                    }`}
                                     onClick={() => handleItemClick(item.id)}
                                 >
                                     <div className='flex items-center space-x-3'>
@@ -233,7 +227,7 @@ function Sidebar({ collapsed, onToggle, currentPage, onPageChange }) {
                                                 className={`w-full text-left p-2 rounded-lg text-sm transition-colors duration-150 ${currentPage === subItem.id
                                                     ? 'text-blue-600 dark:text-blue-400 bg-blue-50 dark:bg-blue-900/20'
                                                     : 'text-gray-600 dark:text-slate-400 hover:bg-gray-100 dark:hover:bg-slate-800/50 hover:text-gray-900 dark:hover:text-white'
-                                                    }`}
+                                                }`}
                                                 onClick={() => onPageChange(subItem.id)}
                                             >
                                                 {subItem.label}
@@ -251,12 +245,11 @@ function Sidebar({ collapsed, onToggle, currentPage, onPageChange }) {
                     <div className='flex items-center space-x-3 p-3 rounded-xl bg-slate-50 dark:bg-slate-800/50' onClick={() => setIsSettingsOpen(true)}>
                         <div className='w-10 h-10 rounded-full bg-gray-300 ring-2 ring-blue-500'></div>
                         <div className='flex-1 min-w-0'>
-                            <p className='text-sm font-medium text-slate-800 dark:text-white truncate'>{user.username} </p>
+                            <p className='text-sm font-medium text-slate-800 dark:text-white truncate'>{user.username}</p>
                             <p className='text-xs text-slate-500 dark:text-slate-400 truncate'>Administrator</p>
                         </div>
                     </div>
 
-                    {/* Logout Button */}
                     <button
                         className='w-full flex items-center space-x-3 p-3 rounded-xl text-slate-600 dark:text-slate-300 hover:bg-red-50 dark:hover:bg-red-900/20 hover:text-red-600 dark:hover:text-red-400 transition-colors duration-200 group'
                         onClick={handleLogout}
@@ -266,12 +259,15 @@ function Sidebar({ collapsed, onToggle, currentPage, onPageChange }) {
                     </button>
                 </div>
             </div>
-            {/* Settings Modal */}
             <UserSettingsModal
                 key="user-settings-modal"
                 isOpen={isSettingsOpen}
                 onClose={() => setIsSettingsOpen(false)}
-                userData={userData}
+                userData={{
+                    username: user.username,
+                    email: user.email,
+                    profileImage: user.image_loc
+                }}
                 onUpdateUser={(section, data) => console.log('Updating user:', section, data)}
             />
         </>

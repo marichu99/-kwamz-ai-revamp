@@ -1,39 +1,38 @@
-import React, { useState } from 'react'
-import StatsGrid from './StatsGrid'
-import DashboardHeader from './DashboardHeader'
-import RevenueChart from './RevenueChart'
-import TrafficSourcesChart from './TrafficSourcesChart'
-import OrdersChart from './OrdersChart'
-import RecentActivity from './RecentActivity'
-
-function Dashboard() {
-  const [activeTab, setActiveTab] = useState('overview')
-
+import React from 'react';
+import StatsGrid from './StatsGrid';
+import DashboardHeader from './DashboardHeader';
+import RevenueChart from './RevenueChart';
+import TrafficSourcesChart from './TrafficSourcesChart';
+import OrdersChart from './OrdersChart';
+import RecentActivity from './RecentActivity';
+import Transactions
+ from '../Layout/Transactions';
+function Dashboard({ currentPage, setCurrentPage }) {
   return (
-    <div className='min-h-screen bg-gradient-to-br from-slate-50 via-blue-50 to-purple-50 dark:from-slate-900 dark:via-slate-800 dark:to-slate-900 p-6'>
-      <div className='max-w-7xl mx-auto space-y-8'>
-        
-        {/* Header with navigation */}
-        <DashboardHeader activeTab={activeTab} setActiveTab={setActiveTab} />
+    <div className="min-h-screen bg-gradient-to-br from-slate-50 via-blue-50 to-purple-50 dark:from-slate-900 dark:via-slate-800 dark:to-slate-900 p-6">
+      <div className="max-w-7xl mx-auto space-y-8">
 
-        {/* Stats Grid */}
-        <StatsGrid />
+        {/* Conditional Rendering */}
+        {currentPage === 'dashboard' && (
+          <>
+            {/* Header with navigation */}
+            <DashboardHeader currentPage={currentPage} setCurrentPage={setCurrentPage} />
 
-        {/* Charts Section */}
-        <div className='grid grid-cols-1 xl:grid-cols-3 gap-6'>
-          <RevenueChart />
-          <TrafficSourcesChart />
-        </div>
-
-        {/* Bottom Section */}
-        <div className='grid grid-cols-1 xl:grid-cols-2 gap-6'>
-          <OrdersChart />
-          <RecentActivity />
-        </div>
-        
+            <StatsGrid />
+            <div className="grid grid-cols-1 xl:grid-cols-3 gap-6">
+              <RevenueChart />
+              <TrafficSourcesChart />
+            </div>
+            <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
+              <OrdersChart />
+              <RecentActivity />
+            </div>
+          </>
+        )}
+        {currentPage === 'transactions' && <Transactions />}
       </div>
     </div>
-  )
+  );
 }
 
-export default Dashboard
+export default Dashboard;
