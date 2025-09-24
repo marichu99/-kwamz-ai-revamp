@@ -7,6 +7,7 @@ import OrdersChart from './OrdersChart';
 import RecentActivity from './RecentActivity';
 import Transactions
  from '../Layout/Transactions';
+import UserAgentList from '../Pages/UserAgentList';
 function Dashboard({ currentPage, setCurrentPage }) {
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-50 via-blue-50 to-purple-50 dark:from-slate-900 dark:via-slate-800 dark:to-slate-900 p-6">
@@ -30,6 +31,7 @@ function Dashboard({ currentPage, setCurrentPage }) {
           </>
         )}
         {currentPage === 'transactions' && <Transactions />}
+        {currentPage === 'user-list' && <UserAgentList />}
       </div>
     </div>
   );

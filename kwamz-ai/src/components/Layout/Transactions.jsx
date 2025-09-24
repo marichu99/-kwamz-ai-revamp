@@ -1,6 +1,5 @@
 import React, { useState, useEffect } from 'react';
 import { Search, Filter, Eye } from 'lucide-react';
-import axios from 'axios';
 import config from '../../Config';
 
 function TransactionDetailsModal({ isOpen, onClose, transaction }) {
@@ -41,16 +40,22 @@ function Transactions() {
 
   // Fetch transactions from API
   useEffect(() => {
+
     const fetchTransactions = async () => {
       try {
         const token = localStorage.getItem('token');
-        const response = await axios.get(`${config.API_URL}/payments`, {
+        const url = `${config.API_URL}/payment/get-payments`;
+        const response = await fetch(url, {
+          method: 'GET',
           headers: {
-            Authorization: `Bearer ${token}`,
-          },
+            'Authorization': `Bearer ${token}`,
+            'Content-Type': 'application/json'
+          }
         });
-        setTransactions(response.data);
-        setFilteredTransactions(response.data);
+        if (!response.ok) throw new Error('Failed to fetch data');
+        const data = await response.json();
+        setTransactions(data);
+        setFilteredTransactions(data);
       } catch (error) {
         console.error('Error fetching transactions:', error.response?.data || error.message);
       }
@@ -138,9 +143,8 @@ function Transactions() {
             {filteredTransactions.map((transaction, index) => (
               <tr
                 key={transaction.id}
-                className={`border-b border-slate-200 dark:border-slate-600 ${
-                  index % 2 === 0 ? 'bg-white dark:bg-slate-800' : 'bg-slate-50 dark:bg-slate-700/50'
-                } hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors`}
+                className={`border-b border-slate-200 dark:border-slate-600 ${index % 2 === 0 ? 'bg-white dark:bg-slate-800' : 'bg-slate-50 dark:bg-slate-700/50'
+                  } hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors`}
               >
                 <td className="px-4 py-3">{transaction.id}</td>
                 <td className="px-4 py-3">{transaction.user?.username || 'N/A'}</td>
@@ -150,11 +154,10 @@ function Transactions() {
                 <td className="px-4 py-3">{transaction.reference_code || 'N/A'}</td>
                 <td className="px-4 py-3">
                   <span
-                    className={`px-2 py-1 rounded-full text-xs ${
-                      transaction.result_code === 0
-                        ? 'bg-green-100 text-green-600 dark:bg-green-900/50 dark:text-green-400'
-                        : 'bg-red-100 text-red-600 dark:bg-red-900/50 dark:text-red-400'
-                    }`}
+                    className={`px-2 py-1 rounded-full text-xs ${transaction.result_code === 0
+                      ? 'bg-green-100 text-green-600 dark:bg-green-900/50 dark:text-green-400'
+                      : 'bg-red-100 text-red-600 dark:bg-red-900/50 dark:text-red-400'
+                      }`}
                   >
                     {transaction.result_code === 0 ? 'Success' : 'Failed'}
                   </span>

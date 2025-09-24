@@ -679,7 +679,7 @@ const UserSettingsModal = ({ isOpen, onClose, userData, onUpdateUser }) => {
                     Authorization: `Bearer ${token}`,
                 },
                 body: formDataToSend,
-                // Don't set Content-Type header - let browser set it with boundary
+                
             });
 
             if (!res.ok) {

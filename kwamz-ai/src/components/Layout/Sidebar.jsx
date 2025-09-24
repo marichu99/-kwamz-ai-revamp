@@ -22,28 +22,25 @@ const menuItems = [
         label: "Dashboard",
         badge: "New"
     },
-    {
-        id: "analytics",
-        icon: BarChart3,
-        label: "Analytics",
-        submenu: [
-            { id: "overview", label: "Overview" },
-            { id: "reports", label: "Reports" },
-            { id: "insights", label: "Insights" },
-            { id: "metrics", label: "Key Metrics" },
-            { id: "performance", label: "Performance" }
-        ]
-    },
+    // {
+    //     id: "analytics",
+    //     icon: BarChart3,
+    //     label: "Analytics",
+    //     submenu: [
+    //         { id: "overview", label: "Overview" },
+    //         { id: "reports", label: "Reports" },
+    //         { id: "insights", label: "Insights" },
+    //         { id: "metrics", label: "Key Metrics" },
+    //         { id: "performance", label: "Performance" }
+    //     ]
+    // },
     {
         id: "users",
         icon: Users,
         label: "Users",
         count: "12",
         submenu: [
-            { id: "overview", label: "Overview" },
-            { id: "user-list", label: "User List" },
-            { id: "activity", label: "User Activity" },
-            { id: "permissions", label: "Permissions" }
+            { id: "user-list", label: "User List" },           
         ]
     },
     {
@@ -62,28 +59,18 @@ const menuItems = [
         icon: Wallet,
         label: "Transactions",
     },
-    {
-        id: "orders",
-        icon: ShoppingCart,
-        label: "Orders",
-        badge: "3",
-        submenu: [
-            { id: "all-orders", label: "All Orders" },
-            { id: "pending", label: "Pending Orders" },
-            { id: "processing", label: "Processing" },
-            { id: "shipped", label: "Shipped" }
-        ]
-    },
-    {
-        id: "settings",
-        icon: Settings,
-        label: "Settings",
-        submenu: [
-            { id: "general", label: "General Settings" },
-            { id: "appearance", label: "Appearance" },
-            { id: "notifications", label: "Notifications" }
-        ]
-    }
+    // {
+    //     id: "orders",
+    //     icon: ShoppingCart,
+    //     label: "Orders",
+    //     badge: "3",
+    //     submenu: [
+    //         { id: "all-orders", label: "All Orders" },
+    //         { id: "pending", label: "Pending Orders" },
+    //         { id: "processing", label: "Processing" },
+    //         { id: "shipped", label: "Shipped" }
+    //     ]
+    // },
 ];
 
 function Sidebar({ collapsed, onToggle, currentPage, onPageChange }) {

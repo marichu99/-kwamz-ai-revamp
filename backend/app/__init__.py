@@ -34,8 +34,12 @@ def create_app():
     from app.controller.user_controller import user_bp
     from app.controller.document_controller import document_bp
     from app.controller.mpesa_controller import mpesa_bp
+    from app.controller.payment_controller import payment_bp
+    from app.controller.useragent_controller import user_agent_bp
     app.register_blueprint(user_bp, url_prefix='/users')
     app.register_blueprint(document_bp, url_prefix='/document')
     app.register_blueprint(mpesa_bp, url_prefix='/mpesa')
+    app.register_blueprint(payment_bp, url_prefix='/payment')
+    app.register_blueprint(user_agent_bp, url_prefix='/useragent')
 
     return app
