@@ -11,7 +11,7 @@ class UserAgent(db.Model):
     phone_number = db.Column(db.String(20), unique=True, nullable=True) 
     is_authentic = db.Column(db.Boolean, default=False, nullable=False)  
     authenticity_desc = db.Column(db.String(255), nullable=True)       
-    image_loc = db.Column(db.String(255), unique=True, nullable=True)   
+    image_loc = db.Column(db.Text, nullable=True)
     date_of_birth = db.Column(db.Date, nullable=True)
 
     def __init__(self, firstname, lastname, idnumber, phone_number=None,
