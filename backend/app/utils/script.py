@@ -2,6 +2,7 @@ from playwright.sync_api import sync_playwright
 from PIL import Image
 from app import db
 from app.model.document import Document
+from app.model.useragent import UserAgent
 import pytesseract
 import re
 import sys
@@ -85,6 +86,17 @@ def authenticate_kra_from_app (kra_pin,police_number,id_number,tax_payer_name):
         # Final output based on statuses
         if "Active" in kra_status and "VALID" in police_status:
             status = rf"Both KRA PIN and Police Clearance are valid for {tax_payer_name}."
+            user = UserAgent.query.filter(id_number==id_number).first()
+            
+            # update user authenticated status
+            if user:
+                user.is_authentic = True
+                db.session.add(user)
+                db.session.commit()
+                print(f"User {user.firstname} {user.lastname} authenticated status updated to True.")
+            else:
+                print(f"No user found with ID number {id_number}.")
+                
             authenticated=True
             print(status)
             return status

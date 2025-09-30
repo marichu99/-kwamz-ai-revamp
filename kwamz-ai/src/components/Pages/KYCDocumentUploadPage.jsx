@@ -62,8 +62,14 @@ const KYCDocumentUploadPage = ({ isOpen = true, onClose = () => { }, user = { id
                 alert(result.error);
                 return;
             }
+
+            if(result.idNo && idNumber && result.idNo !== idNumber) {
+                showToast('The ID number does not match police clearance form details', 'error');
+                setErrors(prev => ({ ...prev, nameMatch: 'The ID number does not match police clearance form details' }));
+                resetPoliceClearance();
+                return;
+            }
             fieldMap.forEach(({ id, key }) => {
-                console.log("the key is", key)
                 if (key === 'kraPin') setKraPin(result[key]);
                 if (key === 'taxPayerName') setTaxPayerName(result[key]);
                 if (key === 'refNo') setPoliceClearance(result[key]);

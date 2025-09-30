@@ -1,11 +1,14 @@
 from flask import Blueprint, jsonify, request, current_app
 from flask_jwt_extended import jwt_required, get_jwt_identity
 from flask_cors import cross_origin
+from openpyxl import load_workbook
+from io import BytesIO
 from sqlalchemy.exc import IntegrityError
 from app import db
 from app.model.useragent import UserAgent
 from datetime import datetime
 import os
+import re
 
 user_agent_bp = Blueprint('user_agent', __name__, url_prefix='/useragent')
 
@@ -36,6 +39,11 @@ def get_upload_dir():
     upload_dir = os.path.join(current_app.root_path, 'useragents', 'profiles')
     os.makedirs(upload_dir, exist_ok=True)  # Create directory if it doesn't exist
     return upload_dir
+
+ALLOWED_EXTENSIONS_XSL = {'xlsx','xls'}
+
+def allowed_file_xls(filename):
+    return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS_XSL
 
 # ------------------------------
 # CREATE: Add a new UserAgent with file upload
@@ -243,3 +251,187 @@ def delete_user(user_id):
         db.session.rollback()
         current_app.logger.error(f"Error deleting user: {str(e)}")
         return jsonify({'error': 'Internal server error'}), 500
+
+@user_agent_bp.route('/batch', methods=['POST', 'OPTIONS'])
+@jwt_required()
+def batch_create_useragents():
+    try:
+        print("Batch upload endpoint hit")
+        if request.method == 'OPTIONS':
+            return jsonify({'status': 'ok'}), 200
+        if 'file' not in request.files:
+            return jsonify({'error': 'No file uploaded'}), 400
+
+        file = request.files['file']
+        if not file or file.filename == '':
+            return jsonify({'error': 'No file selected'}), 400
+
+        if not allowed_file_xls(file.filename):
+            return jsonify({'error': 'Invalid file type. Only .xlsx files are allowed'}), 400
+
+        # Read Excel file
+        file_stream = BytesIO(file.read())
+        workbook = load_workbook(file_stream)
+        sheet = workbook.active
+
+        # Extract headers and data
+        headers = [cell.value.strip() for cell in next(sheet.iter_rows(min_row=1, max_row=1)) if cell.value]
+        data_rows = [
+            [cell.value for cell in row]
+            for row in sheet.iter_rows(min_row=2)
+            if any(cell.value for cell in row)  # Skip empty rows
+        ]
+
+        created_users = []
+        errors = []
+
+        for row in data_rows:
+            if len(row) < 4:
+                errors.append(f"Invalid row (too few columns): {row}")
+                continue
+
+            user_data = {
+                'firstname': str(row[0] or ''),
+                'lastname': str(row[1] or ''),
+                'idnumber': str(row[2] or ''),
+                'phone_number': str(row[3] or '') if row[3] else None,
+                'is_authentic': False
+            }
+
+            # Validate required fields
+            if not user_data['firstname'] or not user_data['lastname'] or not user_data['idnumber']:
+                errors.append(f"Missing required fields in row: {user_data}")
+                continue
+
+            # Check for duplicate idnumber
+            if UserAgent.query.filter_by(idnumber=user_data['idnumber']).first():
+                errors.append(f"Duplicate ID number: {user_data['idnumber']}")
+                continue
+
+            try:
+                new_user = UserAgent(**user_data)
+                db.session.add(new_user)
+                created_users.append(user_data)
+            except Exception as e:
+                errors.append(f"Error creating user {user_data['idnumber']}: {str(e)}")
+
+        try:
+            db.session.commit()
+        except Exception as e:
+            db.session.rollback()
+            return jsonify({'error': f'Failed to save users: {str(e)}'}), 500
+
+        return jsonify({
+            'message': f'{len(created_users)} users created successfully',
+            'createdUsers': created_users,
+            'errors': errors if errors else None
+        }), 200
+
+    except Exception as e:
+        return jsonify({'error': f'Failed to process batch upload: {str(e)}'}), 500
+
+def validate_users(data_rows):
+    errors = []
+    valid_users = []
+    seen_idnumbers = set()
+    seen_phones = set([u.phone_number for u in UserAgent.query.filter(UserAgent.phone_number.isnot(None)).all()])
+
+    for row_index, row in enumerate(data_rows, start=2):
+        if len(row) < 4:
+            errors.append({
+                'rowIndex': row_index,
+                'firstname': row[0] if len(row) > 0 else None,
+                'lastname': row[1] if len(row) > 1 else None,
+                'idnumber': row[2] if len(row) > 2 else None,
+                'phone_number': row[3] if len(row) > 3 else None,
+                'reason': 'Incomplete row (requires firstname, lastname, idnumber, phone_number)'
+            })
+            continue
+
+        user_data = {
+            'firstname': str(row[0] or '').strip(),
+            'lastname': str(row[1] or '').strip(),
+            'idnumber': str(row[2] or '').strip(),
+            'phone_number': str(row[3] or '').strip() if row[3] else None,
+            'rowIndex': row_index
+        }
+
+        # Validate required fields
+        if not user_data['firstname'] or not user_data['lastname'] or not user_data['idnumber']:
+            errors.append({**user_data, 'reason': 'Missing required fields (firstname, lastname, idnumber)'})
+            continue
+
+        # Validate name format
+        if not re.match(r'^[A-Za-z\s-]+$', user_data['firstname']) or not re.match(r'^[A-Za-z\s-]+$', user_data['lastname']):
+            errors.append({**user_data, 'reason': 'Invalid name format (only letters, spaces, and hyphens allowed)'})
+            continue
+
+        # Validate phone number format (if provided)
+        if user_data['phone_number']:
+            print(f"Validating phone number: {user_data['phone_number']}")
+            # Allow optional country code (+ followed by 1-3 digits) and 9-12 digits
+            if not re.match(r'^\+?\d{1,3}?\d{9,12}$', user_data['phone_number']):
+                errors.append({**user_data, 'reason': 'Invalid phone number format (must be 9-12 digits, optional + and 1-3 digit country code)'})
+                continue
+
+        # Check for duplicate idnumber within file
+        if user_data['idnumber'] in seen_idnumbers:
+            errors.append({**user_data, 'reason': 'Duplicate ID number within file'})
+            continue
+        seen_idnumbers.add(user_data['idnumber'])
+
+        # Check for existing idnumber in database
+        if UserAgent.query.filter_by(idnumber=user_data['idnumber']).first():
+            errors.append({**user_data, 'reason': 'ID number already exists in database'})
+            continue
+
+        # Check for existing phone number in database (if provided)
+        if user_data['phone_number'] and user_data['phone_number'] in seen_phones:
+            errors.append({**user_data, 'reason': 'Phone number already exists in database'})
+            continue
+        seen_phones.add(user_data['phone_number'])
+
+        valid_users.append(user_data)
+
+    return valid_users, errors
+
+@user_agent_bp.route('/validate-batch', methods=['POST', 'OPTIONS'])
+@jwt_required()
+def validate_batch():
+    if request.method == 'OPTIONS':
+        return jsonify({}), 200
+
+    try:
+        print("Validate batch endpoint hit")
+        if 'file' not in request.files:
+            return jsonify({'error': 'No file uploaded'}), 400
+
+        file = request.files['file']
+        if not file or file.filename == '':
+            return jsonify({'error': 'No file selected'}), 400
+
+        if not allowed_file_xls(file.filename):
+            return jsonify({'error': 'Invalid file type. Only .xlsx and .xls files are allowed'}), 400
+
+        # Read Excel file
+        file_stream = BytesIO(file.read())
+        workbook = load_workbook(file_stream)
+        sheet = workbook.active
+
+        # Extract headers and data
+        headers = [cell.value.strip() for cell in next(sheet.iter_rows(min_row=1, max_row=1)) if cell.value]
+        data_rows = [
+            [cell.value for cell in row]
+            for row in sheet.iter_rows(min_row=2)
+            if any(cell.value for cell in row)
+        ]
+
+        valid_users, errors = validate_users(data_rows)
+
+        return jsonify({
+            'validUsers': valid_users,
+            'invalidUsers': errors if errors else []
+        }), 200
+
+    except Exception as e:
+        return jsonify({'error': f'Failed to validate batch: {str(e)}'}), 500

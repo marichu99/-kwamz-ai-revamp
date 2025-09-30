@@ -1,10 +1,12 @@
-import { useState, useEffect } from 'react';
-import { Search, Filter, Edit, Plus, RefreshCw, Binoculars } from 'lucide-react';
+import { useState, useEffect, useRef } from 'react';
+import { Search, Filter, MoreVertical, Binoculars, Edit, Plus, Download, Upload, RefreshCw } from 'lucide-react';
 import axios from 'axios';
+import * as XLSX from 'xlsx';
 import config from '../../Config';
 import { useToast } from './ToastProvider';
 import UserDetailsModal from './UserDetailsModal';
 import KYCDocumentUploadPage from './KYCDocumentUploadPage';
+import BatchUploadModal from './BatchUploadModal';
 
 function UserAgentList() {
   const [users, setUsers] = useState([]);
@@ -17,7 +19,13 @@ function UserAgentList() {
   const [isLoading, setIsLoading] = useState(false);
   const [currentPage, setCurrentPage] = useState(1);
   const [pageSize, setPageSize] = useState(10);
+  const [isDropdownOpen, setIsDropdownOpen] = useState(false);
+  const [isBatchModalOpen, setIsBatchModalOpen] = useState(false);
+  const [validUsers, setValidUsers] = useState([]);
+  const [invalidUsers, setInvalidUsers] = useState([]);
+  const [batchFile, setBatchFile] = useState(null);
   const { showToast } = useToast();
+  const fileInputRef = useRef(null);
 
   // Fetch users from API
   const fetchUsers = async () => {
@@ -121,6 +129,7 @@ function UserAgentList() {
       return;
     }
     setIsUserModalOpen(true);
+    setIsDropdownOpen(false);
   };
 
   // Handle KYC authentication
@@ -134,6 +143,98 @@ function UserAgentList() {
       return;
     }
     setIsKYCModalOpen(true);
+    setIsDropdownOpen(false);
+  };
+
+  // Handle create user
+  const handleOpenCreateModal = () => {
+    setSelectedUserIds([]);
+    setIsUserModalOpen(true);
+    setIsDropdownOpen(false);
+  };
+
+  // Handle download Excel template
+  const handleDownloadExcelTemplate = () => {
+    const headers = ['firstname', 'lastname', 'idnumber', 'phone_number'];
+    const sampleData = [
+      ['John', 'Doe', '123456789', '1234567890'],
+      ['Jane', 'Smith', '987654321', '0987654321']
+    ];
+
+    const ws = XLSX.utils.aoa_to_sheet([headers, ...sampleData]);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, 'Sheet1');
+    XLSX.writeFile(wb, 'user_batch_template.xlsx');
+
+    showToast('Excel template downloaded successfully', 'success');
+    setIsDropdownOpen(false);
+  };
+
+  // Handle batch upload preview
+  const handleBatchUpload = async (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+
+    setIsLoading(true);
+    try {
+      const formData = new FormData();
+      formData.append('file', file);
+
+      const token = localStorage.getItem('token');
+      const response = await axios.post(`${config.API_URL}/useragent/validate-batch`, formData, {
+        headers: {
+          Authorization: `Bearer ${token}`,
+          'Content-Type': 'multipart/form-data',
+        },
+      });
+
+      const { validUsers, invalidUsers } = response.data;
+
+      // Validate response data
+      if (!Array.isArray(validUsers) || !Array.isArray(invalidUsers)) {
+        throw new Error('Invalid response format from server');
+      }
+
+      setValidUsers(validUsers);
+      setInvalidUsers(invalidUsers);
+      setBatchFile(file);
+      setIsBatchModalOpen(true);
+    } catch (error) {
+      console.error('Error validating batch:', error.response?.data || error.message);
+      showToast(error.response?.data?.error || 'Failed to validate batch', 'error');
+    } finally {
+      setIsLoading(false);
+      fileInputRef.current.value = ''; // Reset file input
+    }
+  };
+
+  // Handle confirm batch upload
+  const handleConfirmUpload = async () => {
+    setIsBatchModalOpen(false);
+    setIsLoading(true);
+    try {
+      const formData = new FormData();
+      formData.append('file', batchFile);
+
+      const token = localStorage.getItem('token');
+      const res = await axios.post(`${config.API_URL}/useragent/batch`, formData, {
+        headers: {
+          Authorization: `Bearer ${token}`,
+          'Content-Type': 'multipart/form-data',
+        },
+      });
+
+      await fetchUsers();
+      showToast(res.data.message || `${res.data.createdUsers.length} users created successfully from batch upload`, 'success');
+    } catch (error) {
+      console.error('Error processing batch upload:', error.response?.data || error.message);
+      showToast(error.response?.data?.error || 'Failed to process batch upload', 'error');
+    } finally {
+      setIsLoading(false);
+      setBatchFile(null);
+      setValidUsers([]);
+      setInvalidUsers([]);
+    }
   };
 
   const handleCreateOrUpdateUser = async (formData, userId, resetForm) => {
@@ -188,38 +289,10 @@ function UserAgentList() {
     }
   };
 
-  const handleOpenCreateModal = () => {
-    setSelectedUserIds([]);
-    setIsUserModalOpen(true);
-  };
-
   return (
     <div className="bg-white dark:bg-slate-800 rounded-xl shadow-lg p-6">
       {/* Action Buttons */}
       <div className="flex justify-end mb-4 space-x-4">
-        <button
-          onClick={handlePerformKYC}
-          disabled={selectedUserIds.length === 0}
-          className="flex items-center space-x-2 py-2 px-4 bg-blue-500 text-white rounded-xl hover:bg-blue-600 transition-colors disabled:bg-blue-300 disabled:cursor-not-allowed"
-        >
-          <Binoculars className="w-4 h-4" />
-          <span>KYC Authentication</span>
-        </button>
-        <button
-          onClick={handleEditUser}
-          disabled={selectedUserIds.length === 0}
-          className="flex items-center space-x-2 py-2 px-4 bg-blue-500 text-white rounded-xl hover:bg-blue-600 transition-colors disabled:bg-blue-300 disabled:cursor-not-allowed"
-        >
-          <Edit className="w-4 h-4" />
-          <span>Edit Selected</span>
-        </button>
-        <button
-          onClick={handleOpenCreateModal}
-          className="flex items-center space-x-2 py-2 px-4 bg-blue-500 text-white rounded-xl hover:bg-blue-600 transition-colors"
-        >
-          <Plus className="w-4 h-4" />
-          <span>Create User</span>
-        </button>
         <button
           onClick={fetchUsers}
           disabled={isLoading}
@@ -228,7 +301,80 @@ function UserAgentList() {
           <RefreshCw className={`w-4 h-4 ${isLoading ? 'animate-spin' : ''}`} />
           <span>Reload</span>
         </button>
+        <div className="relative">
+          <button
+            onClick={() => setIsDropdownOpen(!isDropdownOpen)}
+            className="flex items-center space-x-2 py-2 px-4 bg-blue-500 text-white rounded-xl hover:bg-blue-600 transition-colors"
+          >
+            <MoreVertical className="w-4 h-4" />
+            <span>Actions</span>
+          </button>
+          {isDropdownOpen && (
+            <div className="absolute right-0 mt-2 w-48 bg-white dark:bg-slate-700 rounded-xl shadow-lg z-10">
+              <button
+                onClick={handlePerformKYC}
+                disabled={selectedUserIds.length === 0}
+                className="w-full flex items-center px-4 py-2 text-sm text-slate-800 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-600 disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                <Binoculars className="w-4 h-4 mr-2" />
+                KYC Authentication
+              </button>
+              <button
+                onClick={handleEditUser}
+                disabled={selectedUserIds.length === 0}
+                className="w-full flex items-center px-4 py-2 text-sm text-slate-800 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-600 disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                <Edit className="w-4 h-4 mr-2" />
+                Edit Selected
+              </button>
+              <button
+                onClick={handleOpenCreateModal}
+                className="w-full flex items-center px-4 py-2 text-sm text-slate-800 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-600"
+              >
+                <Plus className="w-4 h-4 mr-2" />
+                Create User
+              </button>
+              <button
+                onClick={handleDownloadExcelTemplate}
+                className="w-full flex items-center px-4 py-2 text-sm text-slate-800 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-600"
+              >
+                <Download className="w-4 h-4 mr-2" />
+                Download Excel Template
+              </button>
+              <button
+                onClick={() => fileInputRef.current.click()}
+                className="w-full flex items-center px-4 py-2 text-sm text-slate-800 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-600"
+              >
+                <Upload className="w-4 h-4 mr-2" />
+                Upload Batch Excel
+              </button>
+            </div>
+          )}
+        </div>
       </div>
+
+      {/* Hidden file input */}
+      <input
+        type="file"
+        accept=".xlsx"
+        ref={fileInputRef}
+        style={{ display: 'none' }}
+        onChange={handleBatchUpload}
+      />
+
+      {/* Batch Upload Modal */}
+      <BatchUploadModal
+        isOpen={isBatchModalOpen}
+        validUsers={validUsers}
+        invalidUsers={invalidUsers}
+        onClose={() => {
+          setIsBatchModalOpen(false);
+          setBatchFile(null);
+          setValidUsers([]);
+          setInvalidUsers([]);
+        }}
+        onConfirm={handleConfirmUpload}
+      />
 
       {/* Search and Filter Controls */}
       <div className="flex flex-col sm:flex-row gap-4 mb-6">
