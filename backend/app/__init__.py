@@ -41,5 +41,9 @@ def create_app():
     app.register_blueprint(mpesa_bp, url_prefix='/mpesa')
     app.register_blueprint(payment_bp, url_prefix='/payment')
     app.register_blueprint(user_agent_bp, url_prefix='/useragent')
+    
+    from app.model.company import Company
+    from app.model.agentcompany import AgentCompany
+    from app.model.useragent import UserAgent
 
     return app

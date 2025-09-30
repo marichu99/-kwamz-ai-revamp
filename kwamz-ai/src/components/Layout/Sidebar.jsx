@@ -40,7 +40,9 @@ const menuItems = [
         label: "Users",
         count: "12",
         submenu: [
-            { id: "user-list", label: "User List" },           
+            { id: "user-list", label: "Agents" },           
+            { id: "agent-list", label: "Agencies" },           
+            { id: "company-list", label: "Companies" },           
         ]
     },
     {
