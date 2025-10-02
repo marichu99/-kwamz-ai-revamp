@@ -370,6 +370,7 @@ def batch_create_useragents():
                 'lastname': str(row[1] or ''),
                 'idnumber': str(row[2] or ''),
                 'phone_number': str(row[3] or '') if row[3] else None,
+                'store_number': str(row[4] or '') if row[4] else None,
                 'is_authentic': False
             }
 
@@ -381,10 +382,13 @@ def batch_create_useragents():
             # Check for duplicate idnumber
             if UserAgent.query.filter_by(idnumber=user_data['idnumber']).first():
                 errors.append(f"Duplicate ID number: {user_data['idnumber']}")
-                continue
+                continue            
 
             try:
                 new_user = UserAgent(**user_data)
+                existing_company_store = AgentCompany.query.filter_by(store_number=user_data['store_number']).first()
+                if existing_company_store:
+                    new_user.agent_companies.append(existing_company_store)
                 db.session.add(new_user)
                 created_users.append(user_data)
             except Exception as e:
@@ -412,15 +416,15 @@ def validate_users(data_rows):
     seen_phones = set([u.phone_number for u in UserAgent.query.filter(UserAgent.phone_number.isnot(None)).all()])
 
     for row_index, row in enumerate(data_rows, start=2):
-        if len(row) < 5:  # NEW: require company_code as 5th column
+        if len(row) < 5: 
             errors.append({
                 'rowIndex': row_index,
                 'firstname': row[0] if len(row) > 0 else None,
                 'lastname': row[1] if len(row) > 1 else None,
                 'idnumber': row[2] if len(row) > 2 else None,
                 'phone_number': row[3] if len(row) > 3 else None,
-                'company_code': row[4] if len(row) > 4 else None,
-                'reason': 'Incomplete row (requires firstname, lastname, idnumber, phone_number, company_code)'
+                'store_number': row[4] if len(row) > 4 else None,
+                'reason': 'Incomplete row (requires firstname, lastname, idnumber, phone_number, store_number)'
             })
             continue
 
@@ -429,13 +433,13 @@ def validate_users(data_rows):
             'lastname': str(row[1] or '').strip(),
             'idnumber': str(row[2] or '').strip(),
             'phone_number': str(row[3] or '').strip() if row[3] else None,
-            'company_code': str(row[4] or '').strip(),   # NEW
+            'store_number': str(row[4] or '').strip(),   # NEW
             'rowIndex': row_index
         }
 
         # Validate required fields
-        if not user_data['firstname'] or not user_data['lastname'] or not user_data['idnumber'] or not user_data['company_code']:
-            errors.append({**user_data, 'reason': 'Missing required fields (firstname, lastname, idnumber, company_code)'})
+        if not user_data['firstname'] or not user_data['lastname'] or not user_data['idnumber'] or not user_data['store_number']:
+            errors.append({**user_data, 'reason': 'Missing required fields (firstname, lastname, idnumber, store_number)'})
             continue
 
         # Validate name format
@@ -466,10 +470,10 @@ def validate_users(data_rows):
             continue
         seen_phones.add(user_data['phone_number'])
 
-        # Validate company_code exists in AgentCompany  # NEW
-        company = AgentCompany.query.filter_by(agentcompany_code=user_data['company_code']).first()
+        # Validate store_number exists in AgentCompany  # NEW
+        company = AgentCompany.query.filter_by(store_number=user_data['store_number']).first()
         if not company:
-            errors.append({**user_data, 'reason': f"Invalid company_code '{user_data['company_code']}' (no matching company)"})
+            errors.append({**user_data, 'reason': f"Invalid Store number '{user_data['store_number']}' (no matching company)"})
             continue
 
         # Attach company details  # NEW

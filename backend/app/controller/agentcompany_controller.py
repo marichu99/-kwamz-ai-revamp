@@ -163,12 +163,13 @@ def validate_batch_agent_company():
         print("Excel columns:", df.columns.tolist())
         print("Data types:", df.dtypes.to_dict())  # Debug: check data types
         
-        required_columns = ['company_name', 'location_details', 'location(County)', 'agent_number']
+        required_columns = ['company_name', 'location_details', 'location(County)', 'agent_number', 'store_number']
         if not all(col in df.columns for col in required_columns):
             return jsonify({'error': 'Missing required columns'}), 400
 
         # Convert agent_number to string to match database type
         df['agent_number'] = df['agent_number'].astype(str)
+        df['store_number'] = df['store_number'].astype(str)
         
         valid_agent_companies = []
         invalid_agent_companies = []
@@ -183,12 +184,19 @@ def validate_batch_agent_company():
                 errors.append('Location details is required')
             if not row['agent_number'] or pd.isna(row['agent_number']):
                 errors.append('Agent Number is required')
+            if not row['store_number'] or pd.isna(row['store_number']):
+                errors.append('Store Number is required')
             
             # Check for duplicate agent number (convert to string for comparison)
             if pd.notna(row['agent_number']) and row['agent_number'].strip():
                 agent_number_str = str(row['agent_number']).strip()
                 if AgentCompany.query.filter_by(agent_number=agent_number_str).first():
                     errors.append(f'Agent number {agent_number_str} already exists')
+                    
+            if pd.notna(row['store_number']) and row['store_number'].strip():
+                store_number_str = str(row['store_number']).strip()
+                if AgentCompany.query.filter_by(store_number=store_number_str).first():
+                    errors.append(f'Store number {store_number_str} already exists')
 
             if errors:
                 invalid_agent_companies.append({'row': index + 2, 'data': row.to_dict(), 'errors': errors})
@@ -224,6 +232,7 @@ def batch_create_agent_company():
                 location_county = str(row['location(County)']).strip() if pd.notna(row.get('location(County)')) else None
                 location_details = str(row['location_details']).strip() if pd.notna(row.get('location_details')) else None
                 agent_number = str(row['agent_number']).strip() if pd.notna(row.get('agent_number')) else None
+                store_number = str(row['store_number']).strip() if pd.notna(row.get('store_number')) else None
 
                 # Validate required fields
                 if not company_name:
@@ -238,11 +247,19 @@ def batch_create_agent_company():
                 if not agent_number:
                     errors.append(f"Row {index + 2}: Agent number is required")
                     continue
+                if not store_number:
+                    errors.append(f"Row {index + 2}: Store number is required")
+                    continue
 
                 # Check for duplicate agent number
                 existing_company = AgentCompany.query.filter_by(agent_number=agent_number).first()
                 if existing_company:
                     errors.append(f"Row {index + 2}: Agent number {agent_number} already exists")
+                    continue
+                
+                existing_company_store = AgentCompany.query.filter_by(store_number=store_number).first()
+                if existing_company_store:
+                    errors.append(f"Row {index + 2}: Store number {store_number} already exists")
                     continue
 
                 # Generate registration number if not provided
@@ -278,7 +295,8 @@ def batch_create_agent_company():
                 created_agent_companies.append({
                     'id': agent_company.id, 
                     'company_name': agent_company.company_name,
-                    'agent_number': agent_company.agent_number
+                    'agent_number': agent_company.agent_number,
+                    'store_number': agent_company.store_number
                 })
                 
             except Exception as e:

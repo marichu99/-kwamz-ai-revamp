@@ -21,7 +21,8 @@ function BatchUploadModal({
         { key: 'firstname', label: 'First Name' },
         { key: 'lastname', label: 'Last Name' },
         { key: 'idnumber', label: 'ID Number' },
-        { key: 'phone_number', label: 'Phone Number' }
+        { key: 'phone_number', label: 'Phone Number' },
+        { key: 'store_number', label: 'Store Number' },
       ],
       errorField: 'reason'
     },
@@ -31,7 +32,8 @@ function BatchUploadModal({
         { key: 'company_name', label: 'Company Name' },
         { key: 'location(County)', label: 'Location (County)' },
         { key: 'location_details', label: 'Location Details' },
-        { key: 'agent_number', label: 'Agent Number' }
+        { key: 'agent_number', label: 'Agent Number' },
+        { key: 'store_number', label: 'Store Number' }
       ],
       errorField: 'errors'
     }

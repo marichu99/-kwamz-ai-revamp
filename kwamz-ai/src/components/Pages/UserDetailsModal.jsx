@@ -216,7 +216,7 @@ function UserDetailsModal({ isOpen, onClose, onSubmit, isLoading, user }) {
               </div>
               <div>
                 <h2 className="text-3xl font-bold text-white tracking-tight">
-                  {isEditMode ? 'Edit User Details' : 'Create New User'}
+                  {isEditMode ? 'Edit User Details' : 'Create New Agent User'}
                 </h2>
                 <p className="text-blue-100 text-sm mt-1.5 font-medium">
                   {isEditMode ? 'Update the details of the selected user' : 'Fill in the details to add a new user'}

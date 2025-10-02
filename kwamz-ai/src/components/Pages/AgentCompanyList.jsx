@@ -152,10 +152,10 @@ function AgentCompanyList() {
 
   // Handle download Excel template
   const handleDownloadExcelTemplate = () => {
-    const headers = ['company_name', 'location(County)', 'location_details', 'agent_number'];
+    const headers = ['company_name', 'location(County)', 'location_details', 'agent_number', 'store_number'];
     const sampleData = [
-      ['Pick n Go', 'Nairobi', 'CBD', '1234567890'],
-      ['Take Off', 'Baringo', 'Station', '0987654321']
+      ['Pick n Go', 'Nairobi', 'CBD', '1234567890', '1234567890'],
+      ['Take Off', 'Baringo', 'Station', '0987654321', '0987654321']
     ];
 
     const ws = XLSX.utils.aoa_to_sheet([headers, ...sampleData]);

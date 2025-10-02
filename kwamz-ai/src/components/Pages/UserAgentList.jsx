@@ -155,7 +155,7 @@ function UserAgentList() {
 
   // Handle download Excel template
   const handleDownloadExcelTemplate = () => {
-    const headers = ['firstname', 'lastname', 'idnumber', 'phone_number', 'company_code'];
+    const headers = ['firstname', 'lastname', 'idnumber', 'phone_number', 'store_number'];
     const sampleData = [
       ['John', 'Doe', '123456789', '1234567890', 'agent001'],
       ['Jane', 'Smith', '987654321', '0987654321', 'agent001']
