@@ -155,10 +155,10 @@ function UserAgentList() {
 
   // Handle download Excel template
   const handleDownloadExcelTemplate = () => {
-    const headers = ['firstname', 'lastname', 'idnumber', 'phone_number'];
+    const headers = ['firstname', 'lastname', 'idnumber', 'phone_number', 'company_code'];
     const sampleData = [
-      ['John', 'Doe', '123456789', '1234567890'],
-      ['Jane', 'Smith', '987654321', '0987654321']
+      ['John', 'Doe', '123456789', '1234567890', 'agent001'],
+      ['Jane', 'Smith', '987654321', '0987654321', 'agent001']
     ];
 
     const ws = XLSX.utils.aoa_to_sheet([headers, ...sampleData]);
@@ -237,15 +237,11 @@ function UserAgentList() {
     }
   };
 
-  const handleCreateOrUpdateUser = async (formData, userId, resetForm) => {
+  const handleCreateOrUpdateUser = async (formData, userId) => {
     setIsLoading(true);
     try {
-      const data = new FormData();
-      for (const key in formData) {
-        if (key !== 'imagePreview') {
-          data.append(key, formData[key]);
-        }
-      }
+
+      console.log("FormData as object:", Object.fromEntries(formData.entries()));
 
       const token = localStorage.getItem('token');
       const url = userId ? `${config.API_URL}/useragent/${userId}` : `${config.API_URL}/useragent`;
@@ -256,7 +252,7 @@ function UserAgentList() {
         headers: {
           Authorization: `Bearer ${token}`,
         },
-        body: data,
+        body: formData,
       });
 
       const result = await res.json();
@@ -279,7 +275,6 @@ function UserAgentList() {
 
       setIsUserModalOpen(false);
       setSelectedUserIds([]);
-      resetForm();
       showToast(`User ${userId ? 'updated' : 'created'} successfully!`, 'success');
     } catch (error) {
       console.error(`Error ${userId ? 'updating' : 'creating'} user:`, error.message);
@@ -365,8 +360,8 @@ function UserAgentList() {
       {/* Batch Upload Modal */}
       <BatchUploadModal
         isOpen={isBatchModalOpen}
-        validUsers={validUsers}
-        invalidUsers={invalidUsers}
+        validItems={validUsers}
+        invalidItems={invalidUsers}
         onClose={() => {
           setIsBatchModalOpen(false);
           setBatchFile(null);
@@ -374,6 +369,7 @@ function UserAgentList() {
           setInvalidUsers([]);
         }}
         onConfirm={handleConfirmUpload}
+        type="users" // This is the default, so optional
       />
 
       {/* Search and Filter Controls */}

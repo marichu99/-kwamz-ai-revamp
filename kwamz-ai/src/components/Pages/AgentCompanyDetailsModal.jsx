@@ -1,41 +1,91 @@
-import { useState, useEffect } from 'react';
-import { X, Building2, MapPin, Phone, CreditCard, Hash } from 'lucide-react';
+import { useState, useEffect, useRef } from 'react';
+import { X, Building2, MapPin, Phone, CreditCard, Hash, ChevronDown } from 'lucide-react';
 
 function AgentCompanyDetailsModal({ isOpen, onClose, onSubmit, isLoading, agentCompany }) {
   const [formData, setFormData] = useState({
     company_name: '',
     location: '',
+    location_details: '',
     contact_phone: '',
-    till_number: '',
+    store_number: '',
+    agent_number: '',
     agentcompany_code: '',
   });
   const [errors, setErrors] = useState({});
+  const [searchQuery, setSearchQuery] = useState('');
+  const [isDropdownOpen, setIsDropdownOpen] = useState(false);
+  const dropdownRef = useRef(null);
+
+  // List of all 47 Kenyan counties
+  const counties = [
+    'Baringo', 'Bomet', 'Bungoma', 'Busia', 'Elgeyo-Marakwet', 'Embu', 'Garissa',
+    'Homa Bay', 'Isiolo', 'Kajiado', 'Kakamega', 'Kericho', 'Kiambu', 'Kilifi',
+    'Kirinyaga', 'Kisii', 'Kisumu', 'Kitui', 'Kwale', 'Laikipia', 'Lamu',
+    'Machakos', 'Makueni', 'Mandera', 'Marsabit', 'Meru', 'Migori', 'Mombasa',
+    'Murang\'a', 'Nairobi', 'Nakuru', 'Nandi', 'Narok', 'Nyamira', 'Nyandarua',
+    'Nyeri', 'Samburu', 'Siaya', 'Taita-Taveta', 'Tana River', 'Tharaka-Nithi',
+    'Trans Nzoia', 'Turkana', 'Uasin Gishu', 'Vihiga', 'Wajir', 'West Pokot'
+  ];
+
+  // Filter counties based on search query
+  const filteredCounties = counties.filter((county) =>
+    county.toLowerCase().includes(searchQuery.toLowerCase())
+  );
 
   useEffect(() => {
     if (agentCompany) {
       setFormData({
         company_name: agentCompany.company_name || '',
         location: agentCompany.location || '',
+        location_details: agentCompany.location_details || '',
         contact_phone: agentCompany.contact_phone || '',
-        till_number: agentCompany.till_number || '',
+        store_number: agentCompany.store_number || '',
+        agent_number: agentCompany.agent_number || '',
         agentcompany_code: agentCompany.agentcompany_code || '',
       });
     } else {
       setFormData({
         company_name: '',
         location: '',
+        location_details: '',
         contact_phone: '',
-        till_number: '',
+        store_number: '',
+        agent_number: '',
         agentcompany_code: '',
       });
     }
     setErrors({});
+    setSearchQuery('');
+    setIsDropdownOpen(false);
   }, [agentCompany]);
+
+  // Close dropdown when clicking outside
+  useEffect(() => {
+    const handleClickOutside = (event) => {
+      if (dropdownRef.current && !dropdownRef.current.contains(event.target)) {
+        setIsDropdownOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
 
   const handleChange = (e) => {
     const { name, value } = e.target;
     setFormData((prev) => ({ ...prev, [name]: value }));
     setErrors((prev) => ({ ...prev, [name]: '' }));
+  };
+
+  const handleCountySelect = (county) => {
+    setFormData((prev) => ({ ...prev, location: county }));
+    setErrors((prev) => ({ ...prev, location: '' }));
+    setSearchQuery('');
+    setIsDropdownOpen(false);
+  };
+
+  const handleSearchChange = (e) => {
+    setSearchQuery(e.target.value);
+    setIsDropdownOpen(true);
   };
 
   const validateForm = () => {
@@ -46,8 +96,21 @@ function AgentCompanyDetailsModal({ isOpen, onClose, onSubmit, isLoading, agentC
     if (!formData.location.trim()) {
       newErrors.location = 'Location is required';
     }
+    if (!formData.location_details.trim()) {
+      newErrors.location_details = 'Location details are required';
+    }
     if (formData.contact_phone && !/^\+?\d{1,3}?\d{9,12}$/.test(formData.contact_phone)) {
       newErrors.contact_phone = 'Invalid phone number format (e.g., +254712345678)';
+    }
+    if (!formData.store_number.trim()) {
+      newErrors.store_number = 'Store number is required';
+    } else if (!/^\d+$/.test(formData.store_number)) {
+      newErrors.store_number = 'Store number must contain only digits';
+    }
+    if (!formData.agent_number.trim()) {
+      newErrors.agent_number = 'Agent number is required';
+    } else if (!/^\d+$/.test(formData.agent_number)) {
+      newErrors.agent_number = 'Agent number must contain only digits';
     }
     return newErrors;
   };
@@ -64,11 +127,15 @@ function AgentCompanyDetailsModal({ isOpen, onClose, onSubmit, isLoading, agentC
       setFormData({
         company_name: '',
         location: '',
+        location_details: '',
         contact_phone: '',
-        till_number: '',
+        store_number: '',
+        agent_number: '',
         agentcompany_code: '',
       });
       setErrors({});
+      setSearchQuery('');
+      setIsDropdownOpen(false);
     });
   };
 
@@ -76,149 +143,250 @@ function AgentCompanyDetailsModal({ isOpen, onClose, onSubmit, isLoading, agentC
 
   return (
     <div className="fixed inset-0 flex items-center justify-center bg-black/60 backdrop-blur-sm z-50 p-4">
-      <div className="bg-white dark:bg-slate-900 rounded-2xl shadow-2xl w-full max-w-lg transform transition-all">
-        <div className="relative bg-gradient-to-r from-blue-600 to-indigo-600 dark:from-blue-700 dark:to-indigo-700 rounded-t-2xl p-6">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center space-x-3">
-              <div className="bg-white/20 p-2 rounded-lg backdrop-blur-sm">
-                <Building2 className="w-6 h-6 text-white" />
+      <div className="bg-white dark:bg-slate-900 rounded-2xl shadow-2xl w-full max-w-2xl transform transition-all">
+        <div className="relative bg-gradient-to-r from-violet-600 via-purple-600 to-indigo-600 dark:from-violet-700 dark:via-purple-700 dark:to-indigo-700 rounded-t-2xl p-8">
+          <div className="absolute inset-0 bg-black/10 rounded-t-2xl"></div>
+          <div className="relative flex items-center justify-between">
+            <div className="flex items-center space-x-4">
+              <div className="bg-white/20 p-3 rounded-xl backdrop-blur-sm shadow-lg">
+                <Building2 className="w-7 h-7 text-white" />
               </div>
               <div>
-                <h2 className="text-2xl font-bold text-white">
-                  {agentCompany ? 'Edit Agent Company' : 'New Agent'}
+                <h2 className="text-3xl font-bold text-white tracking-tight">
+                  {agentCompany ? 'Edit Agent Company' : 'New Agent Company'}
                 </h2>
-                <p className="text-blue-100 text-sm mt-1">
-                  {agentCompany ? 'Update company information' : 'Register a new agent'}
+                <p className="text-purple-100 text-sm mt-1.5 font-medium">
+                  {agentCompany ? 'Update agent company information' : 'Register a new agent company'}
                 </p>
               </div>
             </div>
             <button
               onClick={onClose}
-              className="text-white/80 hover:text-white hover:bg-white/20 p-2 rounded-lg transition-all"
+              className="text-white/80 hover:text-white hover:bg-white/20 p-2.5 rounded-xl transition-all hover:rotate-90 duration-300"
               disabled={isLoading}
             >
-              <X className="w-5 h-5" />
+              <X className="w-6 h-6" />
             </button>
           </div>
         </div>
 
-        <div className="p-6 space-y-5">
+        <div className="p-8 space-y-6">
           {agentCompany && (
-            <div className="bg-slate-50 dark:bg-slate-800 rounded-xl p-4 border-2 border-dashed border-slate-200 dark:border-slate-700">
-              <label className="flex items-center space-x-2 text-sm font-semibold text-slate-600 dark:text-slate-400 mb-2">
+            <div className="bg-gradient-to-br from-slate-50 to-slate-100 dark:from-slate-800 dark:to-slate-800/50 rounded-xl p-5 border-2 border-dashed border-slate-300 dark:border-slate-600 shadow-inner">
+              <label className="flex items-center space-x-2 text-sm font-bold text-slate-600 dark:text-slate-400 mb-3">
                 <Hash className="w-4 h-4" />
                 <span>Agent Company Code</span>
               </label>
-              <input
-                type="text"
-                value={formData.agentcompany_code}
-                readOnly
-                className="w-full px-4 py-2.5 bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-600 rounded-lg text-slate-800 dark:text-slate-200 font-mono text-sm cursor-not-allowed"
-              />
+              <div className="bg-white dark:bg-slate-900 rounded-lg p-3 border border-slate-300 dark:border-slate-600">
+                <input
+                  type="text"
+                  value={formData.agentcompany_code}
+                  readOnly
+                  className="w-full bg-transparent text-slate-800 dark:text-slate-200 font-mono text-base font-semibold cursor-not-allowed focus:outline-none"
+                />
+              </div>
             </div>
           )}
 
-          <div>
-            <label className="flex items-center space-x-2 text-sm font-semibold text-slate-700 dark:text-slate-300 mb-2">
-              <Building2 className="w-4 h-4" />
-              <span>Company Name</span>
-              <span className="text-red-500">*</span>
-            </label>
-            <input
-              type="text"
-              name="company_name"
-              value={formData.company_name}
-              onChange={handleChange}
-              className={`w-full px-4 py-3 border-2 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500 dark:bg-slate-800 dark:text-white transition-all ${
-                errors.company_name
-                  ? 'border-red-300 bg-red-50 dark:bg-red-900/20 dark:border-red-500'
-                  : 'border-slate-200 dark:border-slate-700 hover:border-slate-300 dark:hover:border-slate-600'
-              }`}
-              placeholder="Enter company name"
-              disabled={isLoading}
-            />
-            {errors.company_name && (
-              <p className="text-red-500 text-xs mt-2 ml-1 flex items-center">
-                <span className="mr-1">⚠</span>
-                {errors.company_name}
-              </p>
-            )}
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+            <div className="md:col-span-2">
+              <label className="flex items-center space-x-2 text-sm font-bold text-slate-700 dark:text-slate-300 mb-3">
+                <Building2 className="w-4 h-4 text-violet-600 dark:text-violet-400" />
+                <span>Agent Company Name</span>
+                <span className="text-red-500">*</span>
+              </label>
+              <input
+                type="text"
+                name="company_name"
+                value={formData.company_name}
+                onChange={handleChange}
+                className={`w-full px-4 py-3.5 border-2 rounded-xl focus:outline-none focus:ring-2 focus:ring-violet-500 dark:bg-slate-800 dark:text-white transition-all font-medium ${
+                  errors.company_name
+                    ? 'border-red-300 bg-red-50 dark:bg-red-900/20 dark:border-red-500'
+                    : 'border-slate-200 dark:border-slate-700 hover:border-slate-300 dark:hover:border-slate-600'
+                }`}
+                placeholder="Enter agent company name"
+                disabled={isLoading}
+              />
+              {errors.company_name && (
+                <p className="text-red-500 text-xs mt-2 ml-1 flex items-center font-medium">
+                  <span className="mr-1">⚠</span>
+                  {errors.company_name}
+                </p>
+              )}
+            </div>
+
+            <div ref={dropdownRef}>
+              <label className="flex items-center space-x-2 text-sm font-bold text-slate-700 dark:text-slate-300 mb-3">
+                <MapPin className="w-4 h-4 text-violet-600 dark:text-violet-400" />
+                <span>County</span>
+                <span className="text-red-500">*</span>
+              </label>
+              <div className="relative">
+                <div
+                  className={`w-full px-4 py-3.5 border-2 rounded-xl focus:outline-none focus:ring-2 focus:ring-violet-500 dark:bg-slate-800 dark:text-white transition-all font-medium flex items-center justify-between cursor-pointer ${
+                    errors.location
+                      ? 'border-red-300 bg-red-50 dark:bg-red-900/20 dark:border-red-500'
+                      : 'border-slate-200 dark:border-slate-700 hover:border-slate-300 dark:hover:border-slate-600'
+                  }`}
+                  onClick={() => !isLoading && setIsDropdownOpen(!isDropdownOpen)}
+                >
+                  <span>{formData.location || 'Select a county'}</span>
+                  <ChevronDown className="w-5 h-5 text-violet-600 dark:text-violet-400" />
+                </div>
+                {isDropdownOpen && (
+                  <div className="absolute z-10 w-full mt-1 bg-white dark:bg-slate-800 border-2 border-slate-200 dark:border-slate-700 rounded-xl shadow-lg max-h-60 overflow-y-auto">
+                    <input
+                      type="text"
+                      value={searchQuery}
+                      onChange={handleSearchChange}
+                      placeholder="Search counties..."
+                      className="w-full px-4 py-2.5 border-b border-slate-200 dark:border-slate-700  dark:text-white focus:outline-none sticky top-0 bg-white dark:bg-slate-800"
+                      disabled={isLoading}
+                    />
+                    {filteredCounties.length > 0 ? (
+                      filteredCounties.map((county) => (
+                        <div
+                          key={county}
+                          className="px-4 py-2.5 hover:bg-slate-100 dark:hover:bg-slate-700 cursor-pointer dark:text-white"
+                          onClick={() => handleCountySelect(county)}
+                        >
+                          {county}
+                        </div>
+                      ))
+                    ) : (
+                      <div className="px-4 py-2.5 text-slate-500 dark:text-slate-400">
+                        No counties found
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+              {errors.location && (
+                <p className="text-red-500 text-xs mt-2 ml-1 flex items-center font-medium">
+                  <span className="mr-1">⚠</span>
+                  {errors.location}
+                </p>
+              )}
+            </div>
+
+            <div>
+              <label className="flex items-center space-x-2 text-sm font-bold text-slate-700 dark:text-slate-300 mb-3">
+                <MapPin className="w-4 h-4 text-violet-600 dark:text-violet-400" />
+                <span>Location Details</span>
+                <span className="text-red-500">*</span>
+              </label>
+              <input
+                type="text"
+                name="location_details"
+                value={formData.location_details}
+                onChange={handleChange}
+                className={`w-full px-4 py-3.5 border-2 rounded-xl focus:outline-none focus:ring-2 focus:ring-violet-500 dark:bg-slate-800 dark:text-white transition-all font-medium ${
+                  errors.location_details
+                    ? 'border-red-300 bg-red-50 dark:bg-red-900/20 dark:border-red-500'
+                    : 'border-slate-200 dark:border-slate-700 hover:border-slate-300 dark:hover:border-slate-600'
+                }`}
+                placeholder="e.g., Westlands, CBD"
+                disabled={isLoading}
+              />
+              {errors.location_details && (
+                <p className="text-red-500 text-xs mt-2 ml-1 flex items-center font-medium">
+                  <span className="mr-1">⚠</span>
+                  {errors.location_details}
+                </p>
+              )}
+            </div>
+
+            <div>
+              <div>
+                <label className="flex items-center space-x-2 text-sm font-bold text-slate-700 dark:text-slate-300 mb-3">
+                  <Phone className="w-4 h-4 text-violet-600 dark:text-violet-400" />
+                  <span>Contact Phone</span>
+                </label>
+                <input
+                  type="text"
+                  name="contact_phone"
+                  value={formData.contact_phone}
+                  onChange={handleChange}
+                  className={`w-full px-4 py-3.5 border-2 rounded-xl focus:outline-none focus:ring-2 focus:ring-violet-500 dark:bg-slate-800 dark:text-white transition-all font-medium ${
+                    errors.contact_phone
+                      ? 'border-red-300 bg-red-50 dark:bg-red-900/20 dark:border-red-500'
+                      : 'border-slate-200 dark:border-slate-700 hover:border-slate-300 dark:hover:border-slate-600'
+                  }`}
+                  placeholder="+254712345678"
+                  disabled={isLoading}
+                />
+                {errors.contact_phone && (
+                  <p className="text-red-500 text-xs mt-2 ml-1 flex items-center font-medium">
+                    <span className="mr-1">⚠</span>
+                    {errors.contact_phone}
+                  </p>
+                )}
+              </div>
+            </div>
+
+            <div className="grid grid-cols-2 gap-6">
+              <div>
+                <label className="flex items-center space-x-2 text-sm font-bold text-slate-700 dark:text-slate-300 mb-3">
+                  <CreditCard className="w-4 h-4 text-violet-600 dark:text-violet-400" />
+                  <span>Agent Number</span>
+                  <span className="text-red-500">*</span>
+                </label>
+                <input
+                  type="text"
+                  name="agent_number"
+                  value={formData.agent_number}
+                  onChange={handleChange}
+                  className={`w-full px-4 py-3.5 border-2 rounded-xl focus:outline-none focus:ring-2 focus:ring-violet-500 dark:bg-slate-800 dark:text-white transition-all font-medium ${
+                    errors.agent_number
+                      ? 'border-red-300 bg-red-50 dark:bg-red-900/20 dark:border-red-500'
+                      : 'border-slate-200 dark:border-slate-700 hover:border-slate-300 dark:hover:border-slate-600'
+                  }`}
+                  placeholder="Enter agent number"
+                  disabled={isLoading}
+                />
+                {errors.agent_number && (
+                  <p className="text-red-500 text-xs mt-2 ml-1 flex items-center font-medium">
+                    <span className="mr-1">⚠</span>
+                    {errors.agent_number}
+                  </p>
+                )}
+              </div>
+              <div>
+
+              <label className="flex items-center space-x-2 text-sm font-bold text-slate-700 dark:text-slate-300 mb-3">
+                <CreditCard className="w-4 h-4 text-violet-600 dark:text-violet-400" />
+                <span>Store Number</span>
+                <span className="text-red-500">*</span>
+              </label>
+              <input
+                type="text"
+                name="store_number"
+                value={formData.store_number}
+                onChange={handleChange}
+                className={`w-full px-4 py-3.5 border-2 rounded-xl focus:outline-none focus:ring-2 focus:ring-violet-500 dark:bg-slate-800 dark:text-white transition-all font-medium ${
+                  errors.store_number
+                    ? 'border-red-300 bg-red-50 dark:bg-red-900/20 dark:border-red-500'
+                    : 'border-slate-200 dark:border-slate-700 hover:border-slate-300 dark:hover:border-slate-600'
+                }`}
+                placeholder="Enter store number"
+                disabled={isLoading}
+              />
+              {errors.store_number && (
+                <p className="text-red-500 text-xs mt-2 ml-1 flex items-center font-medium">
+                  <span className="mr-1">⚠</span>
+                  {errors.store_number}
+                </p>
+              )}
+              </div>
+            </div>
           </div>
 
-          <div>
-            <label className="flex items-center space-x-2 text-sm font-semibold text-slate-700 dark:text-slate-300 mb-2">
-              <MapPin className="w-4 h-4" />
-              <span>Location</span>
-              <span className="text-red-500">*</span>
-            </label>
-            <input
-              type="text"
-              name="location"
-              value={formData.location}
-              onChange={handleChange}
-              className={`w-full px-4 py-3 border-2 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500 dark:bg-slate-800 dark:text-white transition-all ${
-                errors.location
-                  ? 'border-red-300 bg-red-50 dark:bg-red-900/20 dark:border-red-500'
-                  : 'border-slate-200 dark:border-slate-700 hover:border-slate-300 dark:hover:border-slate-600'
-              }`}
-              placeholder="Enter location (e.g., Nairobi, CBD)"
-              disabled={isLoading}
-            />
-            {errors.location && (
-              <p className="text-red-500 text-xs mt-2 ml-1 flex items-center">
-                <span className="mr-1">⚠</span>
-                {errors.location}
-              </p>
-            )}
-          </div>
-
-          <div>
-            <label className="flex items-center space-x-2 text-sm font-semibold text-slate-700 dark:text-slate-300 mb-2">
-              <Phone className="w-4 h-4" />
-              <span>Contact Phone</span>
-            </label>
-            <input
-              type="text"
-              name="contact_phone"
-              value={formData.contact_phone}
-              onChange={handleChange}
-              className={`w-full px-4 py-3 border-2 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500 dark:bg-slate-800 dark:text-white transition-all ${
-                errors.contact_phone
-                  ? 'border-red-300 bg-red-50 dark:bg-red-900/20 dark:border-red-500'
-                  : 'border-slate-200 dark:border-slate-700 hover:border-slate-300 dark:hover:border-slate-600'
-              }`}
-              placeholder="+254712345678"
-              disabled={isLoading}
-            />
-            {errors.contact_phone && (
-              <p className="text-red-500 text-xs mt-2 ml-1 flex items-center">
-                <span className="mr-1">⚠</span>
-                {errors.contact_phone}
-              </p>
-            )}
-          </div>
-
-          <div>
-            <label className="flex items-center space-x-2 text-sm font-semibold text-slate-700 dark:text-slate-300 mb-2">
-              <CreditCard className="w-4 h-4" />
-              <span>Till Number</span>
-            </label>
-            <input
-              type="text"
-              name="till_number"
-              value={formData.till_number}
-              onChange={handleChange}
-              className="w-full px-4 py-3 border-2 border-slate-200 dark:border-slate-700 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500 dark:bg-slate-800 dark:text-white hover:border-slate-300 dark:hover:border-slate-600 transition-all"
-              placeholder="Enter till number"
-              disabled={isLoading}
-            />
-          </div>
-
-          <div className="flex space-x-3 pt-4">
+          <div className="flex space-x-4 pt-6 border-t-2 border-slate-200 dark:border-slate-700">
             <button
               type="button"
               onClick={onClose}
-              className="flex-1 py-3 px-4 bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 font-semibold rounded-xl hover:bg-slate-200 dark:hover:bg-slate-700 transition-all focus:outline-none focus:ring-2 focus:ring-slate-400"
+              className="flex-1 py-3.5 px-5 bg-slate-200 dark:bg-slate-700 text-slate-700 dark:text-slate-300 font-bold rounded-xl hover:bg-slate-300 dark:hover:bg-slate-600 transition-all shadow-sm hover:shadow-md transform hover:scale-[1.02]"
               disabled={isLoading}
             >
               Cancel
@@ -227,11 +395,11 @@ function AgentCompanyDetailsModal({ isOpen, onClose, onSubmit, isLoading, agentC
               type="button"
               onClick={handleSubmit}
               disabled={isLoading}
-              className="flex-1 py-3 px-4 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 text-white font-semibold rounded-xl transition-all focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:opacity-50 disabled:cursor-not-allowed shadow-lg shadow-blue-500/30"
+              className="flex-1 py-3.5 px-5 bg-gradient-to-r from-violet-600 via-purple-600 to-indigo-600 hover:from-violet-700 hover:via-purple-700 hover:to-indigo-700 text-white font-bold rounded-xl transition-all shadow-lg shadow-violet-500/40 hover:shadow-xl hover:shadow-violet-500/50 disabled:opacity-50 disabled:cursor-not-allowed transform hover:scale-[1.02]"
             >
               {isLoading ? (
                 <span className="flex items-center justify-center">
-                  <svg className="animate-spin -ml-1 mr-2 h-4 w-4 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                  <svg className="animate-spin -ml-1 mr-2 h-5 w-5 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
                     <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
                     <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
                   </svg>
@@ -244,7 +412,7 @@ function AgentCompanyDetailsModal({ isOpen, onClose, onSubmit, isLoading, agentC
           </div>
 
           <p className="text-xs text-slate-500 dark:text-slate-400 text-center pt-2">
-            <span className="text-red-500">*</span> Required fields
+            <span className="text-red-500 font-bold">*</span> Required fields
           </p>
         </div>
       </div>

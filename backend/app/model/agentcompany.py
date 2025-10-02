@@ -7,27 +7,34 @@ class AgentCompany(db.Model):
 
     id = db.Column(db.Integer, primary_key=True)
     company_name = db.Column(db.String(100), nullable=False)
-    registration_number = db.Column(db.String(50), unique=True, nullable=False)
-    location = db.Column(db.String(200), nullable=False)
+    registration_number = db.Column(db.String(50), unique=True, nullable=True)
+    location = db.Column(db.String(200), nullable=True)
     contact_phone = db.Column(db.String(20), nullable=True)
     email = db.Column(db.String(120), nullable=True)
     agentcompany_code = db.Column(db.String(120), nullable=True)
     established_date = db.Column(db.Date, nullable=True)
-    float_balance = db.Column(db.Numeric(precision=15, scale=2), default=Decimal('0.00'), nullable=False)
-    fraud_risk_level = db.Column(db.String(20), default='low', nullable=False)  # e.g., 'low', 'medium', 'high'
+    float_balance = db.Column(db.Numeric(precision=15, scale=2), default=Decimal('0.00'), nullable=True)
+    fraud_risk_level = db.Column(db.String(20), default='low', nullable=True)  
     fraud_risk_description = db.Column(db.String(255), nullable=True)
-    status = db.Column(db.String(20), default='active', nullable=False)  # e.g., 'active', 'inactive'
-    till_number = db.Column(db.String(20), unique=True, nullable=True)  # M-Pesa till number
+    status = db.Column(db.String(20), default='active', nullable=True)  
+    agent_number = db.Column(db.String(20), unique=True, nullable=True)  
+    store_number = db.Column(db.String(20), unique=True, nullable=True)  
+    till_number = db.Column(db.String(20), unique=True, nullable=True)  
+    location_details = db.Column(db.Text, nullable=True)  
     daily_transaction_limit = db.Column(db.Numeric(precision=15, scale=2), default=Decimal('0.00'), nullable=True)
     commission_rate = db.Column(db.Numeric(precision=5, scale=2), default=Decimal('0.00'), nullable=True)
     last_audit_date = db.Column(db.Date, nullable=True)
-    company_id = db.Column(db.Integer, db.ForeignKey('companies.id'), nullable=False)
+    company_id = db.Column(db.Integer, db.ForeignKey('companies.id'), nullable=True)
 
-    agents = db.relationship('UserAgent', backref='agent_company', lazy=True)
+    # REMOVE this line - the relationship is already defined via backref in UserAgent
+    # user_agents = db.relationship('UserAgent', 
+    #                              secondary=user_agent_companies,
+    #                              back_populates='agent_companies',
+    #                              lazy='dynamic')
 
     def __init__(self, company_name, registration_number, location, contact_phone=None, email=None,agentcompany_code=None, 
                  established_date=None, float_balance=Decimal('0.00'), fraud_risk_level='low', 
-                 fraud_risk_description=None, status='active', till_number=None, 
+                 fraud_risk_description=None, status='active', till_number=None,location_details=None,store_number=None,agent_number=None, 
                  daily_transaction_limit=Decimal('0.00'), commission_rate=Decimal('0.00'), 
                  last_audit_date=None, company_id=None):
         self.company_name = company_name
@@ -42,6 +49,9 @@ class AgentCompany(db.Model):
         self.fraud_risk_description = fraud_risk_description
         self.status = status
         self.till_number = till_number
+        self.agent_number = agent_number
+        self.store_number = store_number
+        self.location_details = location_details
         self.daily_transaction_limit = daily_transaction_limit
         self.commission_rate = commission_rate
         self.last_audit_date = last_audit_date

@@ -6,6 +6,7 @@ from io import BytesIO
 from sqlalchemy.exc import IntegrityError
 from app import db
 from app.model.useragent import UserAgent
+from app.model.agentcompany import AgentCompany
 from datetime import datetime
 import os
 import re
@@ -13,17 +14,25 @@ import re
 user_agent_bp = Blueprint('user_agent', __name__, url_prefix='/useragent')
 
 # Helper function to serialize a UserAgent
-def serialize_user_agent(user):
+def serialize_user_agent(user_agent):
+    """Serialize UserAgent object to JSON"""
     return {
-        'id': user.id,
-        'firstname': user.firstname,
-        'lastname': user.lastname,
-        'idnumber': user.idnumber,
-        'phone_number': user.phone_number,
-        'is_authentic': user.is_authentic,
-        'authenticity_desc': user.authenticity_desc,
-        'image_loc': user.image_loc,
-        'date_of_birth': user.date_of_birth.isoformat() if user.date_of_birth else None
+        'id': user_agent.id,
+        'firstname': user_agent.firstname,
+        'lastname': user_agent.lastname,
+        'idnumber': user_agent.idnumber,
+        'phone_number': user_agent.phone_number,
+        'is_authentic': user_agent.is_authentic,
+        'authenticity_desc': user_agent.authenticity_desc,
+        'image_loc': user_agent.image_loc,
+        'date_of_birth': user_agent.date_of_birth.isoformat() if user_agent.date_of_birth else None,
+        'agent_company_ids': user_agent.get_agent_company_ids(),
+        'agent_company_names': user_agent.get_agent_company_names(),
+        'agent_companies': [{
+            'id': company.id,
+            'company_name': company.company_name,
+            'registration_number': company.registration_number
+        } for company in user_agent.agent_companies]
     }
 
 # Allowed file extensions for images
@@ -51,7 +60,6 @@ def allowed_file_xls(filename):
 @user_agent_bp.route('/', methods=['POST', 'OPTIONS'])
 @jwt_required()
 def create_user_agent():
-
     if request.method == 'OPTIONS':
         return jsonify({}), 200
     
@@ -65,7 +73,30 @@ def create_user_agent():
     if missing_fields:
         return jsonify({'error': f"Missing required fields: {', '.join(missing_fields)}"}), 400
 
+    # Check for agent companies
+    agent_company_ids = request.form.get('agent_company_ids[]') or request.form.get('agent_company_ids')
+    if not agent_company_ids:
+        return jsonify({'error': 'At least one agent company is required'}), 400
+
     try:
+        # Parse agent company IDs (comma-separated or array)
+        if isinstance(agent_company_ids, str):
+            if ',' in agent_company_ids:
+                company_ids = [int(id.strip()) for id in agent_company_ids.split(',') if id.strip()]
+            else:
+                company_ids = [int(agent_company_ids)]
+        else:
+            # Handle array format from FormData
+            company_ids = [int(id) for id in agent_company_ids]
+
+        if not company_ids:
+            return jsonify({'error': 'Invalid agent company IDs'}), 400
+
+        # Fetch agent companies from DB
+        agent_companies = AgentCompany.query.filter(AgentCompany.id.in_(company_ids)).all()
+        if len(agent_companies) != len(company_ids):
+            return jsonify({'error': 'One or more agent companies not found'}), 400
+
         # Parse date_of_birth if provided
         date_of_birth = None
         if request.form.get('date_of_birth'):
@@ -93,6 +124,7 @@ def create_user_agent():
             else:
                 return jsonify({'error': 'Invalid file type. Allowed types: jpg, jpeg, png, gif'}), 400
 
+        # Create new user
         new_user = UserAgent(
             firstname=request.form['firstname'],
             lastname=request.form['lastname'],
@@ -104,6 +136,10 @@ def create_user_agent():
             date_of_birth=date_of_birth
         )
 
+        # Add agent companies to the relationship
+        for company in agent_companies:
+            new_user.agent_companies.append(company)
+
         db.session.add(new_user)
         db.session.commit()
 
@@ -112,8 +148,12 @@ def create_user_agent():
             'user': serialize_user_agent(new_user)
         }), 201
 
+    except ValueError as e:
+        db.session.rollback()
+        return jsonify({'error': 'Invalid agent company ID format'}), 400
     except IntegrityError as e:
         db.session.rollback()
+        current_app.logger.error(f"IntegrityError: {e.orig}")
         return jsonify({'error': 'Duplicate entry detected. ID number, phone, or other unique fields must be unique.'}), 400
     except Exception as e:
         db.session.rollback()
@@ -125,7 +165,7 @@ def create_user_agent():
 # ------------------------------
 @user_agent_bp.route('/', methods=['GET', 'OPTIONS'])
 @user_agent_bp.route('', methods=['GET', 'OPTIONS'])
-@jwt_required()
+@jwt_required() 
 @cross_origin()
 def get_all_users():
     # Handle preflight OPTIONS request
@@ -193,6 +233,36 @@ def update_user(user_id):
             else:
                 user.date_of_birth = None
 
+        # Handle agent companies update if provided
+        if 'agent_company_ids[]' in request.form or 'agent_company_ids' in request.form:
+            agent_company_ids = request.form.get('agent_company_ids[]') or request.form.get('agent_company_ids')
+            
+            if not agent_company_ids:
+                return jsonify({'error': 'At least one agent company is required'}), 400
+
+            # Parse agent company IDs
+            if isinstance(agent_company_ids, str):
+                if ',' in agent_company_ids:
+                    company_ids = [int(id.strip()) for id in agent_company_ids.split(',') if id.strip()]
+                else:
+                    company_ids = [int(agent_company_ids)]
+            else:
+                # Handle array format from FormData
+                company_ids = [int(id) for id in agent_company_ids]
+
+            if not company_ids:
+                return jsonify({'error': 'Invalid agent company IDs'}), 400
+
+            # Verify that all agent companies exist
+            agent_companies = AgentCompany.query.filter(AgentCompany.id.in_(company_ids)).all()
+            if len(agent_companies) != len(company_ids):
+                return jsonify({'error': 'One or more agent companies not found'}), 400
+
+            # Update the relationship - clear existing and add new ones
+            user.agent_companies.clear()  # Remove all existing associations
+            for company in agent_companies:
+                user.agent_companies.append(company)
+
         # Handle file upload
         if 'image' in request.files:
             file = request.files['image']
@@ -222,6 +292,9 @@ def update_user(user_id):
             'user': serialize_user_agent(user)
         }), 200
 
+    except ValueError as e:
+        db.session.rollback()
+        return jsonify({'error': 'Invalid agent company ID format'}), 400
     except IntegrityError as e:
         db.session.rollback()
         error_msg = str(e.orig).lower()
@@ -232,6 +305,8 @@ def update_user(user_id):
         db.session.rollback()
         current_app.logger.error(f"Error updating user {user_id}: {str(e)}")
         return jsonify({'error': 'Internal server error'}), 500
+    
+    
 # ------------------------------
 # DELETE: Remove a user
 # ------------------------------
@@ -337,14 +412,15 @@ def validate_users(data_rows):
     seen_phones = set([u.phone_number for u in UserAgent.query.filter(UserAgent.phone_number.isnot(None)).all()])
 
     for row_index, row in enumerate(data_rows, start=2):
-        if len(row) < 4:
+        if len(row) < 5:  # NEW: require company_code as 5th column
             errors.append({
                 'rowIndex': row_index,
                 'firstname': row[0] if len(row) > 0 else None,
                 'lastname': row[1] if len(row) > 1 else None,
                 'idnumber': row[2] if len(row) > 2 else None,
                 'phone_number': row[3] if len(row) > 3 else None,
-                'reason': 'Incomplete row (requires firstname, lastname, idnumber, phone_number)'
+                'company_code': row[4] if len(row) > 4 else None,
+                'reason': 'Incomplete row (requires firstname, lastname, idnumber, phone_number, company_code)'
             })
             continue
 
@@ -353,12 +429,13 @@ def validate_users(data_rows):
             'lastname': str(row[1] or '').strip(),
             'idnumber': str(row[2] or '').strip(),
             'phone_number': str(row[3] or '').strip() if row[3] else None,
+            'company_code': str(row[4] or '').strip(),   # NEW
             'rowIndex': row_index
         }
 
         # Validate required fields
-        if not user_data['firstname'] or not user_data['lastname'] or not user_data['idnumber']:
-            errors.append({**user_data, 'reason': 'Missing required fields (firstname, lastname, idnumber)'})
+        if not user_data['firstname'] or not user_data['lastname'] or not user_data['idnumber'] or not user_data['company_code']:
+            errors.append({**user_data, 'reason': 'Missing required fields (firstname, lastname, idnumber, company_code)'})
             continue
 
         # Validate name format
@@ -368,8 +445,6 @@ def validate_users(data_rows):
 
         # Validate phone number format (if provided)
         if user_data['phone_number']:
-            print(f"Validating phone number: {user_data['phone_number']}")
-            # Allow optional country code (+ followed by 1-3 digits) and 9-12 digits
             if not re.match(r'^\+?\d{1,3}?\d{9,12}$', user_data['phone_number']):
                 errors.append({**user_data, 'reason': 'Invalid phone number format (must be 9-12 digits, optional + and 1-3 digit country code)'})
                 continue
@@ -390,6 +465,16 @@ def validate_users(data_rows):
             errors.append({**user_data, 'reason': 'Phone number already exists in database'})
             continue
         seen_phones.add(user_data['phone_number'])
+
+        # Validate company_code exists in AgentCompany  # NEW
+        company = AgentCompany.query.filter_by(agentcompany_code=user_data['company_code']).first()
+        if not company:
+            errors.append({**user_data, 'reason': f"Invalid company_code '{user_data['company_code']}' (no matching company)"})
+            continue
+
+        # Attach company details  # NEW
+        user_data['company_id'] = company.id
+        user_data['company_name'] = company.company_name
 
         valid_users.append(user_data)
 

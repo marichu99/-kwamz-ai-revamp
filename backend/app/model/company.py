@@ -1,9 +1,7 @@
-from flask_sqlalchemy import SQLAlchemy
 from datetime import date, datetime
 from decimal import Decimal
 
-db = SQLAlchemy()
-
+from app import db
 class Company(db.Model):
     __tablename__ = 'companies'
 
@@ -20,7 +18,7 @@ class Company(db.Model):
 
     # Relationships
     agent_companies = db.relationship('AgentCompany', backref='company', lazy=True)
-    shareholders = db.relationship('Shareholder', backref='company', lazy=True, cascade='all, delete-orphan')
+    # shareholders = db.relationship('Shareholder', backref='company', lazy=True, cascade='all, delete-orphan')
 
     def __init__(self, company_name, registration_number, address, company_code, registration_date=None,
                  compliance_status='compliant', total_float_balance=Decimal('0.00'), file_location=None,

@@ -152,10 +152,10 @@ function AgentCompanyList() {
 
   // Handle download Excel template
   const handleDownloadExcelTemplate = () => {
-    const headers = ['company_name', 'registration_number', 'location', 'contact_phone', 'email', 'till_number', 'company_id'];
+    const headers = ['company_name', 'location(County)', 'location_details', 'agent_number'];
     const sampleData = [
-      ['ABC M-Pesa', 'REG12345', 'Nairobi CBD', '+254712345678', 'abc@mpesa.com', '123456', '1'],
-      ['XYZ Agents', 'REG67890', 'Mombasa', '+254798765432', 'xyz@mpesa.com', '789012', '1'],
+      ['Pick n Go', 'Nairobi', 'CBD', '1234567890'],
+      ['Take Off', 'Baringo', 'Station', '0987654321']
     ];
 
     const ws = XLSX.utils.aoa_to_sheet([headers, ...sampleData]);
@@ -281,6 +281,7 @@ function AgentCompanyList() {
       showToast(error.message, 'error');
     } finally {
       setIsLoading(false);
+      fetchAgentCompanies();
     }
   };
 
@@ -360,8 +361,8 @@ function AgentCompanyList() {
       {/* Batch Upload Modal */}
       <BatchUploadModal
         isOpen={isBatchModalOpen}
-        validUsers={validAgentCompanies}
-        invalidUsers={invalidAgentCompanies}
+        validItems={validAgentCompanies}
+        invalidItems={invalidAgentCompanies}
         onClose={() => {
           setIsBatchModalOpen(false);
           setBatchFile(null);
@@ -369,6 +370,7 @@ function AgentCompanyList() {
           setInvalidAgentCompanies([]);
         }}
         onConfirm={handleConfirmUpload}
+        type="agentCompanies"
       />
 
       {/* Search Control */}
@@ -401,7 +403,8 @@ function AgentCompanyList() {
               <th className="px-4 py-3 font-semibold">ID</th>
               <th className="px-4 py-3 font-semibold">Company Name</th>
               <th className="px-4 py-3 font-semibold">Registration Number</th>
-              <th className="px-4 py-3 font-semibold">Till Number</th>
+              <th className="px-4 py-3 font-semibold">Store Number</th>
+              <th className="px-4 py-3 font-semibold">Agent Number</th>
               <th className="px-4 py-3 font-semibold">Float Balance</th>
               <th className="px-4 py-3 font-semibold">Status</th>
               <th className="px-4 py-3 font-semibold">Action</th>
@@ -411,9 +414,8 @@ function AgentCompanyList() {
             {paginatedAgentCompanies.map((ac, index) => (
               <tr
                 key={ac.id}
-                className={`border-b border-slate-200 dark:border-slate-600 ${
-                  index % 2 === 0 ? 'bg-white dark:bg-slate-800' : 'bg-slate-50 dark:bg-slate-700/50'
-                } hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors`}
+                className={`border-b border-slate-200 dark:border-slate-600 ${index % 2 === 0 ? 'bg-white dark:bg-slate-800' : 'bg-slate-50 dark:bg-slate-700/50'
+                  } hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors`}
               >
                 <td className="px-4 py-3">
                   <input
@@ -426,15 +428,15 @@ function AgentCompanyList() {
                 <td className="px-4 py-3">{ac.id}</td>
                 <td className="px-4 py-3">{ac.company_name}</td>
                 <td className="px-4 py-3">{ac.registration_number}</td>
-                <td className="px-4 py-3">{ac.till_number || 'N/A'}</td>
+                <td className="px-4 py-3">{ac.store_number || 'N/A'}</td>
+                <td className="px-4 py-3">{ac.agent_number || 'N/A'}</td>
                 <td className="px-4 py-3">{ac.float_balance}</td>
                 <td className="px-4 py-3">
                   <span
-                    className={`px-2 py-1 rounded-full text-xs ${
-                      ac.status === 'active'
-                        ? 'bg-green-100 text-green-600 dark:bg-green-900/50 dark:text-green-400'
-                        : 'bg-red-100 text-red-600 dark:bg-red-900/50 dark:text-red-400'
-                    }`}
+                    className={`px-2 py-1 rounded-full text-xs ${ac.status === 'active'
+                      ? 'bg-green-100 text-green-600 dark:bg-green-900/50 dark:text-green-400'
+                      : 'bg-red-100 text-red-600 dark:bg-red-900/50 dark:text-red-400'
+                      }`}
                   >
                     {ac.status}
                   </span>

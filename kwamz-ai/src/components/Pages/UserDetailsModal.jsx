@@ -1,6 +1,11 @@
 import { useState, useEffect } from 'react';
+import axios from 'axios';
+import { X, User as UserIcon, Phone, IdCard, Calendar, Shield, FileText, Camera, Briefcase, AlertCircle, Search, Check } from 'lucide-react';
+import { useToast } from './ToastProvider';
+import config from '../../Config';
 
 function UserDetailsModal({ isOpen, onClose, onSubmit, isLoading, user }) {
+  const { showToast } = useToast();
   const [formData, setFormData] = useState({
     firstname: '',
     lastname: '',
@@ -11,48 +16,103 @@ function UserDetailsModal({ isOpen, onClose, onSubmit, isLoading, user }) {
     date_of_birth: '',
     image: null,
     imagePreview: null,
+    agent_company_ids: [],
   });
+  const [agentCompanies, setAgentCompanies] = useState([]);
+  const [loadingAgentCompanies, setLoadingAgentCompanies] = useState(false);
+  const [fetchError, setFetchError] = useState('');
+  const [errors, setErrors] = useState({});
+  const [searchTerm, setSearchTerm] = useState('');
+  const [isDropdownOpen, setIsDropdownOpen] = useState(false);
 
   const isEditMode = !!user;
 
-  // Populate form with user data when in edit mode
+  // Fetch agent companies when modal opens
+  useEffect(() => {
+    const abortController = new AbortController();
+
+    const fetchAgentCompanies = async () => {
+      if (!isOpen) return;
+
+      setLoadingAgentCompanies(true);
+      setFetchError('');
+      
+      try {
+        const token = localStorage.getItem('token');
+        if (!token) {
+          throw new Error('Authentication token not found');
+        }
+        const response = await axios.get(`${config.API_URL}/agentcompany`, {
+          headers: { Authorization: `Bearer ${token}` },
+          signal: abortController.signal,
+        });
+        setAgentCompanies(Array.isArray(response.data) ? response.data : []);
+      } catch (error) {
+        if (error.name !== 'AbortError') {
+          console.error('Error fetching agent companies:', error.response?.data || error.message);
+          setFetchError('Failed to load agent companies. Please try again.');
+          showToast('Failed to load agent companies', 'error');
+        }
+      } finally {
+        setLoadingAgentCompanies(false);
+      }
+    };
+
+    fetchAgentCompanies();
+
+    return () => {
+      abortController.abort();
+    };
+  }, [isOpen, showToast]);
+
+  // Populate form with user data when in edit mode or apply provided data
   useEffect(() => {
     if (isEditMode && user) {
       setFormData({
-        firstname: user.firstname || '',
-        lastname: user.lastname || '',
-        idnumber: user.idnumber || '',
-        phone_number: user.phone_number || '',
+        firstname: user.firstname || 'barny',
+        lastname: user.lastname || 'nyaboke',
+        idnumber: user.idnumber || '42112256',
+        phone_number: user.phone_number || '0795642633',
         is_authentic: user.is_authentic ? 'true' : 'false',
         authenticity_desc: user.authenticity_desc || '',
-        date_of_birth: user.date_of_birth || '',
+        date_of_birth: user.date_of_birth ? new Date(user.date_of_birth).toISOString().split('T')[0] : '2003-08-20',
         image: null,
         imagePreview: user.image_loc ? `/useragents/profiles/${user.image_loc.split('/').pop()}` : null,
+        agent_company_ids: user.agent_company_ids || [4, 5],
       });
     } else {
-      // Reset form for create mode
       setFormData({
         firstname: '',
         lastname: '',
         idnumber: '',
         phone_number: '',
-        is_authentic: 'false',
+        is_authentic: '',
         authenticity_desc: '',
         date_of_birth: '',
         image: null,
         imagePreview: null,
+        agent_company_ids: [],
       });
     }
-  }, [user, isOpen]);
+    setErrors({});
+    setSearchTerm('');
+    setIsDropdownOpen(false);
+  }, [user, isOpen, isEditMode]);
 
   const handleInputChange = (e) => {
     const { name, value } = e.target;
     setFormData((prev) => ({ ...prev, [name]: value }));
+    setErrors((prev) => ({ ...prev, [name]: '' }));
   };
 
   const handleFileChange = (e) => {
     const file = e.target.files[0];
     if (file) {
+      if (file.size > 5 * 1024 * 1024) {
+        setErrors((prev) => ({ ...prev, image: 'Image size must be less than 5MB' }));
+        showToast('Image size must be less than 5MB', 'error');
+        return;
+      }
       const reader = new FileReader();
       reader.onload = (e) => {
         setFormData((prev) => ({
@@ -60,65 +120,130 @@ function UserDetailsModal({ isOpen, onClose, onSubmit, isLoading, user }) {
           image: file,
           imagePreview: e.target.result,
         }));
+        setErrors((prev) => ({ ...prev, image: '' }));
       };
       reader.readAsDataURL(file);
     }
   };
 
+  const toggleAgentCompany = (companyId) => {
+    setFormData(prev => {
+      const currentIds = prev.agent_company_ids || [];
+      const newIds = currentIds.includes(companyId)
+        ? currentIds.filter(id => id !== companyId)
+        : [...currentIds, companyId];
+      
+      // Clear error when at least one company is selected
+      if (newIds.length > 0) {
+        setErrors(prevErrors => ({ ...prevErrors, agent_company_ids: '' }));
+      }
+      
+      return { ...prev, agent_company_ids: newIds };
+    });
+  };
+
+  const removeAgentCompany = (companyId, e) => {
+    e.stopPropagation();
+    toggleAgentCompany(companyId);
+  };
+
+  const filteredAgentCompanies = agentCompanies.filter(company =>
+    company.company_name?.toLowerCase().includes(searchTerm.toLowerCase()) ||
+    company.registration_number?.toLowerCase().includes(searchTerm.toLowerCase())
+  );
+
+  const getSelectedCompanyNames = () => {
+    return formData.agent_company_ids.map(id => {
+      const company = agentCompanies.find(c => c.id === id);
+      return company ? company.company_name : 'Unknown Company';
+    });
+  };
+
+  const validateForm = () => {
+    const newErrors = {};
+    if (!formData.firstname) newErrors.firstname = 'First name is required';
+    if (!formData.lastname) newErrors.lastname = 'Last name is required';
+    if (!formData.idnumber) newErrors.idnumber = 'ID number is required';
+    if (!formData.agent_company_ids || formData.agent_company_ids.length === 0) {
+      newErrors.agent_company_ids = 'At least one agent company is required';
+    }
+    if (formData.phone_number && !/^\+?\d{1,3}?\d{9,12}$/.test(formData.phone_number)) {
+      newErrors.phone_number = 'Invalid phone number format';
+    }
+    if (formData.date_of_birth && new Date(formData.date_of_birth) > new Date()) {
+      newErrors.date_of_birth = 'Date of birth cannot be in the future';
+    }
+    return newErrors;
+  };
+
   const handleSubmit = (e) => {
     e.preventDefault();
-    onSubmit(formData, isEditMode ? user.id : null, () => {
-      setFormData({
-        firstname: '',
-        lastname: '',
-        idnumber: '',
-        phone_number: '',
-        is_authentic: 'false',
-        authenticity_desc: '',
-        date_of_birth: '',
-        image: null,
-        imagePreview: null,
-      });
+    const validationErrors = validateForm();
+    if (Object.keys(validationErrors).length > 0) {
+      setErrors(validationErrors);
+      showToast('Please fix the form errors', 'error');
+      return;
+    }
+
+    const formDataToSend = new FormData();
+    Object.entries(formData).forEach(([key, value]) => {
+      if (key !== 'imagePreview' && value !== null && value !== undefined) {
+        if (key === 'agent_company_ids' && Array.isArray(value)) {
+          // Join agent_company_ids into a comma-separated string
+          formDataToSend.append('agent_company_ids', value.join(','));
+        } else {
+          formDataToSend.append(key, value);
+        }
+      }
     });
+
+    console.log('Submitting form data:', Object.fromEntries(formDataToSend.entries()));
+    onSubmit(formDataToSend, isEditMode ? user.id : null);
   };
 
   if (!isOpen) return null;
 
   return (
     <div className="fixed inset-0 bg-gradient-to-br from-black/60 via-black/50 to-black/40 backdrop-blur-sm flex items-center justify-center z-50 p-4">
-      <div className="bg-white/95 dark:bg-slate-900/95 backdrop-blur-lg rounded-2xl shadow-2xl border border-white/20 dark:border-slate-700/50 p-8 w-full max-w-2xl transform transition-all duration-300 scale-100 animate-in fade-in slide-in-from-bottom-4 max-h-[90vh] overflow-hidden">
+      <div className="bg-white/95 dark:bg-slate-900/95 backdrop-blur-lg rounded-2xl shadow-2xl border border-white/20 dark:border-slate-700/50 w-full max-w-3xl transform transition-all duration-300 max-h-[90vh] overflow-hidden flex flex-col">
         {/* Header */}
-        <div className="flex items-center justify-between mb-6">
-          <div>
-            <h2 className="text-2xl font-bold bg-gradient-to-r from-blue-600 via-purple-600 to-blue-800 dark:from-blue-400 dark:via-purple-400 dark:to-blue-300 bg-clip-text text-transparent">
-              {isEditMode ? 'Edit User Details' : 'Create New User'}
-            </h2>
-            <p className="text-sm text-slate-500 dark:text-slate-400 mt-1">
-              {isEditMode ? 'Update the details of the selected user' : 'Fill in the details to add a new user to the system'}
-            </p>
+        <div className="relative bg-gradient-to-r from-blue-600 via-cyan-600 to-blue-700 dark:from-blue-700 dark:via-cyan-700 dark:to-blue-800 p-8">
+          <div className="absolute inset-0 bg-black/10"></div>
+          <div className="relative flex items-center justify-between">
+            <div className="flex items-center space-x-4">
+              <div className="bg-white/20 p-3 rounded-xl backdrop-blur-sm shadow-lg">
+                <UserIcon className="w-7 h-7 text-white" />
+              </div>
+              <div>
+                <h2 className="text-3xl font-bold text-white tracking-tight">
+                  {isEditMode ? 'Edit User Details' : 'Create New User'}
+                </h2>
+                <p className="text-blue-100 text-sm mt-1.5 font-medium">
+                  {isEditMode ? 'Update the details of the selected user' : 'Fill in the details to add a new user'}
+                </p>
+              </div>
+            </div>
+            <button
+              onClick={onClose}
+              className="text-white/80 hover:text-white hover:bg-white/20 p-2.5 rounded-xl transition-all hover:rotate-90 duration-300"
+              disabled={isLoading}
+            >
+              <X className="w-6 h-6" />
+            </button>
           </div>
-          <button
-            onClick={onClose}
-            className="p-2 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-full transition-colors group"
-          >
-            <svg className="w-5 h-5 text-slate-400 group-hover:text-slate-600 dark:group-hover:text-slate-300" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-            </svg>
-          </button>
         </div>
 
-        <div className="space-y-6 max-h-[70vh] overflow-y-auto pr-2 scrollbar-thin scrollbar-thumb-slate-300 dark:scrollbar-thumb-slate-600 scrollbar-track-transparent">
+        {/* Content */}
+        <div className="flex-1 overflow-y-auto p-8 space-y-6">
           {/* Profile Image Section */}
-          <div className="text-center">
+          <div className="text-center pb-6 border-b-2 border-slate-200 dark:border-slate-700">
             <div className="relative inline-block">
-              <div className="w-24 h-24 rounded-full bg-gray-300 ring-4 ring-blue-500 overflow-hidden">
+              <div className="w-28 h-28 rounded-full bg-gradient-to-br from-blue-200 to-cyan-200 dark:from-blue-800 dark:to-cyan-800 ring-4 ring-blue-500 dark:ring-blue-400 overflow-hidden shadow-xl">
                 {formData.imagePreview ? (
                   <img src={formData.imagePreview} alt="Profile" className="w-full h-full object-cover" />
                 ) : (
                   <div className="w-full h-full flex items-center justify-center">
-                    <svg className="w-12 h-12 text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
-                    </svg>
+                    <Camera className="w-12 h-12 text-slate-500 dark:text-slate-400" />
                   </div>
                 )}
               </div>
@@ -131,20 +256,17 @@ function UserDetailsModal({ isOpen, onClose, onSubmit, isLoading, user }) {
                     const fileInput = document.querySelector('input[type="file"]');
                     if (fileInput) fileInput.value = '';
                   }}
-                  className="absolute -top-2 -right-2 w-6 h-6 bg-red-500 hover:bg-red-600 text-white rounded-full flex items-center justify-center text-xs transition-colors shadow-lg"
+                  className="absolute -top-1 -right-1 w-8 h-8 bg-red-500 hover:bg-red-600 text-white rounded-full flex items-center justify-center transition-all shadow-lg transform hover:scale-110"
                 >
-                  ×
+                  <X className="w-4 h-4" />
                 </button>
               )}
 
               <label
                 htmlFor="profile-image"
-                className="absolute -bottom-2 -right-2 bg-blue-600 hover:bg-blue-700 text-white p-2 rounded-full cursor-pointer transition-colors"
+                className="absolute -bottom-2 -right-2 bg-blue-600 hover:bg-blue-700 text-white p-2.5 rounded-full cursor-pointer transition-all shadow-lg transform hover:scale-110"
               >
-                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 9a2 2 0 012-2h.93a2 2 0 001.664-.89l.812-1.22A2 2 0 0110.07 4h3.86a2 2 0 011.664.89l.812 1.22A2 2 0 0018.07 7H19a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2V9z" />
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 13a3 3 0 11-6 0 3 3 0 016 0z" />
-                </svg>
+                <Camera className="w-5 h-5" />
               </label>
               <input
                 id="profile-image"
@@ -152,260 +274,382 @@ function UserDetailsModal({ isOpen, onClose, onSubmit, isLoading, user }) {
                 accept="image/*"
                 onChange={handleFileChange}
                 className="hidden"
+                disabled={isLoading}
               />
+              {errors.image && (
+                <p className="text-red-500 text-xs mt-2 flex items-center font-medium">
+                  <span className="mr-1">⚠</span>
+                  {errors.image}
+                </p>
+              )}
             </div>
-            <p className="text-sm text-slate-500 dark:text-slate-400 mt-2">
-              Click the camera icon to change profile picture
+            <p className="text-sm text-slate-600 dark:text-slate-400 mt-3 font-medium">
+              Click the camera icon to change profile picture (max 5MB)
             </p>
           </div>
 
-          <form onSubmit={handleSubmit} className="space-y-6">
-            {/* Name Fields Row */}
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              {/* First Name */}
-              <div className="space-y-2">
-                <label className="block text-sm font-semibold text-slate-700 dark:text-slate-200">
-                  First Name
-                </label>
-                <div className="relative group">
-                  <div className="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none">
-                    <svg className="w-5 h-5 text-slate-400 group-focus-within:text-blue-500 transition-colors" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
-                    </svg>
-                  </div>
-                  <input
-                    type="text"
-                    name="firstname"
-                    value={formData.firstname}
-                    onChange={handleInputChange}
-                    required
-                    className="w-full pl-12 pr-4 py-4 border-2 rounded-xl font-medium transition-all duration-300 bg-white dark:bg-slate-800 text-slate-900 dark:text-white placeholder-slate-400 dark:placeholder-slate-500 border-slate-200 dark:border-slate-600 focus:border-blue-500 focus:ring-blue-200 dark:focus:ring-blue-900 hover:border-slate-300 dark:hover:border-slate-500 focus:ring-4 focus:outline-none"
-                    placeholder="Enter first name"
-                  />
-                  {formData.firstname && (
-                    <div className="absolute inset-y-0 right-0 pr-4 flex items-center">
-                      <div className="w-2 h-2 bg-green-500 rounded-full"></div>
-                    </div>
-                  )}
-                </div>
+          {/* Agent Company Selection */}
+          <div className="bg-gradient-to-br from-blue-50/50 to-cyan-50/50 dark:from-blue-900/20 dark:to-cyan-900/20 rounded-xl p-6 border-2 border-blue-100 dark:border-blue-800/30">
+            <label className="flex items-center space-x-2 text-sm font-bold text-slate-700 dark:text-slate-300 mb-3">
+              <Briefcase className="w-5 h-5 text-blue-600 dark:text-blue-400" />
+              <span>Agent Companies</span>
+              <span className="text-red-500">*</span>
+            </label>
+            
+            {fetchError && (
+              <div className="mb-3 p-3 bg-red-50 dark:bg-red-900/20 border-l-4 border-red-500 rounded">
+                <p className="text-red-700 dark:text-red-400 text-sm flex items-center">
+                  <AlertCircle className="w-4 h-4 mr-2" />
+                  {fetchError}
+                </p>
               </div>
-
-              {/* Last Name */}
-              <div className="space-y-2">
-                <label className="block text-sm font-semibold text-slate-700 dark:text-slate-200">
-                  Last Name
-                </label>
-                <div className="relative group">
-                  <div className="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none">
-                    <svg className="w-5 h-5 text-slate-400 group-focus-within:text-blue-500 transition-colors" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
-                    </svg>
-                  </div>
-                  <input
-                    type="text"
-                    name="lastname"
-                    value={formData.lastname}
-                    onChange={handleInputChange}
-                    required
-                    className="w-full pl-12 pr-4 py-4 border-2 rounded-xl font-medium transition-all duration-300 bg-white dark:bg-slate-800 text-slate-900 dark:text-white placeholder-slate-400 dark:placeholder-slate-500 border-slate-200 dark:border-slate-600 focus:border-blue-500 focus:ring-blue-200 dark:focus:ring-blue-900 hover:border-slate-300 dark:hover:border-slate-500 focus:ring-4 focus:outline-none"
-                    placeholder="Enter last name"
-                  />
-                  {formData.lastname && (
-                    <div className="absolute inset-y-0 right-0 pr-4 flex items-center">
-                      <div className="w-2 h-2 bg-green-500 rounded-full"></div>
-                    </div>
-                  )}
-                </div>
-              </div>
-            </div>
-
-            {/* ID and Phone Row */}
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              {/* ID Number */}
-              <div className="space-y-2">
-                <label className="block text-sm font-semibold text-slate-700 dark:text-slate-200">
-                  ID Number
-                </label>
-                <div className="relative group">
-                  <div className="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none">
-                    <svg className="w-5 h-5 text-slate-400 group-focus-within:text-blue-500 transition-colors" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H5a2 2 0 00-2 2v9a2 2 0 002 2h14a2 2 0 002-2V8a2 2 0 00-2-2h-5m-4 0V5a2 2 0 114 0v1m-4 0a2 2 0 104 0m-5 8a2 2 0 100-4 2 2 0 000 4zm0 0v6" />
-                    </svg>
-                  </div>
-                  <input
-                    type="text"
-                    name="idnumber"
-                    value={formData.idnumber}
-                    onChange={handleInputChange}
-                    required
-                    className="w-full pl-12 pr-4 py-4 border-2 rounded-xl font-medium transition-all duration-300 bg-white dark:bg-slate-800 text-slate-900 dark:text-white placeholder-slate-400 dark:placeholder-slate-500 border-slate-200 dark:border-slate-600 focus:border-blue-500 focus:ring-blue-200 dark:focus:ring-blue-900 hover:border-slate-300 dark:hover:border-slate-500 focus:ring-4 focus:outline-none"
-                    placeholder="Enter ID number"
-                  />
-                  {formData.idnumber && (
-                    <div className="absolute inset-y-0 right-0 pr-4 flex items-center">
-                      <div className="w-2 h-2 bg-green-500 rounded-full"></div>
-                    </div>
-                  )}
-                </div>
-              </div>
-
-              {/* Phone Number */}
-              <div className="space-y-2">
-                <label className="block text-sm font-semibold text-slate-700 dark:text-slate-200">
-                  Phone Number
-                </label>
-                <div className="relative group">
-                  <div className="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none">
-                    <svg className="w-5 h-5 text-slate-400 group-focus-within:text-blue-500 transition-colors" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 5a2 2 0 012-2h3.28a1 1 0 01.948.684l1.498 4.493a1 1 0 01-.502 1.21l-2.257 1.13a11.042 11.042 0 005.516 5.516l1.13-2.257a1 1 0 011.21-.502l4.493 1.498a1 1 0 01.684.949V19a2 2 0 01-2 2h-1C9.716 21 3 14.284 3 6V5z" />
-                    </svg>
-                  </div>
-                  <input
-                    type="text"
-                    name="phone_number"
-                    value={formData.phone_number}
-                    onChange={handleInputChange}
-                    className="w-full pl-12 pr-4 py-4 border-2 rounded-xl font-medium transition-all duration-300 bg-white dark:bg-slate-800 text-slate-900 dark:text-white placeholder-slate-400 dark:placeholder-slate-500 border-slate-200 dark:border-slate-600 focus:border-blue-500 focus:ring-blue-200 dark:focus:ring-blue-900 hover:border-slate-300 dark:hover:border-slate-500 focus:ring-4 focus:outline-none"
-                    placeholder="Enter phone number"
-                  />
-                  {formData.phone_number && (
-                    <div className="absolute inset-y-0 right-0 pr-4 flex items-center">
-                      <div className="w-2 h-2 bg-green-500 rounded-full"></div>
-                    </div>
-                  )}
-                </div>
-              </div>
-            </div>
-
-            {/* Authentication Section */}
-            <div className="bg-gradient-to-r from-blue-50/50 to-purple-50/50 dark:from-blue-900/20 dark:to-purple-900/20 rounded-xl p-6 border border-blue-100/50 dark:border-blue-800/30">
-              <div className="flex items-center space-x-2 mb-4">
-                <svg className="w-5 h-5 text-blue-600 dark:text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.031 9-11.622 0-1.042-.133-2.052-.382-3.016z" />
-                </svg>
-                <h3 className="text-lg font-semibold text-slate-800 dark:text-slate-200">Authentication Details</h3>
-              </div>
-
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                {/* Authentication Status */}
-                <div className="space-y-2">
-                  <label className="block text-sm font-semibold text-slate-700 dark:text-slate-200">
-                    Authentication Status
-                  </label>
-                  <div className="relative group">
-                    <div className="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none">
-                      <svg className="w-5 h-5 text-slate-400 group-focus-within:text-blue-500 transition-colors" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
-                      </svg>
-                    </div>
-                    <select
-                      name="is_authentic"
-                      value={formData.is_authentic}
-                      onChange={handleInputChange}
-                      className="w-full pl-12 pr-4 py-4 border-2 rounded-xl font-medium transition-all duration-300 bg-white dark:bg-slate-800 text-slate-900 dark:text-white border-slate-200 dark:border-slate-600 focus:border-blue-500 focus:ring-blue-200 dark:focus:ring-blue-900 hover:border-slate-300 dark:hover:border-slate-500 focus:ring-4 focus:outline-none"
+            )}
+            
+            {/* Multi-select Dropdown */}
+            <div className="relative">
+              {/* Selected Companies Display */}
+              <div 
+                className={`min-h-12 p-3 border-2 rounded-xl cursor-pointer transition-all font-medium flex flex-wrap items-center gap-2 ${
+                  errors.agent_company_ids
+                    ? 'border-red-300 bg-red-50 dark:bg-red-900/20 dark:border-red-500'
+                    : 'border-slate-200 dark:border-slate-700 hover:border-slate-300 dark:hover:border-slate-600'
+                } ${isDropdownOpen ? 'ring-2 ring-blue-500 border-blue-500' : ''}`}
+                onClick={() => setIsDropdownOpen(!isDropdownOpen)}
+              >
+                {formData.agent_company_ids.length === 0 ? (
+                  <span className="text-slate-400 dark:text-slate-500">
+                    {loadingAgentCompanies ? 'Loading agent companies...' : 'Select agent companies...'}
+                  </span>
+                ) : (
+                  getSelectedCompanyNames().map((companyName, index) => (
+                    <span
+                      key={formData.agent_company_ids[index]}
+                      className="inline-flex items-center gap-1 bg-blue-100 dark:bg-blue-900/40 text-blue-700 dark:text-blue-300 px-2 py-1 rounded-lg text-sm font-medium"
                     >
-                      <option value="true">✓ Verified</option>
-                      <option value="false">✗ Unverified</option>
-                    </select>
-                  </div>
-                </div>
+                      {companyName}
+                      <button
+                        type="button"
+                        onClick={(e) => removeAgentCompany(formData.agent_company_ids[index], e)}
+                        className="hover:text-red-500 transition-colors"
+                      >
+                        <X className="w-3 h-3" />
+                      </button>
+                    </span>
+                  ))
+                )}
+              </div>
 
-                {/* Authenticity Description */}
-                <div className="space-y-2">
-                  <label className="block text-sm font-semibold text-slate-700 dark:text-slate-200">
-                    Authenticity Notes
-                  </label>
-                  <div className="relative group">
-                    <div className="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none">
-                      <svg className="w-5 h-5 text-slate-400 group-focus-within:text-blue-500 transition-colors" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
-                      </svg>
+              {/* Dropdown Panel */}
+              {isDropdownOpen && (
+                <div className="absolute z-50 w-full mt-1 bg-white dark:bg-slate-800 border-2 border-slate-200 dark:border-slate-700 rounded-xl shadow-2xl max-h-60 overflow-hidden">
+                  {/* Search Input */}
+                  <div className="p-2 border-b border-slate-200 dark:border-slate-700">
+                    <div className="relative">
+                      <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 w-4 h-4 text-slate-400" />
+                      <input
+                        type="text"
+                        placeholder="Search agent companies..."
+                        value={searchTerm}
+                        onChange={(e) => setSearchTerm(e.target.value)}
+                        className="w-full pl-10 pr-4 py-2.5 border border-slate-200 dark:border-slate-600 rounded-lg bg-white dark:bg-slate-700 text-slate-900 dark:text-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                        onClick={(e) => e.stopPropagation()}
+                      />
                     </div>
-                    <input
-                      type="text"
-                      name="authenticity_desc"
-                      value={formData.authenticity_desc}
-                      onChange={handleInputChange}
-                      className="w-full pl-12 pr-4 py-4 border-2 rounded-xl font-medium transition-all duration-300 bg-white dark:bg-slate-800 text-slate-900 dark:text-white placeholder-slate-400 dark:placeholder-slate-500 border-slate-200 dark:border-slate-600 focus:border-blue-500 focus:ring-blue-200 dark:focus:ring-blue-900 hover:border-slate-300 dark:hover:border-slate-500 focus:ring-4 focus:outline-none"
-                      placeholder="Optional verification notes"
-                    />
-                    {formData.authenticity_desc && (
-                      <div className="absolute inset-y-0 right-0 pr-4 flex items-center">
-                        <div className="w-2 h-2 bg-green-500 rounded-full"></div>
+                  </div>
+
+                  {/* Options List */}
+                  <div className="overflow-y-auto max-h-44">
+                    {loadingAgentCompanies ? (
+                      <div className="p-4 text-center text-slate-500 dark:text-slate-400">
+                        <svg className="animate-spin h-5 w-5 mx-auto text-blue-600" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                          <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                          <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                        </svg>
+                        <p className="mt-2 text-sm">Loading agent companies...</p>
                       </div>
+                    ) : filteredAgentCompanies.length === 0 ? (
+                      <div className="p-4 text-center text-slate-500 dark:text-slate-400">
+                        No agent companies found
+                      </div>
+                    ) : (
+                      filteredAgentCompanies.map((company) => (
+                        <div
+                          key={company.id}
+                          className={`flex items-center px-4 py-3 cursor-pointer transition-colors ${
+                            formData.agent_company_ids.includes(company.id)
+                              ? 'bg-blue-50 dark:bg-blue-900/20 text-blue-700 dark:text-blue-300'
+                              : 'hover:bg-slate-50 dark:hover:bg-slate-700'
+                          }`}
+                          onClick={() => toggleAgentCompany(company.id)}
+                        >
+                          <div className={`w-5 h-5 border-2 rounded flex items-center justify-center mr-3 ${
+                            formData.agent_company_ids.includes(company.id)
+                              ? 'bg-blue-600 border-blue-600'
+                              : 'border-slate-300 dark:border-slate-600'
+                          }`}>
+                            {formData.agent_company_ids.includes(company.id) && (
+                              <Check className="w-3 h-3 text-white" />
+                            )}
+                          </div>
+                          <div className="flex-1">
+                            <div className="font-medium text-slate-900 dark:text-white">
+                              {company.company_name}
+                            </div>
+                            {company.registration_number && (
+                              <div className="text-xs text-slate-500 dark:text-slate-400">
+                                Reg: {company.registration_number}
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      ))
                     )}
                   </div>
                 </div>
-              </div>
+              )}
+            </div>
+
+            {errors.agent_company_ids && (
+              <p className="text-red-500 text-xs mt-2 ml-1 flex items-center font-medium">
+                <span className="mr-1">⚠</span>
+                {errors.agent_company_ids}
+              </p>
+            )}
+            
+            {!loadingAgentCompanies && agentCompanies.length === 0 && !fetchError && (
+              <p className="text-sm text-amber-600 dark:text-amber-400 mt-2 ml-1">
+                No agent companies available. Please create an agent company first.
+              </p>
+            )}
+            <p className="text-xs text-slate-500 dark:text-slate-400 mt-2 ml-1">
+              This user will be linked to the selected agent companies
+            </p>
+          </div>
+
+          {/* Form Fields */}
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+            {/* First Name */}
+            <div>
+              <label className="flex items-center space-x-2 text-sm font-bold text-slate-700 dark:text-slate-300 mb-3">
+                <UserIcon className="w-4 h-4 text-blue-600 dark:text-blue-400" />
+                <span>First Name</span>
+                <span className="text-red-500">*</span>
+              </label>
+              <input
+                type="text"
+                name="firstname"
+                value={formData.firstname}
+                onChange={handleInputChange}
+                required
+                className={`w-full px-4 py-3.5 border-2 rounded-xl font-medium transition-all bg-white dark:bg-slate-800 text-slate-900 dark:text-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-200 dark:focus:ring-blue-900 hover:border-slate-300 ${
+                  errors.firstname
+                    ? 'border-red-300 bg-red-50 dark:bg-red-900/20 dark:border-red-500'
+                    : 'border-slate-200 dark:border-slate-700'
+                }`}
+                placeholder="Enter first name"
+                disabled={isLoading}
+              />
+              {errors.firstname && (
+                <p className="text-red-500 text-xs mt-2 ml-1 flex items-center font-medium">
+                  <span className="mr-1">⚠</span>
+                  {errors.firstname}
+                </p>
+              )}
+            </div>
+
+            {/* Last Name */}
+            <div>
+              <label className="flex items-center space-x-2 text-sm font-bold text-slate-700 dark:text-slate-300 mb-3">
+                <UserIcon className="w-4 h-4 text-blue-600 dark:text-blue-400" />
+                <span>Last Name</span>
+                <span className="text-red-500">*</span>
+              </label>
+              <input
+                type="text"
+                name="lastname"
+                value={formData.lastname}
+                onChange={handleInputChange}
+                required
+                className={`w-full px-4 py-3.5 border-2 rounded-xl font-medium transition-all bg-white dark:bg-slate-800 text-slate-900 dark:text-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-200 dark:focus:ring-blue-900 hover:border-slate-300 ${
+                  errors.lastname
+                    ? 'border-red-300 bg-red-50 dark:bg-red-900/20 dark:border-red-500'
+                    : 'border-slate-200 dark:border-slate-700'
+                }`}
+                placeholder="Enter last name"
+                disabled={isLoading}
+              />
+              {errors.lastname && (
+                <p className="text-red-500 text-xs mt-2 ml-1 flex items-center font-medium">
+                  <span className="mr-1">⚠</span>
+                  {errors.lastname}
+                </p>
+              )}
+            </div>
+
+            {/* ID Number */}
+            <div>
+              <label className="flex items-center space-x-2 text-sm font-bold text-slate-700 dark:text-slate-300 mb-3">
+                <IdCard className="w-4 h-4 text-blue-600 dark:text-blue-400" />
+                <span>ID Number</span>
+                <span className="text-red-500">*</span>
+              </label>
+              <input
+                type="text"
+                name="idnumber"
+                value={formData.idnumber}
+                onChange={handleInputChange}
+                required
+                className={`w-full px-4 py-3.5 border-2 rounded-xl font-medium transition-all bg-white dark:bg-slate-800 text-slate-900 dark:text-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-200 dark:focus:ring-blue-900 hover:border-slate-300 ${
+                  errors.idnumber
+                    ? 'border-red-300 bg-red-50 dark:bg-red-900/20 dark:border-red-500'
+                    : 'border-slate-200 dark:border-slate-700'
+                }`}
+                placeholder="Enter ID number"
+                disabled={isLoading}
+              />
+              {errors.idnumber && (
+                <p className="text-red-500 text-xs mt-2 ml-1 flex items-center font-medium">
+                  <span className="mr-1">⚠</span>
+                  {errors.idnumber}
+                </p>
+              )}
+            </div>
+
+            {/* Phone Number */}
+            <div>
+              <label className="flex items-center space-x-2 text-sm font-bold text-slate-700 dark:text-slate-300 mb-3">
+                <Phone className="w-4 h-4 text-blue-600 dark:text-blue-400" />
+                <span>Phone Number</span>
+              </label>
+              <input
+                type="text"
+                name="phone_number"
+                value={formData.phone_number}
+                onChange={handleInputChange}
+                className={`w-full px-4 py-3.5 border-2 rounded-xl font-medium transition-all bg-white dark:bg-slate-800 text-slate-900 dark:text-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-200 dark:focus:ring-blue-900 hover:border-slate-300 ${
+                  errors.phone_number
+                    ? 'border-red-300 bg-red-50 dark:bg-red-900/20 dark:border-red-500'
+                    : 'border-slate-200 dark:border-slate-700'
+                }`}
+                placeholder="e.g., +254712345678"
+                disabled={isLoading}
+              />
+              {errors.phone_number && (
+                <p className="text-red-500 text-xs mt-2 ml-1 flex items-center font-medium">
+                  <span className="mr-1">⚠</span>
+                  {errors.phone_number}
+                </p>
+              )}
             </div>
 
             {/* Date of Birth */}
-            <div className="space-y-2">
-              <label className="block text-sm font-semibold text-slate-700 dark:text-slate-200">
-                Date of Birth
+            <div className="md:col-span-2">
+              <label className="flex items-center space-x-2 text-sm font-bold text-slate-700 dark:text-slate-300 mb-3">
+                <Calendar className="w-4 h-4 text-blue-600 dark:text-blue-400" />
+                <span>Date of Birth</span>
               </label>
-              <div className="relative group">
-                <div className="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none">
-                  <svg className="w-5 h-5 text-slate-400 group-focus-within:text-blue-500 transition-colors" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
-                  </svg>
-                </div>
-                <input
-                  type="date"
-                  name="date_of_birth"
-                  value={formData.date_of_birth}
-                  onChange={handleInputChange}
-                  className="w-full pl-12 pr-4 py-4 border-2 rounded-xl font-medium transition-all duration-300 bg-white dark:bg-slate-800 text-slate-900 dark:text-white border-slate-200 dark:border-slate-600 focus:border-blue-500 focus:ring-blue-200 dark:focus:ring-blue-900 hover:border-slate-300 dark:hover:border-slate-500 focus:ring-4 focus:outline-none"
-                />
-                {formData.date_of_birth && (
-                  <div className="absolute inset-y-0 right-0 pr-4 flex items-center">
-                    <div className="w-2 h-2 bg-green-500 rounded-full"></div>
-                  </div>
-                )}
-              </div>
+              <input
+                type="date"
+                name="date_of_birth"
+                value={formData.date_of_birth}
+                onChange={handleInputChange}
+                className={`w-full px-4 py-3.5 border-2 rounded-xl font-medium transition-all bg-white dark:bg-slate-800 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-200 dark:focus:ring-blue-900 hover:border-slate-300 ${
+                  errors.date_of_birth
+                    ? 'border-red-300 bg-red-50 dark:bg-red-900/20 dark:border-red-500'
+                    : 'border-slate-200 dark:border-slate-700'
+                }`}
+                disabled={isLoading}
+              />
+              {errors.date_of_birth && (
+                <p className="text-red-500 text-xs mt-2 ml-1 flex items-center font-medium">
+                  <span className="mr-1">⚠</span>
+                  {errors.date_of_birth}
+                </p>
+              )}
+            </div>
+          </div>
+
+          {/* Authentication Section */}
+          <div className="bg-gradient-to-br from-purple-50/50 to-blue-50/50 dark:from-purple-900/20 dark:to-blue-900/20 rounded-xl p-6 border-2 border-purple-100 dark:border-purple-800/30">
+            <div className="flex items-center space-x-2 mb-4">
+              <Shield className="w-5 h-5 text-purple-600 dark:text-purple-400" />
+              <h3 className="text-lg font-bold text-slate-800 dark:text-slate-200">Authentication Details</h3>
             </div>
 
-            {/* Action Buttons */}
-            <div className="flex space-x-4 pt-6 border-t border-slate-200/50 dark:border-slate-700/50">
-              <button
-                type="submit"
-                disabled={isLoading}
-                className="flex-1 group relative bg-gradient-to-r from-blue-600 to-blue-700 hover:from-blue-700 hover:to-blue-800 disabled:from-blue-300 disabled:to-blue-400 disabled:cursor-not-allowed text-white py-4 px-6 rounded-xl font-semibold transition-all duration-300 shadow-lg hover:shadow-xl transform hover:scale-[1.02] disabled:transform-none disabled:shadow-md"
-              >
-                <div className="flex items-center justify-center space-x-3">
-                  {isLoading ? (
-                    <>
-                      <div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin" />
-                      <span>{isEditMode ? 'Updating User...' : 'Creating User...'}</span>
-                    </>
-                  ) : (
-                    <>
-                      <svg className="w-5 h-5 group-hover:scale-110 transition-transform" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6v6m0 0v6m0-6h6m-6 0H6" />
-                      </svg>
-                      <span>{isEditMode ? 'Update User' : 'Create User'}</span>
-                    </>
-                  )}
-                </div>
-                {!isLoading && (
-                  <div className="absolute inset-0 rounded-xl bg-gradient-to-r from-transparent via-white to-transparent opacity-0 group-hover:opacity-20 transform -skew-x-12 group-hover:animate-pulse"></div>
-                )}
-              </button>
-              <button
-                type="button"
-                onClick={onClose}
-                disabled={isLoading}
-                className="flex-1 py-4 px-6 bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 disabled:opacity-50 disabled:cursor-not-allowed text-slate-700 dark:text-slate-300 font-semibold rounded-xl shadow-lg hover:shadow-xl transform hover:scale-[1.02] disabled:transform-none transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-slate-500/50 focus:ring-offset-2 dark:focus:ring-offset-slate-900"
-              >
-                <span className="flex items-center justify-center space-x-2">
-                  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                  </svg>
-                  <span>Cancel</span>
-                </span>
-              </button>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+              {/* Authentication Status */}
+              <div>
+                <label className="flex items-center space-x-2 text-sm font-bold text-slate-700 dark:text-slate-300 mb-3">
+                  <Shield className="w-4 h-4 text-purple-600 dark:text-purple-400" />
+                  <span>Authentication Status</span>
+                </label>
+                <select
+                  name="is_authentic"
+                  value={formData.is_authentic}
+                  onChange={handleInputChange}
+                  className="w-full px-4 py-3.5 border-2 rounded-xl font-medium transition-all bg-white dark:bg-slate-800 text-slate-900 dark:text-white border-slate-200 dark:border-slate-700 focus:border-purple-500 focus:ring-2 focus:ring-purple-200 dark:focus:ring-purple-900 hover:border-slate-300 focus:outline-none"
+                  disabled={isLoading}
+                >
+                  <option value="true">✓ Verified</option>
+                  <option value="false">✗ Unverified</option>
+                </select>
+              </div>
+
+              {/* Authenticity Description */}
+              <div>
+                <label className="flex items-center space-x-2 text-sm font-bold text-slate-700 dark:text-slate-300 mb-3">
+                  <FileText className="w-4 h-4 text-purple-600 dark:text-purple-400" />
+                  <span>Authenticity Notes</span>
+                </label>
+                <input
+                  type="text"
+                  name="authenticity_desc"
+                  value={formData.authenticity_desc}
+                  onChange={handleInputChange}
+                  className="w-full px-4 py-3.5 border-2 rounded-xl font-medium transition-all bg-white dark:bg-slate-800 text-slate-900 dark:text-white placeholder-slate-400 border-slate-200 dark:border-slate-700 focus:border-purple-500 focus:ring-2 focus:ring-purple-200 dark:focus:ring-purple-900 hover:border-slate-300 focus:outline-none"
+                  placeholder="Optional verification notes"
+                  disabled={isLoading}
+                />
+              </div>
             </div>
-          </form>
+          </div>
+
+          {/* Action Buttons */}
+          <div className="flex space-x-4 pt-6 border-t-2 border-slate-200 dark:border-slate-700">
+            <button
+              type="button"
+              onClick={onClose}
+              disabled={isLoading}
+              className="flex-1 py-3.5 px-5 bg-slate-200 dark:bg-slate-700 text-slate-700 dark:text-slate-300 font-bold rounded-xl hover:bg-slate-300 dark:hover:bg-slate-600 transition-all shadow-sm hover:shadow-md transform hover:scale-[1.02] disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              <span className="flex items-center justify-center space-x-2">
+                <X className="w-5 h-5" />
+                <span>Cancel</span>
+              </span>
+            </button>
+            <button
+              type="button"
+              onClick={handleSubmit}
+              disabled={isLoading}
+              className="flex-1 py-3.5 px-5 bg-gradient-to-r from-blue-600 via-cyan-600 to-blue-700 hover:from-blue-700 hover:via-cyan-700 hover:to-blue-800 text-white font-bold rounded-xl transition-all shadow-lg shadow-blue-500/40 hover:shadow-xl hover:shadow-blue-500/50 disabled:opacity-50 disabled:cursor-not-allowed transform hover:scale-[1.02]"
+            >
+              {isLoading ? (
+                <span className="flex items-center justify-center">
+                  <svg className="animate-spin -ml-1 mr-2 h-5 w-5 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                  </svg>
+                  {isEditMode ? 'Updating...' : 'Creating...'}
+                </span>
+              ) : (
+                <span>{isEditMode ? 'Update User' : 'Create User'}</span>
+              )}
+            </button>
+          </div>
+
+          <p className="text-xs text-slate-500 dark:text-slate-400 text-center pt-2">
+            <span className="text-red-500 font-bold">*</span> Required fields
+          </p>
         </div>
       </div>
     </div>
