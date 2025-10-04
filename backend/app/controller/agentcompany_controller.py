@@ -28,7 +28,7 @@ def get_agent_companies():
             'company_name': ac.company_name,
             'registration_number': ac.registration_number,
             'location': ac.location,
-            'contact_phone': ac.contact_phone,
+            'contact_phone': get_user_contact_info(ac.contact_phone),
             'email': ac.email,
             'till_number': ac.till_number,
             'agentcompany_code': ac.agentcompany_code,
@@ -47,6 +47,17 @@ def get_agent_companies():
         } for ac in agent_companies]), 200
     except Exception as e:
         return jsonify({'error': str(e)}), 500
+
+def get_user_contact_info(contact_phone):
+    # if contact phone does not start with 0, add 0 at the beginning if it starts with country code like 
+    if contact_phone and not contact_phone.startswith('0'):
+        if contact_phone.startswith('+'):
+            return contact_phone  # Return as is if it starts with +
+        elif contact_phone.startswith('254'):
+            return '0' + contact_phone[3:]  # Convert to local format
+        else:
+            return '0' + contact_phone  # Return as is if it doesn't match known patterns
+    return contact_phone   
 
 @agent_company_bp.route('/', methods=['POST'])
 def create_agent_company():
@@ -106,10 +117,15 @@ def get_latest_company_code():
 def update_agent_company(id):
     try:
         agent_company = AgentCompany.query.get_or_404(id)
-        data = request.form
+
+        # Accept both JSON and form-data
+        data = request.get_json(silent=True) or request.form or {}
+
         company_id = data.get('company_id')
         if company_id and not Company.query.get(company_id):
             return jsonify({'error': 'Invalid company_id'}), 400
+
+        print("Update data:", data)
 
         agent_company.company_name = data.get('company_name', agent_company.company_name)
         agent_company.registration_number = data.get('registration_number', agent_company.registration_number)
@@ -129,12 +145,16 @@ def update_agent_company(id):
         agent_company.daily_transaction_limit = float(data.get('daily_transaction_limit', agent_company.daily_transaction_limit))
         agent_company.commission_rate = float(data.get('commission_rate', agent_company.commission_rate))
         agent_company.last_audit_date = datetime.strptime(data.get('last_audit_date'), '%Y-%m-%d').date() if data.get('last_audit_date') else agent_company.last_audit_date
+
         db.session.commit()
-        return jsonify({'message': 'Agent company updated successfully', 'agentCompany': {
-            'id': agent_company.id,
-            'company_name': agent_company.company_name,
-            'registration_number': agent_company.registration_number
-        }}), 200
+        return jsonify({
+            'message': 'Agent company updated successfully',
+            'agentCompany': {
+                'id': agent_company.id,
+                'company_name': agent_company.company_name,
+                'status': agent_company.status
+            }
+        }), 200
     except Exception as e:
         db.session.rollback()
         return jsonify({'error': str(e)}), 400
@@ -163,7 +183,7 @@ def validate_batch_agent_company():
         print("Excel columns:", df.columns.tolist())
         print("Data types:", df.dtypes.to_dict())  # Debug: check data types
         
-        required_columns = ['company_name', 'location_details', 'location(County)', 'agent_number', 'store_number']
+        required_columns = ['company_name', 'location_details', 'location(County)', 'agent_number', 'store_number', 'contact_details', 'status[active/inactive]']
         if not all(col in df.columns for col in required_columns):
             return jsonify({'error': 'Missing required columns'}), 400
 
@@ -186,6 +206,10 @@ def validate_batch_agent_company():
                 errors.append('Agent Number is required')
             if not row['store_number'] or pd.isna(row['store_number']):
                 errors.append('Store Number is required')
+            if not row['contact_details'] or pd.isna(row['contact_details']):
+                errors.append('Phone Number for Contact is required')
+            if not row['status[active/inactive]'] or pd.isna(row['status[active/inactive]']):
+                errors.append('Status on active/inactive is required')
             
             # Check for duplicate agent number (convert to string for comparison)
             if pd.notna(row['agent_number']) and row['agent_number'].strip():
@@ -233,7 +257,8 @@ def batch_create_agent_company():
                 location_details = str(row['location_details']).strip() if pd.notna(row.get('location_details')) else None
                 agent_number = str(row['agent_number']).strip() if pd.notna(row.get('agent_number')) else None
                 store_number = str(row['store_number']).strip() if pd.notna(row.get('store_number')) else None
-
+                contact_details = str(row['contact_details']).strip() if pd.notna(row.get('contact_details')) else None
+                status = str(row['status[active/inactive]']).strip() if pd.notna(row.get('status[active/inactive]')) else None
                 # Validate required fields
                 if not company_name:
                     errors.append(f"Row {index + 2}: Company name is required")
@@ -274,7 +299,7 @@ def batch_create_agent_company():
                     registration_number=registration_number,
                     location=location_county,  # Using county as location
                     location_details=location_details,
-                    contact_phone=str(row.get('contact_phone')).strip() if pd.notna(row.get('contact_phone')) else None,
+                    contact_phone=str(contact_details),
                     email=str(row.get('email')).strip() if pd.notna(row.get('email')) else None,
                     agentcompany_code=agent_company_code,
                     agent_number=agent_number,
@@ -282,7 +307,7 @@ def batch_create_agent_company():
                     till_number=str(row.get('till_number')).strip() if pd.notna(row.get('till_number')) else None,
                     established_date=datetime.strptime(row['established_date'], '%Y-%m-%d').date() if pd.notna(row.get('established_date')) and row.get('established_date') else None,
                     float_balance=float(row.get('float_balance', 0.0)),
-                    status=row.get('status', 'active'),
+                    status=status if status in ['active', 'inactive'] else 'inactive',
                     fraud_risk_level=row.get('fraud_risk_level', 'low'),
                     fraud_risk_description=str(row.get('fraud_risk_description')).strip() if pd.notna(row.get('fraud_risk_description')) else None,
                     daily_transaction_limit=float(row.get('daily_transaction_limit', 0.0)),

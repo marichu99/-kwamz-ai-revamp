@@ -55,7 +55,7 @@ class AgentCompany(db.Model):
         self.daily_transaction_limit = daily_transaction_limit
         self.commission_rate = commission_rate
         self.last_audit_date = last_audit_date
-        self.company_id = company_id
+        self.company_id = company_id     
 
     def __repr__(self):
         return f'<AgentCompany {self.company_name}>'

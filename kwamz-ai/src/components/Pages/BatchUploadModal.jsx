@@ -33,7 +33,9 @@ function BatchUploadModal({
         { key: 'location(County)', label: 'Location (County)' },
         { key: 'location_details', label: 'Location Details' },
         { key: 'agent_number', label: 'Agent Number' },
-        { key: 'store_number', label: 'Store Number' }
+        { key: 'store_number', label: 'Store Number' },
+        { key: 'contact_details', label: 'Contact Details (Phone Number)' },
+        { key: 'status[active/inactive]', label: 'Status' },
       ],
       errorField: 'errors'
     }

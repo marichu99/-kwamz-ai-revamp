@@ -16,6 +16,10 @@ jwt = JWTManager()
 from app.model.company import Company
 from app.model.agentcompany import AgentCompany
 from app.model.useragent import UserAgent
+from app.model.director import Director
+from app.model.shareholder import Shareholder
+from app.model.document import Document
+from app.model.payment import Payment
 
 def create_app():
     app = Flask(__name__, instance_relative_config=True)
@@ -42,6 +46,7 @@ def create_app():
     from app.controller.payment_controller import payment_bp
     from app.controller.useragent_controller import user_agent_bp
     from app.controller.agentcompany_controller import agent_company_bp
+    from app.controller.company_controller import company_bp
 
     app.register_blueprint(user_bp, url_prefix='/users')
     app.register_blueprint(document_bp, url_prefix='/document')
@@ -49,5 +54,6 @@ def create_app():
     app.register_blueprint(payment_bp, url_prefix='/payment')
     app.register_blueprint(user_agent_bp, url_prefix='/useragent')
     app.register_blueprint(agent_company_bp, url_prefix='/agentcompany')
+    app.register_blueprint(company_bp, url_prefix='/company')
 
     return app

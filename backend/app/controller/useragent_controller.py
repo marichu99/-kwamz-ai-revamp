@@ -364,13 +364,14 @@ def batch_create_useragents():
             if len(row) < 4:
                 errors.append(f"Invalid row (too few columns): {row}")
                 continue
+            
+            store_number =  str(row[4] or '') if row[4] else None,
 
             user_data = {
                 'firstname': str(row[0] or ''),
                 'lastname': str(row[1] or ''),
                 'idnumber': str(row[2] or ''),
                 'phone_number': str(row[3] or '') if row[3] else None,
-                'store_number': str(row[4] or '') if row[4] else None,
                 'is_authentic': False
             }
 
@@ -386,7 +387,7 @@ def batch_create_useragents():
 
             try:
                 new_user = UserAgent(**user_data)
-                existing_company_store = AgentCompany.query.filter_by(store_number=user_data['store_number']).first()
+                existing_company_store = AgentCompany.query.filter_by(store_number=store_number).first()
                 if existing_company_store:
                     new_user.agent_companies.append(existing_company_store)
                 db.session.add(new_user)

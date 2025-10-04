@@ -1,9 +1,11 @@
 import { useState, useEffect } from 'react';
 import { X, Building2, Calendar, MapPin, User, Mail, Users, Plus, Trash2, AlertCircle, Upload, FileText } from 'lucide-react';
+import config from '../../Config';
 
 function CompanyDetailsModal({ isOpen, onClose, onSubmit, isLoading, company }) {
   const [formData, setFormData] = useState({
     company_name: '',
+    company_number: '',
     registration_date: '',
     address: '',
     primary_owner_name: '',
@@ -15,13 +17,16 @@ function CompanyDetailsModal({ isOpen, onClose, onSubmit, isLoading, company }) 
     cr12_preview: '',
   });
   const [errors, setErrors] = useState({});
+  const [isUploadingCR12, setIsUploadingCR12] = useState(false);
+  const [isCR12Valid, setIsCR12Valid] = useState(false);
 
   useEffect(() => {
     if (company) {
       setFormData({
         company_name: company.company_name || '',
-        registration_date: company.registration_date 
-          ? new Date(company.registration_date).toISOString().split('T')[0] 
+        company_number: company.company_number || '',
+        registration_date: company.registration_date
+          ? new Date(company.registration_date).toISOString().split('T')[0]
           : '',
         address: company.address || '',
         primary_owner_name: company.primary_owner_name || '',
@@ -35,6 +40,7 @@ function CompanyDetailsModal({ isOpen, onClose, onSubmit, isLoading, company }) 
     } else {
       setFormData({
         company_name: '',
+        company_number: '',
         registration_date: '',
         address: '',
         primary_owner_name: '',
@@ -55,23 +61,75 @@ function CompanyDetailsModal({ isOpen, onClose, onSubmit, isLoading, company }) 
     setErrors((prev) => ({ ...prev, [name]: '' }));
   };
 
-  const handleFileChange = (e) => {
+  const handleFileChange = async (e) => {
     const file = e.target.files[0];
-    if (file) {
-      if (file.size > 5 * 1024 * 1024) {
-        setErrors((prev) => ({ ...prev, cr12_file: 'File size must be less than 5MB' }));
+    if (!file) return;
+
+    if (file.size > 5 * 1024 * 1024) {
+      setErrors((prev) => ({ ...prev, cr12_file: 'File size must be less than 5MB' }));
+      return;
+    }
+    if (file.type !== 'application/pdf') {
+      setErrors((prev) => ({ ...prev, cr12_file: 'File must be a PDF' }));
+      return;
+    }
+
+    setFormData((prev) => ({
+      ...prev,
+      cr12_file: file,
+      cr12_preview: URL.createObjectURL(file),
+    }));
+    setErrors((prev) => ({ ...prev, cr12_file: '', company_number: '' }));
+
+    // Upload and extract company number
+    setIsUploadingCR12(true);
+    try {
+      const uploadFormData = new FormData();
+      uploadFormData.append('file', file);
+
+      // Replace with your actual API URL
+      const API_URL = config.API_URL;
+      const res = await fetch(`${API_URL}/document/extract_cr12`, {
+        method: 'POST',
+        body: uploadFormData
+      });
+
+      const result = await res.json();
+
+      if (result.error) {
+        setIsCR12Valid(false);
+        setErrors((prev) => ({ ...prev, cr12_file: result.error }));
+        setFormData((prev) => ({
+          ...prev,
+          cr12_file: null,
+          cr12_preview: '',
+          company_number: '',
+        }));
         return;
       }
-      if (file.type !== 'application/pdf') {
-        setErrors((prev) => ({ ...prev, cr12_file: 'File must be a PDF' }));
-        return;
+
+      console.log('CR12 upload result:', result);
+
+      if (result.cr12) {
+        setFormData((prev) => ({
+          ...prev,
+          company_number: result.cr12,
+        }));
+
       }
+      setIsCR12Valid(true);
+    } catch (err) {
+      console.error('CR12 upload failed:', err);
+      setIsCR12Valid(false);
+      setErrors((prev) => ({ ...prev, cr12_file: 'Failed to process CR12 document' }));
       setFormData((prev) => ({
         ...prev,
-        cr12_file: file,
-        cr12_preview: URL.createObjectURL(file),
+        cr12_file: null,
+        cr12_preview: '',
+        company_number: '',
       }));
-      setErrors((prev) => ({ ...prev, cr12_file: '' }));
+    } finally {
+      setIsUploadingCR12(false);
     }
   };
 
@@ -133,7 +191,7 @@ function CompanyDetailsModal({ isOpen, onClose, onSubmit, isLoading, company }) 
   const calculateTotalShares = () => {
     const primaryShares = parseFloat(formData.primary_owner_shares) || 0;
     const secondaryShares = formData.secondary_shareholders.reduce(
-      (sum, sh) => sum + (parseFloat(sh.shares) || 0), 
+      (sum, sh) => sum + (parseFloat(sh.shares) || 0),
       0
     );
     return primaryShares + secondaryShares;
@@ -145,9 +203,12 @@ function CompanyDetailsModal({ isOpen, onClose, onSubmit, isLoading, company }) 
 
   const validateForm = () => {
     const newErrors = {};
-    
+
     if (!formData.company_name.trim()) {
       newErrors.company_name = 'Company name is required';
+    }
+    if (!formData.company_number.trim()) {
+      newErrors.company_number = 'Company number is required (upload CR12 document)';
     }
     if (!formData.address.trim()) {
       newErrors.address = 'Address is required';
@@ -155,7 +216,7 @@ function CompanyDetailsModal({ isOpen, onClose, onSubmit, isLoading, company }) 
     if (!formData.primary_owner_name.trim()) {
       newErrors.primary_owner_name = 'Primary owner name is required';
     }
-    
+
     if (!formData.primary_owner_email.trim()) {
       newErrors.primary_owner_email = 'Primary owner email is required';
     } else if (!validateEmail(formData.primary_owner_email)) {
@@ -178,7 +239,7 @@ function CompanyDetailsModal({ isOpen, onClose, onSubmit, isLoading, company }) 
       } else if (sh.email.trim() && !validateEmail(sh.email)) {
         newErrors[`shareholder_email_${i}`] = 'Invalid email format';
       }
-      
+
       const shares = parseFloat(sh.shares) || 0;
       if (shares < 0 || shares > 100) {
         newErrors[`shareholder_shares_${i}`] = 'Shares must be between 0 and 100';
@@ -204,9 +265,37 @@ function CompanyDetailsModal({ isOpen, onClose, onSubmit, isLoading, company }) 
       return;
     }
 
-    onSubmit(formData, company?.id, () => {
+    // Prepare the data for submission
+    const submitData = {
+      ...formData,
+      primary_owner_shares: parseFloat(formData.primary_owner_shares) || 0,
+      // Ensure proper serialization of arrays
+      secondary_shareholders: formData.secondary_shareholders.map(sh => ({
+        name: sh.name || '',
+        email: sh.email || '',
+        shares: parseFloat(sh.shares) || 0
+      })),
+      directors: formData.directors.map(dir => ({
+        name: dir.name || '',
+        email: dir.email || ''
+      })),
+      // Remove file preview from submission data
+      cr12_preview: undefined
+    };
+
+    // Remove undefined values
+    Object.keys(submitData).forEach(key => {
+      if (submitData[key] === undefined) {
+        delete submitData[key];
+      }
+    });
+
+    console.log('Submitting company data:', submitData);
+
+    onSubmit(submitData, company?.id, () => {
       setFormData({
         company_name: '',
+        company_number: '',
         registration_date: '',
         address: '',
         primary_owner_name: '',
@@ -267,11 +356,10 @@ function CompanyDetailsModal({ isOpen, onClose, onSubmit, isLoading, company }) 
                 name="company_name"
                 value={formData.company_name}
                 onChange={handleChange}
-                className={`w-full px-4 py-3 border-2 rounded-xl focus:outline-none focus:ring-2 focus:ring-emerald-500 dark:bg-slate-800 dark:text-white transition-all ${
-                  errors.company_name
+                className={`w-full px-4 py-3 border-2 rounded-xl focus:outline-none focus:ring-2 focus:ring-emerald-500 dark:bg-slate-800 dark:text-white transition-all ${errors.company_name
                     ? 'border-red-300 bg-red-50 dark:bg-red-900/20 dark:border-red-500'
                     : 'border-slate-200 dark:border-slate-700 hover:border-slate-300'
-                }`}
+                  }`}
                 placeholder="Enter company name"
                 disabled={isLoading}
               />
@@ -281,6 +369,35 @@ function CompanyDetailsModal({ isOpen, onClose, onSubmit, isLoading, company }) 
                   {errors.company_name}
                 </p>
               )}
+            </div>
+
+            <div>
+              <label className="flex items-center space-x-2 text-sm font-semibold text-slate-700 dark:text-slate-300 mb-2">
+                <Building2 className="w-4 h-4" />
+                <span>Company Number (PIN)</span>
+                <span className="text-red-500">*</span>
+              </label>
+              <input
+                type="text"
+                name="company_number"
+                value={formData.company_number}
+                readOnly
+                className={`w-full px-4 py-3 border-2 rounded-xl focus:outline-none bg-slate-100 dark:bg-slate-800/50 dark:text-white cursor-not-allowed transition-all ${errors.company_number
+                    ? 'border-red-300 dark:border-red-500'
+                    : 'border-slate-200 dark:border-slate-700'
+                  }`}
+                placeholder="Auto-filled from CR12 document"
+                disabled
+              />
+              {errors.company_number && (
+                <p className="text-red-500 text-xs mt-2 ml-1 flex items-center">
+                  <span className="mr-1">⚠</span>
+                  {errors.company_number}
+                </p>
+              )}
+              <p className="text-xs text-slate-500 dark:text-slate-400 mt-2 ml-1">
+                Upload CR12 document below to extract company number
+              </p>
             </div>
 
             <div>
@@ -309,11 +426,10 @@ function CompanyDetailsModal({ isOpen, onClose, onSubmit, isLoading, company }) 
                 name="address"
                 value={formData.address}
                 onChange={handleChange}
-                className={`w-full px-4 py-3 border-2 rounded-xl focus:outline-none focus:ring-2 focus:ring-emerald-500 dark:bg-slate-800 dark:text-white transition-all ${
-                  errors.address
+                className={`w-full px-4 py-3 border-2 rounded-xl focus:outline-none focus:ring-2 focus:ring-emerald-500 dark:bg-slate-800 dark:text-white transition-all ${errors.address
                     ? 'border-red-300 bg-red-50 dark:bg-red-900/20 dark:border-red-500'
                     : 'border-slate-200 dark:border-slate-700 hover:border-slate-300'
-                }`}
+                  }`}
                 placeholder="Company address"
                 disabled={isLoading}
               />
@@ -336,11 +452,10 @@ function CompanyDetailsModal({ isOpen, onClose, onSubmit, isLoading, company }) 
                 name="primary_owner_name"
                 value={formData.primary_owner_name}
                 onChange={handleChange}
-                className={`w-full px-4 py-3 border-2 rounded-xl focus:outline-none focus:ring-2 focus:ring-emerald-500 dark:bg-slate-800 dark:text-white transition-all ${
-                  errors.primary_owner_name
+                className={`w-full px-4 py-3 border-2 rounded-xl focus:outline-none focus:ring-2 focus:ring-emerald-500 dark:bg-slate-800 dark:text-white transition-all ${errors.primary_owner_name
                     ? 'border-red-300 bg-red-50 dark:bg-red-900/20 dark:border-red-500'
                     : 'border-slate-200 dark:border-slate-700 hover:border-slate-300'
-                }`}
+                  }`}
                 placeholder="Full name"
                 disabled={isLoading}
               />
@@ -363,11 +478,10 @@ function CompanyDetailsModal({ isOpen, onClose, onSubmit, isLoading, company }) 
                 name="primary_owner_email"
                 value={formData.primary_owner_email}
                 onChange={handleChange}
-                className={`w-full px-4 py-3 border-2 rounded-xl focus:outline-none focus:ring-2 focus:ring-emerald-500 dark:bg-slate-800 dark:text-white transition-all ${
-                  errors.primary_owner_email
+                className={`w-full px-4 py-3 border-2 rounded-xl focus:outline-none focus:ring-2 focus:ring-emerald-500 dark:bg-slate-800 dark:text-white transition-all ${errors.primary_owner_email
                     ? 'border-red-300 bg-red-50 dark:bg-red-900/20 dark:border-red-500'
                     : 'border-slate-200 dark:border-slate-700 hover:border-slate-300'
-                }`}
+                  }`}
                 placeholder="owner@example.com"
                 disabled={isLoading}
               />
@@ -393,11 +507,10 @@ function CompanyDetailsModal({ isOpen, onClose, onSubmit, isLoading, company }) 
                 min="0"
                 max="100"
                 step="0.01"
-                className={`w-full px-4 py-3 border-2 rounded-xl focus:outline-none focus:ring-2 focus:ring-emerald-500 dark:bg-slate-800 dark:text-white transition-all ${
-                  errors.primary_owner_shares
+                className={`w-full px-4 py-3 border-2 rounded-xl focus:outline-none focus:ring-2 focus:ring-emerald-500 dark:bg-slate-800 dark:text-white transition-all ${errors.primary_owner_shares
                     ? 'border-red-300 bg-red-50 dark:bg-red-900/20 dark:border-red-500'
                     : 'border-slate-200 dark:border-slate-700 hover:border-slate-300'
-                }`}
+                  }`}
                 placeholder="0.00"
                 disabled={isLoading}
               />
@@ -461,9 +574,8 @@ function CompanyDetailsModal({ isOpen, onClose, onSubmit, isLoading, company }) 
                         value={sh.email}
                         onChange={(e) => updateShareholder(index, 'email', e.target.value)}
                         placeholder="Email"
-                        className={`w-full px-3 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500 dark:bg-slate-900 dark:text-white text-sm ${
-                          errors[`shareholder_email_${index}`] ? 'border-red-500' : 'border-slate-300 dark:border-slate-600'
-                        }`}
+                        className={`w-full px-3 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500 dark:bg-slate-900 dark:text-white text-sm ${errors[`shareholder_email_${index}`] ? 'border-red-500' : 'border-slate-300 dark:border-slate-600'
+                          }`}
                         disabled={isLoading}
                       />
                       {errors[`shareholder_email_${index}`] && (
@@ -479,9 +591,8 @@ function CompanyDetailsModal({ isOpen, onClose, onSubmit, isLoading, company }) 
                         min="0"
                         max="100"
                         step="0.01"
-                        className={`w-full px-3 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500 dark:bg-slate-900 dark:text-white text-sm ${
-                          errors[`shareholder_shares_${index}`] ? 'border-red-500' : 'border-slate-300 dark:border-slate-600'
-                        }`}
+                        className={`w-full px-3 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500 dark:bg-slate-900 dark:text-white text-sm ${errors[`shareholder_shares_${index}`] ? 'border-red-500' : 'border-slate-300 dark:border-slate-600'
+                          }`}
                         disabled={isLoading}
                       />
                     </div>
@@ -544,9 +655,8 @@ function CompanyDetailsModal({ isOpen, onClose, onSubmit, isLoading, company }) 
                         value={dir.email}
                         onChange={(e) => updateDirector(index, 'email', e.target.value)}
                         placeholder="Email"
-                        className={`w-full px-3 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-teal-500 dark:bg-slate-900 dark:text-white text-sm ${
-                          errors[`director_email_${index}`] ? 'border-red-500' : 'border-slate-300 dark:border-slate-600'
-                        }`}
+                        className={`w-full px-3 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-teal-500 dark:bg-slate-900 dark:text-white text-sm ${errors[`director_email_${index}`] ? 'border-red-500' : 'border-slate-300 dark:border-slate-600'
+                          }`}
                         disabled={isLoading}
                       />
                       {errors[`director_email_${index}`] && (
@@ -580,13 +690,13 @@ function CompanyDetailsModal({ isOpen, onClose, onSubmit, isLoading, company }) 
               <FileText className="w-5 h-5" />
               <span>CR12 Document</span>
             </h3>
-            
+
             <div className="bg-gradient-to-br from-blue-50 to-indigo-50 dark:from-blue-900/20 dark:to-indigo-900/20 rounded-xl p-6 border-2 border-dashed border-blue-300 dark:border-blue-700">
               <div className="flex flex-col items-center justify-center space-y-4">
                 <div className="bg-blue-100 dark:bg-blue-900/40 p-4 rounded-full">
                   <Upload className="w-8 h-8 text-blue-600 dark:text-blue-400" />
                 </div>
-                
+
                 <div className="text-center">
                   <label htmlFor="cr12-upload" className="cursor-pointer">
                     <span className="text-blue-600 dark:text-blue-400 font-semibold hover:text-blue-700 dark:hover:text-blue-300 transition-colors">
@@ -605,10 +715,20 @@ function CompanyDetailsModal({ isOpen, onClose, onSubmit, isLoading, company }) 
                   accept=".pdf"
                   onChange={handleFileChange}
                   className="hidden"
-                  disabled={isLoading}
+                  disabled={isLoading || isUploadingCR12}
                 />
 
-                {formData.cr12_file && (
+                {isUploadingCR12 && (
+                  <div className="flex items-center space-x-2 text-blue-600 dark:text-blue-400">
+                    <svg className="animate-spin h-4 w-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                    </svg>
+                    <span className="text-sm font-medium">Extracting company number...</span>
+                  </div>
+                )}
+
+                {formData.cr12_file && !isUploadingCR12 && (
                   <div className="flex items-center space-x-2 bg-white dark:bg-slate-800 px-4 py-2 rounded-lg border border-slate-200 dark:border-slate-700">
                     <FileText className="w-4 h-4 text-emerald-600" />
                     <span className="text-sm text-slate-700 dark:text-slate-300 font-medium">
@@ -617,7 +737,7 @@ function CompanyDetailsModal({ isOpen, onClose, onSubmit, isLoading, company }) 
                   </div>
                 )}
 
-                {!formData.cr12_file && formData.cr12_preview && (
+                {!formData.cr12_file && formData.cr12_preview && !isUploadingCR12 && (
                   <a
                     href={formData.cr12_preview}
                     target="_blank"
@@ -653,7 +773,7 @@ function CompanyDetailsModal({ isOpen, onClose, onSubmit, isLoading, company }) 
             <button
               type="button"
               onClick={handleSubmit}
-              disabled={isLoading || sharesInvalid}
+              disabled={isLoading || sharesInvalid || isUploadingCR12 || !isCR12Valid}
               className="flex-1 py-3 px-4 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-700 hover:to-teal-700 text-white font-semibold rounded-xl transition-all focus:outline-none focus:ring-2 focus:ring-emerald-500 disabled:opacity-50 disabled:cursor-not-allowed shadow-lg shadow-emerald-500/30"
             >
               {isLoading ? (

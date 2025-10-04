@@ -1,10 +1,12 @@
 from flask import Blueprint, jsonify, request
 from app.utils.kra_pin_details import extract_taxpayer_details
+from app.utils.company_details import extract_company_number
 from app.model.payment import Payment
 from app.utils.police_clearance_details import extract_clearance_details
 from app.utils.user_service import UserService
 from app.utils.script import authenticate_kra_from_app
 import os
+import re
 
 document_bp = Blueprint('document', __name__)
 
@@ -39,7 +41,29 @@ def extract_kra_pin():
     finally:
         if os.path.exists(file_path):
             os.remove(file_path)
+            
+@document_bp.route('/extract_cr12', methods=['POST'])
 
+def extract_cr12():
+    file = request.files['file']
+    file_path = file.filename
+    file.save(file_path)
+
+    try:
+        extracted_details = extract_company_number(file_path)
+        if re.search("Not Found", extracted_details["PIN"], re.IGNORECASE):
+            return jsonify({"error": "Kindly upload a valid CR12 document."})
+
+        print(f"the extracted kra pin is {extracted_details['PIN']}")
+        return jsonify({
+            "cr12": extracted_details["PIN"],
+        })
+    except Exception as e:
+        return jsonify({"error": str(e)})
+    finally:
+        if os.path.exists(file_path):
+            os.remove(file_path)
+            
 @document_bp.route('/extract_police_clearance', methods=['POST'])
 def extract_police_clearance():
     file = request.files['file']

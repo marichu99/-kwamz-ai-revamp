@@ -233,19 +233,44 @@ function CompanyList() {
   };
 
   // Handle create or update company
+
+  // Handle create or update company
   const handleCreateOrUpdateCompany = async (formData, companyId, resetForm) => {
     setIsLoading(true);
     try {
       const data = new FormData();
-      for (const key in formData) {
-        if (key !== 'filePreview') {
-          data.append(key, formData[key]);
-        }
+
+      // Append simple fields
+      data.append('company_name', formData.company_name);
+      data.append('company_number', formData.company_number);
+      data.append('address', formData.address);
+      data.append('primary_owner_name', formData.primary_owner_name);
+      data.append('primary_owner_email', formData.primary_owner_email);
+      data.append('primary_owner_shares', formData.primary_owner_shares.toString());
+
+      if (formData.registration_date) {
+        data.append('registration_date', formData.registration_date);
+      }
+
+      // Append arrays as JSON strings
+      if (formData.secondary_shareholders && formData.secondary_shareholders.length > 0) {
+        data.append('secondary_shareholders', JSON.stringify(formData.secondary_shareholders));
+      }
+
+      if (formData.directors && formData.directors.length > 0) {
+        data.append('directors', JSON.stringify(formData.directors));
+      }
+
+      // Append file if exists
+      if (formData.cr12_file) {
+        data.append('cr12_file', formData.cr12_file);
       }
 
       const token = localStorage.getItem('token');
       const url = companyId ? `${config.API_URL}/company/${companyId}` : `${config.API_URL}/company`;
       const method = companyId ? 'PUT' : 'POST';
+
+      console.log('Submitting company data:', Object.fromEntries(data.entries())); // Debug log
 
       const res = await fetch(url, {
         method,
@@ -282,7 +307,6 @@ function CompanyList() {
       setIsLoading(false);
     }
   };
-
   return (
     <div className="bg-white dark:bg-slate-800 rounded-xl shadow-lg p-6">
       {/* Action Buttons */}
@@ -409,9 +433,8 @@ function CompanyList() {
             {paginatedCompanies.map((c, index) => (
               <tr
                 key={c.id}
-                className={`border-b border-slate-200 dark:border-slate-600 ${
-                  index % 2 === 0 ? 'bg-white dark:bg-slate-800' : 'bg-slate-50 dark:bg-slate-700/50'
-                } hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors`}
+                className={`border-b border-slate-200 dark:border-slate-600 ${index % 2 === 0 ? 'bg-white dark:bg-slate-800' : 'bg-slate-50 dark:bg-slate-700/50'
+                  } hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors`}
               >
                 <td className="px-4 py-3">
                   <input

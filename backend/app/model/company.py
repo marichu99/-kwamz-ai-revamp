@@ -2,6 +2,7 @@ from datetime import date, datetime
 from decimal import Decimal
 
 from app import db
+
 class Company(db.Model):
     __tablename__ = 'companies'
 
@@ -17,12 +18,13 @@ class Company(db.Model):
     last_compliance_audit = db.Column(db.Date, nullable=True)
 
     # Relationships
+    shareholders = db.relationship('Shareholder', backref='company', lazy=True, cascade='all, delete-orphan')
+    directors = db.relationship('Director', backref='company', lazy=True, cascade='all, delete-orphan')
     agent_companies = db.relationship('AgentCompany', backref='company', lazy=True)
-    # shareholders = db.relationship('Shareholder', backref='company', lazy=True, cascade='all, delete-orphan')
 
     def __init__(self, company_name, registration_number, address, company_code, registration_date=None,
                  compliance_status='compliant', total_float_balance=Decimal('0.00'), file_location=None,
-                 last_compliance_audit=None):
+                 last_compliance_audit=None, shareholders=None, directors=None):
         self.company_name = company_name
         self.registration_number = registration_number
         self.registration_date = registration_date
@@ -32,6 +34,10 @@ class Company(db.Model):
         self.total_float_balance = total_float_balance
         self.file_location = file_location
         self.last_compliance_audit = last_compliance_audit
+        if shareholders:
+            self.shareholders = shareholders
+        if directors:
+            self.directors = directors
 
     def __repr__(self):
         return f'<Company {self.company_name}>'

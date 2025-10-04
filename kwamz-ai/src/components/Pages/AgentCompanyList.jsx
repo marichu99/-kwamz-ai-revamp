@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
-import { Search, MoreVertical, Edit, Plus, Download, Upload, RefreshCw, Trash2 } from 'lucide-react';
+import { Search, MoreVertical, Edit, Plus, Download, Upload, RefreshCw, Trash2, Power, ChevronRight } from 'lucide-react';
 import axios from 'axios';
 import * as XLSX from 'xlsx';
 import config from '../../Config';
@@ -17,12 +17,14 @@ function AgentCompanyList() {
   const [currentPage, setCurrentPage] = useState(1);
   const [pageSize, setPageSize] = useState(10);
   const [isDropdownOpen, setIsDropdownOpen] = useState(false);
+  const [isTemplatesSubMenuOpen, setIsTemplatesSubMenuOpen] = useState(false);
   const [isBatchModalOpen, setIsBatchModalOpen] = useState(false);
   const [validAgentCompanies, setValidAgentCompanies] = useState([]);
   const [invalidAgentCompanies, setInvalidAgentCompanies] = useState([]);
   const [batchFile, setBatchFile] = useState(null);
   const { showToast } = useToast();
   const fileInputRef = useRef(null);
+  const dropdownRef = useRef(null);
 
   // Fetch agent companies from API
   const fetchAgentCompanies = async () => {
@@ -61,6 +63,18 @@ function AgentCompanyList() {
     setFilteredAgentCompanies(filtered);
     setCurrentPage(1);
   }, [searchTerm, agentCompanies]);
+
+  // Close dropdown when clicking outside
+  useEffect(() => {
+    const handleClickOutside = (event) => {
+      if (dropdownRef.current && !dropdownRef.current.contains(event.target)) {
+        setIsDropdownOpen(false);
+        setIsTemplatesSubMenuOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
 
   // Pagination calculations
   const totalItems = filteredAgentCompanies.length;
@@ -114,6 +128,7 @@ function AgentCompanyList() {
     }
     setIsAgentCompanyModalOpen(true);
     setIsDropdownOpen(false);
+    setIsTemplatesSubMenuOpen(false);
   };
 
   // Handle delete agent company
@@ -140,6 +155,46 @@ function AgentCompanyList() {
     } finally {
       setIsLoading(false);
       setIsDropdownOpen(false);
+      setIsTemplatesSubMenuOpen(false);
+    }
+  };
+
+  // Handle deactivate agent company
+  const handleDeactivateAgentCompany = async () => {
+    if (selectedAgentCompanyIds.length === 0) {
+      showToast('Please select at least one agent company', 'error');
+      return;
+    }
+
+    // Check if any selected companies are active
+    const hasActiveCompany = agentCompanies.some(
+      ac => selectedAgentCompanyIds.includes(ac.id) && ac.status === 'active'
+    );
+
+    const newStatus = hasActiveCompany ? 'inactive' : 'active';
+    const action = hasActiveCompany ? 'deactivated' : 'activated';
+
+    setIsLoading(true);
+    try {
+      const token = localStorage.getItem('token');
+      await Promise.all(
+        selectedAgentCompanyIds.map((id) =>
+          axios.put(
+            `${config.API_URL}/agentcompany/${id}`,
+            { status: newStatus },
+            { headers: { Authorization: `Bearer ${token}` } }
+          )
+        )
+      );
+      await fetchAgentCompanies();
+      showToast(`Selected agent companies ${action} successfully`, 'success');
+    } catch (error) {
+      console.error(`Error ${action.slice(0, -1)}ing agent companies:`, error.response?.data || error.message);
+      showToast(`Failed to ${action.slice(0, -1)}e agent companies`, 'error');
+    } finally {
+      setIsLoading(false);
+      setIsDropdownOpen(false);
+      setIsTemplatesSubMenuOpen(false);
     }
   };
 
@@ -148,14 +203,15 @@ function AgentCompanyList() {
     setSelectedAgentCompanyIds([]);
     setIsAgentCompanyModalOpen(true);
     setIsDropdownOpen(false);
+    setIsTemplatesSubMenuOpen(false);
   };
 
   // Handle download Excel template
   const handleDownloadExcelTemplate = () => {
-    const headers = ['company_name', 'location(County)', 'location_details', 'agent_number', 'store_number'];
+    const headers = ['company_name', 'location(County)', 'location_details', 'agent_number', 'store_number', 'contact_details', 'status[active/inactive]'];
     const sampleData = [
-      ['Pick n Go', 'Nairobi', 'CBD', '1234567890', '1234567890'],
-      ['Take Off', 'Baringo', 'Station', '0987654321', '0987654321']
+      ['Pick n Go', 'Nairobi', 'CBD', '1234567890', '1234567890', '0756236698', 'active'],
+      ['Take Off', 'Baringo', 'Station', '0987654321', '0987654321', '0756236698', 'inactive'],
     ];
 
     const ws = XLSX.utils.aoa_to_sheet([headers, ...sampleData]);
@@ -165,6 +221,7 @@ function AgentCompanyList() {
 
     showToast('Excel template downloaded successfully', 'success');
     setIsDropdownOpen(false);
+    setIsTemplatesSubMenuOpen(false);
   };
 
   // Handle batch upload preview
@@ -297,27 +354,28 @@ function AgentCompanyList() {
           <RefreshCw className={`w-4 h-4 ${isLoading ? 'animate-spin' : ''}`} />
           <span>Reload</span>
         </button>
-        <div className="relative">
+
+        <div className="relative" ref={dropdownRef}>
           <button
             onClick={() => setIsDropdownOpen(!isDropdownOpen)}
-            className="flex items-center space-x-2 py-2 px-4 bg-blue-500 text-white rounded-xl hover:bg-blue-600 transition-colors"
+            className="flex items-center space-x-2 py-2 px-4 bg-blue-500 text-white rounded-xl hover:bg-blue-600 transition-colors duration-200 shadow-sm hover:shadow-md transform hover:scale-105"
           >
             <MoreVertical className="w-4 h-4" />
             <span>Actions</span>
           </button>
           {isDropdownOpen && (
-            <div className="absolute right-0 mt-2 w-48 bg-white dark:bg-slate-700 rounded-xl shadow-lg z-10">
+            <div className="absolute right-0 mt-2 w-56 bg-white dark:bg-slate-800 rounded-lg shadow-2xl border border-slate-200 dark:border-slate-700 z-50 overflow-visible transition-all duration-200">
               <button
                 onClick={handleEditAgentCompany}
-                disabled={selectedAgentCompanyIds.length === 0}
-                className="w-full flex items-center px-4 py-2 text-sm text-slate-800 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-600 disabled:opacity-50 disabled:cursor-not-allowed"
+                disabled={selectedAgentCompanyIds.length === 0 || selectedAgentCompanyIds.length > 1}
+                className="w-full flex items-center px-4 py-3 text-sm text-slate-800 dark:text-slate-200 hover:bg-blue-50 dark:hover:bg-blue-900/30 disabled:opacity-50 disabled:cursor-not-allowed transition-colors duration-150"
               >
                 <Edit className="w-4 h-4 mr-2" />
                 Edit Selected
               </button>
               <button
                 onClick={handleOpenCreateModal}
-                className="w-full flex items-center px-4 py-2 text-sm text-slate-800 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-600"
+                className="w-full flex items-center px-4 py-3 text-sm text-slate-800 dark:text-slate-200 hover:bg-blue-50 dark:hover:bg-blue-900/30 transition-colors duration-150"
               >
                 <Plus className="w-4 h-4 mr-2" />
                 Create Agent Company
@@ -325,25 +383,63 @@ function AgentCompanyList() {
               <button
                 onClick={handleDeleteAgentCompany}
                 disabled={selectedAgentCompanyIds.length === 0}
-                className="w-full flex items-center px-4 py-2 text-sm text-slate-800 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-600 disabled:opacity-50 disabled:cursor-not-allowed"
+                className="w-full flex items-center px-4 py-3 text-sm text-slate-800 dark:text-slate-200 hover:bg-blue-50 dark:hover:bg-blue-900/30 disabled:opacity-50 disabled:cursor-not-allowed transition-colors duration-150"
               >
                 <Trash2 className="w-4 h-4 mr-2" />
                 Delete Selected
               </button>
               <button
-                onClick={handleDownloadExcelTemplate}
-                className="w-full flex items-center px-4 py-2 text-sm text-slate-800 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-600"
+                onClick={handleDeactivateAgentCompany}
+                disabled={selectedAgentCompanyIds.length === 0}
+                className="w-full flex items-center px-4 py-3 text-sm text-slate-800 dark:text-slate-200 hover:bg-blue-50 dark:hover:bg-blue-900/30 disabled:opacity-50 disabled:cursor-not-allowed transition-colors duration-150"
               >
-                <Download className="w-4 h-4 mr-2" />
-                Download Excel Template
+                <Power className="w-4 h-4 mr-2" />
+                {selectedAgentCompanyIds.length > 0 && agentCompanies.find(ac => selectedAgentCompanyIds.includes(ac.id) && ac.status === 'active')
+                  ? 'Deactivate Selected'
+                  : 'Activate Selected'}
               </button>
-              <button
-                onClick={() => fileInputRef.current.click()}
-                className="w-full flex items-center px-4 py-2 text-sm text-slate-800 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-600"
-              >
-                <Upload className="w-4 h-4 mr-2" />
-                Upload Batch Excel
-              </button>
+
+              {/* Templates submenu with better positioning */}
+              <div className="relative">
+                <button
+                  onClick={() => setIsTemplatesSubMenuOpen(!isTemplatesSubMenuOpen)}
+                  onMouseEnter={() => setIsTemplatesSubMenuOpen(true)}
+                  className="w-full flex items-center justify-between px-4 py-3 text-sm text-slate-800 dark:text-slate-200 hover:bg-blue-50 dark:hover:bg-blue-900/30 transition-colors duration-150"
+                >
+                  <div className="flex items-center">
+                    <Download className="w-4 h-4 mr-2" />
+                    Templates
+                  </div>
+                  <ChevronRight className="w-4 h-4 text-slate-500 dark:text-slate-400" />
+                </button>
+
+                {isTemplatesSubMenuOpen && (
+                  <div
+                    className="absolute right-full top-0 mr-1 w-56 bg-white dark:bg-slate-800 rounded-lg shadow-2xl border border-slate-200 dark:border-slate-700 z-[60]"
+                    onMouseEnter={() => setIsTemplatesSubMenuOpen(true)}
+                    onMouseLeave={() => setIsTemplatesSubMenuOpen(false)}
+                  >
+                    <button
+                      onClick={handleDownloadExcelTemplate}
+                      className="w-full flex items-center px-4 py-3 text-sm text-slate-800 dark:text-slate-200 hover:bg-blue-50 dark:hover:bg-blue-900/30 transition-colors duration-150 rounded-t-lg"
+                    >
+                      <Download className="w-4 h-4 mr-2" />
+                      Download Excel Template
+                    </button>
+                    <button
+                      onClick={() => {
+                        fileInputRef.current.click();
+                        setIsDropdownOpen(false);
+                        setIsTemplatesSubMenuOpen(false);
+                      }}
+                      className="w-full flex items-center px-4 py-3 text-sm text-slate-800 dark:text-slate-200 hover:bg-blue-50 dark:hover:bg-blue-900/30 transition-colors duration-150 rounded-b-lg"
+                    >
+                      <Upload className="w-4 h-4 mr-2" />
+                      Upload Batch Excel
+                    </button>
+                  </div>
+                )}
+              </div>
             </div>
           )}
         </div>
