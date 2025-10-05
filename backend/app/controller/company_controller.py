@@ -3,7 +3,8 @@ from app import db
 from app.service.company_service import CompanyService
 import json
 
-company_bp = Blueprint('company', __name__)
+company_bp = Blueprint('company', __name__, url_prefix='/company')
+
 company_service = CompanyService(db)
 
 @company_bp.route('/', methods=['GET', 'OPTIONS'])
@@ -14,7 +15,7 @@ def get_companies():
         return jsonify({'error': error}), 500
     return jsonify(companies), 200
 
-@company_bp.route('/', methods=['POST'])
+@company_bp.route('/', methods=['POST', 'OPTIONS'])
 @company_bp.route('/<int:company_id>', methods=['PUT'])
 def create_or_update_company(company_id=None):
     try:

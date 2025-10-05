@@ -47,6 +47,7 @@ class CompanyService:
                 'total_float_balance': float(c.total_float_balance) if c.total_float_balance else 0.0
             } for c in companies], None
         except Exception as e:
+            print(f"Error retrieving companies: {str(e)}")
             return None, str(e)
 
     def get_company_by_id(self, company_id):
@@ -198,6 +199,9 @@ class CompanyService:
                     company_name=company_data['company_name'],
                     registration_number=company_data['company_number'],
                     registration_date=registration_date,
+                    primary_owner_name=company_data['primary_owner_name'],
+                    primary_owner_email=company_data['primary_owner_email'],
+                    primary_owner_shares=company_data['primary_owner_shares'],
                     address=company_data['address'],
                     company_code=company_code,
                     file_location=file_location
@@ -256,7 +260,7 @@ class CompanyService:
         except IntegrityError as ie:
             self.db.session.rollback()
             print(f"Integrity error: {str(ie)}")        
-            return None, "Duplicate registration number or other constraint violation"
+            return None, "It is most likely that the company has already been onboarded"
         except SQLAlchemyError as sae:
             self.db.session.rollback()
             print(f"SQLAlchemy error: {str(sae)}")
