@@ -35,7 +35,7 @@ class Company(db.Model):
         self.company_code = company_code
         self.compliance_status = compliance_status
         self.primary_owner_name = primary_owner_name
-        self.primary_owner_email = primary_owner_email
+        self.primary_owner_email = primary_owner_email  
         self.primary_owner_shares = primary_owner_shares
         self.total_float_balance = total_float_balance
         self.file_location = file_location
