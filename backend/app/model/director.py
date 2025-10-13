@@ -11,12 +11,14 @@ class Director(db.Model):
     name = db.Column(db.String(100), nullable=False)
     email = db.Column(db.String(100), nullable=True)
     id_number = db.Column(db.String(50), nullable=True)
+    user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=True)
 
-    def __init__(self, company_id, name, email=None, id_number=None):
+    def __init__(self, company_id, name, email=None, id_number=None, user_id=None):
         self.company_id = company_id
         self.name = name
         self.email = email
         self.id_number = id_number
+        self.user_id = user_id
 
     def __repr__(self):
         return f'<Director {self.name}>'

@@ -22,18 +22,6 @@ const menuItems = [
         label: "Dashboard",
         badge: "New"
     },
-    // {
-    //     id: "analytics",
-    //     icon: BarChart3,
-    //     label: "Analytics",
-    //     submenu: [
-    //         { id: "overview", label: "Overview" },
-    //         { id: "reports", label: "Reports" },
-    //         { id: "insights", label: "Insights" },
-    //         { id: "metrics", label: "Key Metrics" },
-    //         { id: "performance", label: "Performance" }
-    //     ]
-    // },
     {
         id: "users",
         icon: Users,
@@ -41,7 +29,7 @@ const menuItems = [
         count: "12",
         submenu: [
             { id: "user-list", label: "Agents" },           
-            { id: "agent-list", label: "Agencies" },           
+            { id: "agent-list", label: "Tills" },           
             { id: "company-list", label: "Companies" },           
         ]
     },
@@ -53,7 +41,7 @@ const menuItems = [
             { id: "catalog", label: "Product Catalog" },
             { id: "inventory", label: "Inventory" },
             { id: "categories", label: "Categories" },
-            { id: "pricing", label: "Pricing" }
+            { id: "checkout", label: "Pricing" }
         ]
     },
     {

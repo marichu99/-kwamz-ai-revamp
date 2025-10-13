@@ -9,6 +9,8 @@ class Document(db.Model):
     auth_reason = db.Column(db.String(250), nullable=True)
     id_number = db.Column(db.String(20), nullable=True)
     authenticated = db.Column(db.Boolean, nullable=True)
+    user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=True)
+    
 
     def __repr__(self):
         return f'<Document {self.kra_pin or self.police_clearance_ref}>'

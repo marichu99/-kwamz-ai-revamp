@@ -1,8 +1,8 @@
 from playwright.sync_api import sync_playwright
 from PIL import Image
-from app import db
-from app.model.document import Document
-from app.model.useragent import UserAgent
+# from app import db
+# from app.model.document import Document
+# from app.model.useragent import UserAgent
 import pytesseract
 import re
 import sys
@@ -158,4 +158,56 @@ def authenticate_kra(page, kra_pin):
     except Exception:
         print("KRA PIN is invalid.")
         return "Invalid"
+    
+def solve_arithmetic_captcha(captcha_image_path: str) -> int:
+    """
+    Extract and solve arithmetic CAPTCHA from the image.
+    """
+    captcha_image = Image.open(captcha_image_path)
+    captcha_text = pytesseract.image_to_string(captcha_image, config="--psm 7").strip()
+    print(f"[INFO] Extracted CAPTCHA text: {captcha_text}")
 
+    match = re.match(r"(\d+)\s*([\+\-\*/xX])\s*(\d+)", captcha_text)
+    if not match:
+        raise ValueError(f"Invalid CAPTCHA format: {captcha_text}")
+
+    num1, operator, num2 = match.groups()
+    num1, num2 = int(num1), int(num2)
+
+    if operator in ("+",):
+        return num1 + num2
+    elif operator in ("-",):
+        return num1 - num2
+    elif operator in ("*", "x", "X"):
+        return num1 * num2
+    elif operator == "/":
+        return num1 // num2
+    else:
+        raise ValueError(f"Unsupported operator: {operator}")
+
+
+def fill_login_form(page, short_code: str, username: str, password: str):
+    """
+    Fill in the login form fields.
+    """
+    page.fill("//input[@id='shortCode']", short_code)
+    page.fill("//input[@id='userAccount']", username)
+    page.fill("//input[@id='password']", password)
+    print("[INFO] Login form fields filled successfully.")
+
+
+def capture_and_solve_captcha(page) -> str:
+    """
+    Capture CAPTCHA image, solve it, and return the result.
+    """
+    captcha_selector = "//img[@class='verifyCode-img-item']"
+    page.wait_for_selector(captcha_selector)
+
+    captcha_path = "captcha.png"
+    captcha_element = page.query_selector(captcha_selector)
+    captcha_element.screenshot(path=captcha_path)
+    print(f"[INFO] CAPTCHA image saved at {captcha_path}")
+
+    captcha_solution = solve_arithmetic_captcha(captcha_path)
+    print(f"[INFO] CAPTCHA solved: {captcha_solution}")
+    return str(captcha_solution)

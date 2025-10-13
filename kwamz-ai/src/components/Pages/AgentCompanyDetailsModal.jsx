@@ -1,5 +1,7 @@
 import { useState, useEffect, useRef } from 'react';
-import { X, Building2, MapPin, Phone, CreditCard, Hash, ChevronDown } from 'lucide-react';
+import { X, Building2, MapPin, Phone, CreditCard, Hash, ChevronDown, Check } from 'lucide-react';
+import axios from 'axios';
+import config from '../../Config';
 
 function AgentCompanyDetailsModal({ isOpen, onClose, onSubmit, isLoading, agentCompany }) {
   const [formData, setFormData] = useState({
@@ -10,11 +12,17 @@ function AgentCompanyDetailsModal({ isOpen, onClose, onSubmit, isLoading, agentC
     store_number: '',
     agent_number: '',
     agentcompany_code: '',
+    selected_company: null,
   });
   const [errors, setErrors] = useState({});
   const [searchQuery, setSearchQuery] = useState('');
   const [isDropdownOpen, setIsDropdownOpen] = useState(false);
+  const [companySearchQuery, setCompanySearchQuery] = useState('');
+  const [isCompanyDropdownOpen, setIsCompanyDropdownOpen] = useState(false);
+  const [companies, setCompanies] = useState([]);
+  const [loadingCompanies, setLoadingCompanies] = useState(false);
   const dropdownRef = useRef(null);
+  const companyDropdownRef = useRef(null);
 
   // List of all 47 Kenyan counties
   const counties = [
@@ -27,9 +35,46 @@ function AgentCompanyDetailsModal({ isOpen, onClose, onSubmit, isLoading, agentC
     'Trans Nzoia', 'Turkana', 'Uasin Gishu', 'Vihiga', 'Wajir', 'West Pokot'
   ];
 
+  // Fetch companies from API when modal opens
+  useEffect(() => {
+    const fetchCompanies = async () => {
+      if (!isOpen) return;
+
+      setLoadingCompanies(true);
+      try {
+        const token = localStorage.getItem('token');
+        const response = await axios.get(`${config.API_URL}/company`, {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+
+        console.log('Fetched companies:', response.data);
+        setCompanies(response.data);
+      } catch (error) {
+        console.error('Error fetching companies:', error);
+        // Fallback to demo data if API fails
+        setCompanies([
+          { id: 1, company_name: 'Safaricom Ltd' },
+          { id: 2, company_name: 'Equity Bank' },
+          { id: 3, company_name: 'KCB Bank' },
+          { id: 4, company_name: 'M-Pesa Holdings' },
+          { id: 5, company_name: 'Airtel Kenya' },
+        ]);
+      } finally {
+        setLoadingCompanies(false);
+      }
+    };
+
+    fetchCompanies();
+  }, [isOpen]);
+
   // Filter counties based on search query
   const filteredCounties = counties.filter((county) =>
     county.toLowerCase().includes(searchQuery.toLowerCase())
+  );
+
+  // Filter companies based on search query
+  const filteredCompanies = companies.filter((company) =>
+    company.company_name.toLowerCase().includes(companySearchQuery.toLowerCase())
   );
 
   useEffect(() => {
@@ -42,6 +87,7 @@ function AgentCompanyDetailsModal({ isOpen, onClose, onSubmit, isLoading, agentC
         store_number: agentCompany.store_number || '',
         agent_number: agentCompany.agent_number || '',
         agentcompany_code: agentCompany.agentcompany_code || '',
+        selected_company: agentCompany.selected_company|| null,
       });
     } else {
       setFormData({
@@ -52,18 +98,24 @@ function AgentCompanyDetailsModal({ isOpen, onClose, onSubmit, isLoading, agentC
         store_number: '',
         agent_number: '',
         agentcompany_code: '',
+        selected_company: null,
       });
     }
     setErrors({});
     setSearchQuery('');
+    setCompanySearchQuery('');
     setIsDropdownOpen(false);
-  }, [agentCompany]);
+    setIsCompanyDropdownOpen(false);
+  }, [agentCompany, isOpen]);
 
   // Close dropdown when clicking outside
   useEffect(() => {
     const handleClickOutside = (event) => {
       if (dropdownRef.current && !dropdownRef.current.contains(event.target)) {
         setIsDropdownOpen(false);
+      }
+      if (companyDropdownRef.current && !companyDropdownRef.current.contains(event.target)) {
+        setIsCompanyDropdownOpen(false);
       }
     };
     document.addEventListener('mousedown', handleClickOutside);
@@ -86,6 +138,27 @@ function AgentCompanyDetailsModal({ isOpen, onClose, onSubmit, isLoading, agentC
   const handleSearchChange = (e) => {
     setSearchQuery(e.target.value);
     setIsDropdownOpen(true);
+  };
+
+  const handleCompanySearchChange = (e) => {
+    setCompanySearchQuery(e.target.value);
+    setIsCompanyDropdownOpen(true);
+  };
+
+  const handleCompanySelect = (companyId) => {
+    setFormData((prev) => ({ ...prev, selected_company: companyId }));
+    setErrors((prev) => ({ ...prev, selected_company: '' }));
+    setCompanySearchQuery('');
+    setIsCompanyDropdownOpen(false);
+  };
+
+  const handleRemoveCompany = () => {
+    setFormData((prev) => ({ ...prev, selected_company: null }));
+  };
+
+  const getSelectedCompanyName = () => {
+    const selected = companies.find((company) => company.id === formData.selected_company);
+    return selected ? selected.company_name : null;
   };
 
   const validateForm = () => {
@@ -112,6 +185,9 @@ function AgentCompanyDetailsModal({ isOpen, onClose, onSubmit, isLoading, agentC
     } else if (!/^\d+$/.test(formData.agent_number)) {
       newErrors.agent_number = 'Agent number must contain only digits';
     }
+    if (!formData.selected_company) {
+      newErrors.selected_company = 'Please select a company';
+    }
     return newErrors;
   };
 
@@ -132,10 +208,13 @@ function AgentCompanyDetailsModal({ isOpen, onClose, onSubmit, isLoading, agentC
         store_number: '',
         agent_number: '',
         agentcompany_code: '',
+        selected_company: null,
       });
       setErrors({});
       setSearchQuery('');
+      setCompanySearchQuery('');
       setIsDropdownOpen(false);
+      setIsCompanyDropdownOpen(false);
     });
   };
 
@@ -143,8 +222,8 @@ function AgentCompanyDetailsModal({ isOpen, onClose, onSubmit, isLoading, agentC
 
   return (
     <div className="fixed inset-0 flex items-center justify-center bg-black/60 backdrop-blur-sm z-50 p-4">
-      <div className="bg-white dark:bg-slate-900 rounded-2xl shadow-2xl w-full max-w-2xl transform transition-all">
-        <div className="relative bg-gradient-to-r from-violet-600 via-purple-600 to-indigo-600 dark:from-violet-700 dark:via-purple-700 dark:to-indigo-700 rounded-t-2xl p-8">
+      <div className="bg-white dark:bg-slate-900 rounded-2xl shadow-2xl w-full max-w-3xl transform transition-all max-h-[90vh] overflow-y-auto">
+        <div className="sticky top-0 z-10 bg-gradient-to-r from-violet-600 via-purple-600 to-indigo-600 dark:from-violet-700 dark:via-purple-700 dark:to-indigo-700 rounded-t-2xl p-8">
           <div className="absolute inset-0 bg-black/10 rounded-t-2xl"></div>
           <div className="relative flex items-center justify-between">
             <div className="flex items-center space-x-4">
@@ -153,10 +232,10 @@ function AgentCompanyDetailsModal({ isOpen, onClose, onSubmit, isLoading, agentC
               </div>
               <div>
                 <h2 className="text-3xl font-bold text-white tracking-tight">
-                  {agentCompany ? 'Edit Agent Company' : 'New Agent Company'}
+                  {agentCompany ? 'Edit Agent Till' : 'New Agent Till'}
                 </h2>
                 <p className="text-purple-100 text-sm mt-1.5 font-medium">
-                  {agentCompany ? 'Update agent company information' : 'Register a new agent company'}
+                  {agentCompany ? 'Update agent till information' : 'Register a new agent till'}
                 </p>
               </div>
             </div>
@@ -175,7 +254,7 @@ function AgentCompanyDetailsModal({ isOpen, onClose, onSubmit, isLoading, agentC
             <div className="bg-gradient-to-br from-slate-50 to-slate-100 dark:from-slate-800 dark:to-slate-800/50 rounded-xl p-5 border-2 border-dashed border-slate-300 dark:border-slate-600 shadow-inner">
               <label className="flex items-center space-x-2 text-sm font-bold text-slate-600 dark:text-slate-400 mb-3">
                 <Hash className="w-4 h-4" />
-                <span>Agent Company Code</span>
+                <span>Agent Till Code</span>
               </label>
               <div className="bg-white dark:bg-slate-900 rounded-lg p-3 border border-slate-300 dark:border-slate-600">
                 <input
@@ -192,7 +271,7 @@ function AgentCompanyDetailsModal({ isOpen, onClose, onSubmit, isLoading, agentC
             <div className="md:col-span-2">
               <label className="flex items-center space-x-2 text-sm font-bold text-slate-700 dark:text-slate-300 mb-3">
                 <Building2 className="w-4 h-4 text-violet-600 dark:text-violet-400" />
-                <span>Agent Company Name</span>
+                <span>Agent Till Name</span>
                 <span className="text-red-500">*</span>
               </label>
               <input
@@ -200,18 +279,94 @@ function AgentCompanyDetailsModal({ isOpen, onClose, onSubmit, isLoading, agentC
                 name="company_name"
                 value={formData.company_name}
                 onChange={handleChange}
-                className={`w-full px-4 py-3.5 border-2 rounded-xl focus:outline-none focus:ring-2 focus:ring-violet-500 dark:bg-slate-800 dark:text-white transition-all font-medium ${
-                  errors.company_name
+                className={`w-full px-4 py-3.5 border-2 rounded-xl focus:outline-none focus:ring-2 focus:ring-violet-500 dark:bg-slate-800 dark:text-white transition-all font-medium ${errors.company_name
                     ? 'border-red-300 bg-red-50 dark:bg-red-900/20 dark:border-red-500'
                     : 'border-slate-200 dark:border-slate-700 hover:border-slate-300 dark:hover:border-slate-600'
-                }`}
-                placeholder="Enter agent company name"
+                  }`}
+                placeholder="Enter agent till name"
                 disabled={isLoading}
               />
               {errors.company_name && (
                 <p className="text-red-500 text-xs mt-2 ml-1 flex items-center font-medium">
                   <span className="mr-1">⚠</span>
                   {errors.company_name}
+                </p>
+              )}
+            </div>
+
+            <div className="md:col-span-2" ref={companyDropdownRef}>
+              <label className="flex items-center space-x-2 text-sm font-bold text-slate-700 dark:text-slate-300 mb-3">
+                <Building2 className="w-4 h-4 text-violet-600 dark:text-violet-400" />
+                <span>Associated Company</span>
+                <span className="text-red-500">*</span>
+              </label>
+              <div className="relative">
+                <div
+                  className={`w-full px-4 py-3.5 border-2 rounded-xl focus:outline-none focus:ring-2 focus:ring-violet-500 dark:bg-slate-800 dark:text-white transition-all font-medium flex items-center justify-between cursor-pointer ${errors.selected_company
+                      ? 'border-red-300 bg-red-50 dark:bg-red-900/20 dark:border-red-500'
+                      : 'border-slate-200 dark:border-slate-700 hover:border-slate-300 dark:hover:border-slate-600'
+                    }`}
+                  onClick={() => !isLoading && !loadingCompanies && setIsCompanyDropdownOpen(!isCompanyDropdownOpen)}
+                >
+                  {formData.selected_company ? (
+                    <div className="flex items-center justify-between w-full">
+                      <span>{getSelectedCompanyName()}</span>
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleRemoveCompany();
+                        }}
+                        className="hover:bg-violet-200 dark:hover:bg-violet-800 rounded-full p-0.5 transition-colors"
+                        disabled={isLoading}
+                      >
+                        <X className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+                  ) : (
+                    <div className="flex items-center justify-between w-full">
+                      <span className="text-slate-500 dark:text-slate-400">
+                        {loadingCompanies ? 'Loading companies...' : 'Select a company'}
+                      </span>
+                      <ChevronDown className="w-5 h-5 text-violet-600 dark:text-violet-400" />
+                    </div>
+                  )}
+                </div>
+                {isCompanyDropdownOpen && !loadingCompanies && (
+                  <div className="absolute z-20 w-full mt-1 bg-white dark:bg-slate-800 border-2 border-slate-200 dark:border-slate-700 rounded-xl shadow-lg max-h-60 overflow-y-auto">
+                    <input
+                      type="text"
+                      value={companySearchQuery}
+                      onChange={handleCompanySearchChange}
+                      placeholder="Search companies..."
+                      className="w-full px-4 py-2.5 border-b border-slate-200 dark:border-slate-700 dark:text-white focus:outline-none sticky top-0 bg-white dark:bg-slate-800"
+                      disabled={isLoading}
+                      onClick={(e) => e.stopPropagation()}
+                    />
+                    {filteredCompanies.length > 0 ? (
+                      filteredCompanies.map((company) => (
+                        <div
+                          key={company.id}
+                          className="px-4 py-2.5 hover:bg-slate-100 dark:hover:bg-slate-700 cursor-pointer dark:text-white flex items-center justify-between"
+                          onClick={() => handleCompanySelect(company.id)}
+                        >
+                          <span>{company.company_name}</span>
+                          {formData.selected_company === company.id && (
+                            <Check className="w-5 h-5 text-violet-600 dark:text-violet-400" />
+                          )}
+                        </div>
+                      ))
+                    ) : (
+                      <div className="px-4 py-2.5 text-slate-500 dark:text-slate-400">
+                        No companies found
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+              {errors.selected_company && (
+                <p className="text-red-500 text-xs mt-2 ml-1 flex items-center font-medium">
+                  <span className="mr-1">⚠</span>
+                  {errors.selected_company}
                 </p>
               )}
             </div>
@@ -224,11 +379,10 @@ function AgentCompanyDetailsModal({ isOpen, onClose, onSubmit, isLoading, agentC
               </label>
               <div className="relative">
                 <div
-                  className={`w-full px-4 py-3.5 border-2 rounded-xl focus:outline-none focus:ring-2 focus:ring-violet-500 dark:bg-slate-800 dark:text-white transition-all font-medium flex items-center justify-between cursor-pointer ${
-                    errors.location
+                  className={`w-full px-4 py-3.5 border-2 rounded-xl focus:outline-none focus:ring-2 focus:ring-violet-500 dark:bg-slate-800 dark:text-white transition-all font-medium flex items-center justify-between cursor-pointer ${errors.location
                       ? 'border-red-300 bg-red-50 dark:bg-red-900/20 dark:border-red-500'
                       : 'border-slate-200 dark:border-slate-700 hover:border-slate-300 dark:hover:border-slate-600'
-                  }`}
+                    }`}
                   onClick={() => !isLoading && setIsDropdownOpen(!isDropdownOpen)}
                 >
                   <span>{formData.location || 'Select a county'}</span>
@@ -241,7 +395,7 @@ function AgentCompanyDetailsModal({ isOpen, onClose, onSubmit, isLoading, agentC
                       value={searchQuery}
                       onChange={handleSearchChange}
                       placeholder="Search counties..."
-                      className="w-full px-4 py-2.5 border-b border-slate-200 dark:border-slate-700  dark:text-white focus:outline-none sticky top-0 bg-white dark:bg-slate-800"
+                      className="w-full px-4 py-2.5 border-b border-slate-200 dark:border-slate-700 dark:text-white focus:outline-none sticky top-0 bg-white dark:bg-slate-800"
                       disabled={isLoading}
                     />
                     {filteredCounties.length > 0 ? (
@@ -281,11 +435,10 @@ function AgentCompanyDetailsModal({ isOpen, onClose, onSubmit, isLoading, agentC
                 name="location_details"
                 value={formData.location_details}
                 onChange={handleChange}
-                className={`w-full px-4 py-3.5 border-2 rounded-xl focus:outline-none focus:ring-2 focus:ring-violet-500 dark:bg-slate-800 dark:text-white transition-all font-medium ${
-                  errors.location_details
+                className={`w-full px-4 py-3.5 border-2 rounded-xl focus:outline-none focus:ring-2 focus:ring-violet-500 dark:bg-slate-800 dark:text-white transition-all font-medium ${errors.location_details
                     ? 'border-red-300 bg-red-50 dark:bg-red-900/20 dark:border-red-500'
                     : 'border-slate-200 dark:border-slate-700 hover:border-slate-300 dark:hover:border-slate-600'
-                }`}
+                  }`}
                 placeholder="e.g., Westlands, CBD"
                 disabled={isLoading}
               />
@@ -298,31 +451,28 @@ function AgentCompanyDetailsModal({ isOpen, onClose, onSubmit, isLoading, agentC
             </div>
 
             <div>
-              <div>
-                <label className="flex items-center space-x-2 text-sm font-bold text-slate-700 dark:text-slate-300 mb-3">
-                  <Phone className="w-4 h-4 text-violet-600 dark:text-violet-400" />
-                  <span>Contact Phone</span>
-                </label>
-                <input
-                  type="text"
-                  name="contact_phone"
-                  value={formData.contact_phone}
-                  onChange={handleChange}
-                  className={`w-full px-4 py-3.5 border-2 rounded-xl focus:outline-none focus:ring-2 focus:ring-violet-500 dark:bg-slate-800 dark:text-white transition-all font-medium ${
-                    errors.contact_phone
-                      ? 'border-red-300 bg-red-50 dark:bg-red-900/20 dark:border-red-500'
-                      : 'border-slate-200 dark:border-slate-700 hover:border-slate-300 dark:hover:border-slate-600'
+              <label className="flex items-center space-x-2 text-sm font-bold text-slate-700 dark:text-slate-300 mb-3">
+                <Phone className="w-4 h-4 text-violet-600 dark:text-violet-400" />
+                <span>Contact Phone</span>
+              </label>
+              <input
+                type="text"
+                name="contact_phone"
+                value={formData.contact_phone}
+                onChange={handleChange}
+                className={`w-full px-4 py-3.5 border-2 rounded-xl focus:outline-none focus:ring-2 focus:ring-violet-500 dark:bg-slate-800 dark:text-white transition-all font-medium ${errors.contact_phone
+                    ? 'border-red-300 bg-red-50 dark:bg-red-900/20 dark:border-red-500'
+                    : 'border-slate-200 dark:border-slate-700 hover:border-slate-300 dark:hover:border-slate-600'
                   }`}
-                  placeholder="+254712345678"
-                  disabled={isLoading}
-                />
-                {errors.contact_phone && (
-                  <p className="text-red-500 text-xs mt-2 ml-1 flex items-center font-medium">
-                    <span className="mr-1">⚠</span>
-                    {errors.contact_phone}
-                  </p>
-                )}
-              </div>
+                placeholder="+254712345678"
+                disabled={isLoading}
+              />
+              {errors.contact_phone && (
+                <p className="text-red-500 text-xs mt-2 ml-1 flex items-center font-medium">
+                  <span className="mr-1">⚠</span>
+                  {errors.contact_phone}
+                </p>
+              )}
             </div>
 
             <div className="grid grid-cols-2 gap-6">
@@ -337,11 +487,10 @@ function AgentCompanyDetailsModal({ isOpen, onClose, onSubmit, isLoading, agentC
                   name="agent_number"
                   value={formData.agent_number}
                   onChange={handleChange}
-                  className={`w-full px-4 py-3.5 border-2 rounded-xl focus:outline-none focus:ring-2 focus:ring-violet-500 dark:bg-slate-800 dark:text-white transition-all font-medium ${
-                    errors.agent_number
+                  className={`w-full px-4 py-3.5 border-2 rounded-xl focus:outline-none focus:ring-2 focus:ring-violet-500 dark:bg-slate-800 dark:text-white transition-all font-medium ${errors.agent_number
                       ? 'border-red-300 bg-red-50 dark:bg-red-900/20 dark:border-red-500'
                       : 'border-slate-200 dark:border-slate-700 hover:border-slate-300 dark:hover:border-slate-600'
-                  }`}
+                    }`}
                   placeholder="Enter agent number"
                   disabled={isLoading}
                 />
@@ -353,31 +502,29 @@ function AgentCompanyDetailsModal({ isOpen, onClose, onSubmit, isLoading, agentC
                 )}
               </div>
               <div>
-
-              <label className="flex items-center space-x-2 text-sm font-bold text-slate-700 dark:text-slate-300 mb-3">
-                <CreditCard className="w-4 h-4 text-violet-600 dark:text-violet-400" />
-                <span>Store Number</span>
-                <span className="text-red-500">*</span>
-              </label>
-              <input
-                type="text"
-                name="store_number"
-                value={formData.store_number}
-                onChange={handleChange}
-                className={`w-full px-4 py-3.5 border-2 rounded-xl focus:outline-none focus:ring-2 focus:ring-violet-500 dark:bg-slate-800 dark:text-white transition-all font-medium ${
-                  errors.store_number
-                    ? 'border-red-300 bg-red-50 dark:bg-red-900/20 dark:border-red-500'
-                    : 'border-slate-200 dark:border-slate-700 hover:border-slate-300 dark:hover:border-slate-600'
-                }`}
-                placeholder="Enter store number"
-                disabled={isLoading}
-              />
-              {errors.store_number && (
-                <p className="text-red-500 text-xs mt-2 ml-1 flex items-center font-medium">
-                  <span className="mr-1">⚠</span>
-                  {errors.store_number}
-                </p>
-              )}
+                <label className="flex items-center space-x-2 text-sm font-bold text-slate-700 dark:text-slate-300 mb-3">
+                  <CreditCard className="w-4 h-4 text-violet-600 dark:text-violet-400" />
+                  <span>Store Number</span>
+                  <span className="text-red-500">*</span>
+                </label>
+                <input
+                  type="text"
+                  name="store_number"
+                  value={formData.store_number}
+                  onChange={handleChange}
+                  className={`w-full px-4 py-3.5 border-2 rounded-xl focus:outline-none focus:ring-2 focus:ring-violet-500 dark:bg-slate-800 dark:text-white transition-all font-medium ${errors.store_number
+                      ? 'border-red-300 bg-red-50 dark:bg-red-900/20 dark:border-red-500'
+                      : 'border-slate-200 dark:border-slate-700 hover:border-slate-300 dark:hover:border-slate-600'
+                    }`}
+                  placeholder="Enter store number"
+                  disabled={isLoading}
+                />
+                {errors.store_number && (
+                  <p className="text-red-500 text-xs mt-2 ml-1 flex items-center font-medium">
+                    <span className="mr-1">⚠</span>
+                    {errors.store_number}
+                  </p>
+                )}
               </div>
             </div>
           </div>
@@ -394,7 +541,7 @@ function AgentCompanyDetailsModal({ isOpen, onClose, onSubmit, isLoading, agentC
             <button
               type="button"
               onClick={handleSubmit}
-              disabled={isLoading}
+              disabled={isLoading || loadingCompanies}
               className="flex-1 py-3.5 px-5 bg-gradient-to-r from-violet-600 via-purple-600 to-indigo-600 hover:from-violet-700 hover:via-purple-700 hover:to-indigo-700 text-white font-bold rounded-xl transition-all shadow-lg shadow-violet-500/40 hover:shadow-xl hover:shadow-violet-500/50 disabled:opacity-50 disabled:cursor-not-allowed transform hover:scale-[1.02]"
             >
               {isLoading ? (

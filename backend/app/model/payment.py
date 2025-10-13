@@ -13,6 +13,7 @@ class Payment(db.Model):
     checkout_id = db.Column(db.String(100), nullable=True)
     reference_code = db.Column(db.String(80), nullable=True)
     result_desc = db.Column(db.String(200), nullable=True)
+    user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=True)
 
     # Relationship (optional, enables access like `payment.user`)
     user = db.relationship('User', backref=db.backref('payments', lazy=True))

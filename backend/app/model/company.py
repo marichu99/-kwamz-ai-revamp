@@ -19,6 +19,7 @@ class Company(db.Model):
     primary_owner_shares = db.Column(db.Numeric(precision=15, scale=2), default=Decimal('0.00'), nullable=True)
     file_location = db.Column(db.Text, nullable=True)  # Storage path for CR12 document
     last_compliance_audit = db.Column(db.Date, nullable=True)
+    user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=True)
 
     # Relationships
     shareholders = db.relationship('Shareholder', backref='company', lazy=True, cascade='all, delete-orphan')
@@ -27,7 +28,7 @@ class Company(db.Model):
 
     def __init__(self, company_name, registration_number, address, company_code, registration_date=None,
                  compliance_status='compliant',primary_owner_name=None,primary_owner_email=None,primary_owner_shares=Decimal('0.00'), total_float_balance=Decimal('0.00'), file_location=None,
-                 last_compliance_audit=None, shareholders=None, directors=None):
+                 last_compliance_audit=None, shareholders=None, directors=None, user_id=None):
         self.company_name = company_name
         self.registration_number = registration_number
         self.registration_date = registration_date
@@ -40,6 +41,7 @@ class Company(db.Model):
         self.total_float_balance = total_float_balance
         self.file_location = file_location
         self.last_compliance_audit = last_compliance_audit
+        self.user_id = user_id
         if shareholders:
             self.shareholders = shareholders
         if directors:

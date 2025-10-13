@@ -30,7 +30,6 @@ class CompanyService:
             file.save(file_path)
             return file_path
         return None
-
     def get_companies(self):
         """Retrieve all companies."""
         try:
@@ -38,18 +37,29 @@ class CompanyService:
             return [{
                 'id': c.id,
                 'company_name': c.company_name,
-                'registration_number': c.registration_number,
+                'company_number': c.registration_number,  # Changed to match frontend
+                'registration_date': c.registration_date.isoformat() if c.registration_date else None,  # Format date
                 'address': c.address,
                 'primary_owner_name': c.primary_owner_name,
-                'primary_owner_id': getattr(c, 'primary_owner_id', None),  # Handle if not present
-                'file_location': c.file_location,
+                'primary_owner_email': c.primary_owner_email,  # Added this field
+                'primary_owner_shares': float(c.primary_owner_shares) if c.primary_owner_shares else 0.0,
+                'secondary_shareholders': [{
+                    'name': sh.name,
+                    'email': sh.email,
+                    'shares': float(sh.shares) if sh.shares else 0.0
+                } for sh in c.shareholders if sh.name != c.primary_owner_name],  
+                'directors': [{
+                    'name': dir.name,
+                    'email': dir.email
+                } for dir in c.directors],  # Assuming directors relationship
+                'cr12_file_location': c.file_location,  # For preview
                 'compliance_status': c.compliance_status,
                 'total_float_balance': float(c.total_float_balance) if c.total_float_balance else 0.0
             } for c in companies], None
         except Exception as e:
             print(f"Error retrieving companies: {str(e)}")
             return None, str(e)
-
+        
     def get_company_by_id(self, company_id):
         """Retrieve a company by ID."""
         return self.db.session.query(Company).filter_by(id=company_id).first()
@@ -60,34 +70,130 @@ class CompanyService:
         self.db.session.add(company)
         self.db.session.commit()
         return company
-
+    
     def update_company(self, company_id, update_data, file=None):
-        """Update an existing company."""
+        """Update an existing company with relationships."""
         company = self.get_company_by_id(company_id)
         if not company:
             return None, "Company not found"
 
         try:
+            # Handle file upload
             file_location = company.file_location
             if file and self.allowed_file(file.filename):
                 file_location = self.save_file(file)
 
-            for key, value in update_data.items():
-                if key == 'total_float_balance' and value:
-                    value = Decimal(str(value))
-                setattr(company, key, value)
+            # Update basic company fields
+            basic_fields = [
+                'company_name', 'registration_number', 'registration_date', 
+                'address', 'primary_owner_name', 'primary_owner_email',
+                'primary_owner_shares', 'total_float_balance', 'compliance_status'
+            ]
+            
+            for field in basic_fields:
+                if field in update_data:
+                    value = update_data[field]
+                    if field in ['primary_owner_shares', 'total_float_balance'] and value is not None:
+                        value = Decimal(str(value))
+                    setattr(company, field, value)
+
+            # Update file location if new file was uploaded
             if file_location:
                 company.file_location = file_location
+
+            # Handle shareholders relationships
+            if 'secondary_shareholders' in update_data:
+                shareholders_data = update_data['secondary_shareholders']
+                existing_shareholders = {sh.email: sh for sh in company.shareholders if sh.email}
+                
+                # Process each shareholder from the update data
+                for sh_data in shareholders_data:
+                    email = sh_data.get('email', '').strip().lower()
+                    name = sh_data.get('name', '')
+                    shares = Decimal(str(sh_data.get('shares', 0)))
+                    
+                    if email:  # Only process if email exists
+                        if email in existing_shareholders:
+                            # Update existing shareholder
+                            shareholder = existing_shareholders[email]
+                            shareholder.name = name
+                            shareholder.shares = shares
+                        else:
+                            # Create new shareholder
+                            shareholder = Shareholder(
+                                name=name,
+                                email=email,
+                                shares=shares,
+                                company_id=company.id
+                            )
+                            self.db.session.add(shareholder)
+                
+                # Remove shareholders that are no longer in the update data
+                updated_emails = {sh.get('email', '').strip().lower() for sh in shareholders_data if sh.get('email')}
+                for existing_email, shareholder in existing_shareholders.items():
+                    if existing_email not in updated_emails:
+                        self.db.session.delete(shareholder)
+
+            # Handle directors relationships
+            if 'directors' in update_data:
+                directors_data = update_data['directors']
+                existing_directors = {dir.email: dir for dir in company.directors if dir.email}
+                
+                # Process each director from the update data
+                for dir_data in directors_data:
+                    email = dir_data.get('email', '').strip().lower()
+                    name = dir_data.get('name', '')
+                    
+                    if email:  # Only process if email exists
+                        if email in existing_directors:
+                            # Update existing director
+                            director = existing_directors[email]
+                            director.name = name
+                        else:
+                            # Create new director
+                            director = Director(
+                                name=name,
+                                email=email,
+                                company_id=company.id
+                            )
+                            self.db.session.add(director)
+                
+                # Remove directors that are no longer in the update data
+                updated_emails = {dir.get('email', '').strip().lower() for dir in directors_data if dir.get('email')}
+                for existing_email, director in existing_directors.items():
+                    if existing_email not in updated_emails:
+                        self.db.session.delete(director)
+
             self.db.session.commit()
+            
+            # Return complete company data including relationships
             return {
                 'id': company.id,
                 'company_name': company.company_name,
-                'registration_number': company.registration_number
+                'registration_number': company.registration_number,
+                'registration_date': company.registration_date.isoformat() if company.registration_date else None,
+                'address': company.address,
+                'primary_owner_name': company.primary_owner_name,
+                'primary_owner_email': company.primary_owner_email,
+                'primary_owner_shares': float(company.primary_owner_shares) if company.primary_owner_shares else 0.0,
+                'file_location': company.file_location,
+                'compliance_status': company.compliance_status,
+                'total_float_balance': float(company.total_float_balance) if company.total_float_balance else 0.0,
+                'secondary_shareholders': [{
+                    'name': sh.name,
+                    'email': sh.email,
+                    'shares': float(sh.shares) if sh.shares else 0.0
+                } for sh in company.shareholders],
+                'directors': [{
+                    'name': dir.name,
+                    'email': dir.email
+                } for dir in company.directors]
             }, None
+            
         except Exception as e:
             self.db.session.rollback()
             return None, str(e)
-
+        
     def delete_company(self, company_id):
         """Delete a company by ID."""
         company = self.get_company_by_id(company_id)

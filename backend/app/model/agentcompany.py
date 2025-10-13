@@ -25,18 +25,13 @@ class AgentCompany(db.Model):
     commission_rate = db.Column(db.Numeric(precision=5, scale=2), default=Decimal('0.00'), nullable=True)
     last_audit_date = db.Column(db.Date, nullable=True)
     company_id = db.Column(db.Integer, db.ForeignKey('companies.id'), nullable=True)
-
-    # REMOVE this line - the relationship is already defined via backref in UserAgent
-    # user_agents = db.relationship('UserAgent', 
-    #                              secondary=user_agent_companies,
-    #                              back_populates='agent_companies',
-    #                              lazy='dynamic')
+    user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=True)
 
     def __init__(self, company_name, registration_number, location, contact_phone=None, email=None,agentcompany_code=None, 
                  established_date=None, float_balance=Decimal('0.00'), fraud_risk_level='low', 
                  fraud_risk_description=None, status='active', till_number=None,location_details=None,store_number=None,agent_number=None, 
                  daily_transaction_limit=Decimal('0.00'), commission_rate=Decimal('0.00'), 
-                 last_audit_date=None, company_id=None):
+                 last_audit_date=None, company_id=None, user_id=None):
         self.company_name = company_name
         self.registration_number = registration_number
         self.location = location
@@ -56,6 +51,7 @@ class AgentCompany(db.Model):
         self.commission_rate = commission_rate
         self.last_audit_date = last_audit_date
         self.company_id = company_id     
+        self.user_id = user_id     
 
     def __repr__(self):
         return f'<AgentCompany {self.company_name}>'

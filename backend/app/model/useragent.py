@@ -21,6 +21,7 @@ class UserAgent(db.Model):
     authenticity_desc = db.Column(db.String(255), nullable=True)       
     image_loc = db.Column(db.Text, nullable=True)
     date_of_birth = db.Column(db.Date, nullable=True)
+    user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=True)
     
     # Many-to-many relationship (REMOVE the table definition from here)
     agent_companies = db.relationship('AgentCompany', 
@@ -29,7 +30,7 @@ class UserAgent(db.Model):
                                     lazy='select')
 
     def __init__(self, firstname, lastname, idnumber, phone_number=None,
-                 is_authentic=False, authenticity_desc=None, image_loc=None, date_of_birth=None):
+                 is_authentic=False, authenticity_desc=None, image_loc=None, date_of_birth=None, user_id=None):
         self.firstname = firstname
         self.lastname = lastname
         self.idnumber = idnumber
@@ -38,6 +39,7 @@ class UserAgent(db.Model):
         self.authenticity_desc = authenticity_desc
         self.image_loc = image_loc
         self.date_of_birth = date_of_birth
+        self.user_id = user_id
 
     def __repr__(self):
         return f'<UserAgent {self.firstname} {self.lastname}>'

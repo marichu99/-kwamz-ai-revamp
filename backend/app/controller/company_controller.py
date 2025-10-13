@@ -1,6 +1,9 @@
 from flask import Blueprint, request, jsonify
 from app import db
 from app.service.company_service import CompanyService
+from flask_jwt_extended import jwt_required
+from decimal import Decimal, InvalidOperation
+from datetime import datetime
 import json
 
 company_bp = Blueprint('company', __name__, url_prefix='/company')
@@ -9,6 +12,7 @@ company_service = CompanyService(db)
 
 @company_bp.route('/', methods=['GET', 'OPTIONS'])
 @company_bp.route('', methods=['GET','OPTIONS'])
+@jwt_required()
 def get_companies():
     companies, error = company_service.get_companies()
     if error:
@@ -73,13 +77,43 @@ def create_or_update_company(company_id=None):
 
 @company_bp.route('/company/<int:id>', methods=['PUT'])
 def update_company(id):
-    data = request.form.to_dict()
-    file = request.files.get('file')
-    result, error = company_service.update_company(id, data, file)
-    if error:
-        return jsonify({'error': error}), 400
-    return jsonify({'message': 'Company updated successfully', 'company': result}), 200
-
+    try:
+        data = request.form.to_dict()
+        file = request.files.get('file')
+        
+        # Parse JSON fields from form data
+        json_fields = ['secondary_shareholders', 'directors']
+        for field in json_fields:
+            if field in data and data[field]:
+                try:
+                    data[field] = json.loads(data[field])
+                except json.JSONDecodeError:
+                    return jsonify({'error': f'Invalid {field} JSON format'}), 400
+        
+        # Handle registration_date conversion
+        if 'registration_date' in data and data['registration_date']:
+            try:
+                data['registration_date'] = datetime.strptime(data['registration_date'], '%Y-%m-%d').date()
+            except ValueError:
+                return jsonify({'error': 'Invalid registration_date format. Use YYYY-MM-DD'}), 400
+        
+        # Convert numeric fields
+        numeric_fields = ['primary_owner_shares', 'total_float_balance']
+        for field in numeric_fields:
+            if field in data and data[field]:
+                try:
+                    data[field] = Decimal(str(data[field]))
+                except (ValueError, InvalidOperation):
+                    return jsonify({'error': f'Invalid {field} value'}), 400
+        
+        result, error = company_service.update_company(id, data, file)
+        if error:
+            return jsonify({'error': error}), 400
+        return jsonify({'message': 'Company updated successfully'}), 200
+    
+    except Exception as e:
+        return jsonify({'error': f'Server error: {str(e)}'}), 500
+    
 @company_bp.route('/company/<int:id>', methods=['DELETE'])
 def delete_company(id):
     success, error = company_service.delete_company(id)

@@ -5,6 +5,8 @@ import os
 from app import db
 from app.model.agentcompany  import AgentCompany
 from app.model.company import Company
+from app.service.company_service import CompanyService
+from flask_jwt_extended import jwt_required
 from datetime import datetime
 import pandas as pd
 
@@ -20,9 +22,11 @@ def allowed_file(filename):
 
 @agent_company_bp.route('', methods=['GET', 'OPTIONS'])
 @agent_company_bp.route('/', methods=['GET', 'OPTIONS'])
+@jwt_required()
 def get_agent_companies():
     try:
         agent_companies = AgentCompany.query.all()
+        
         return jsonify([{
             'id': ac.id,
             'company_name': ac.company_name,
@@ -36,6 +40,7 @@ def get_agent_companies():
             'location_details': ac.location_details,
             'agent_number': ac.agent_number,
             'company_id': ac.company_id,
+            'selected_company': ac.company_id,
             'established_date': ac.established_date.isoformat() if ac.established_date else None,
             'float_balance': ac.float_balance,
             'status': ac.status,
@@ -46,7 +51,8 @@ def get_agent_companies():
             'last_audit_date': ac.last_audit_date.isoformat() if ac.last_audit_date else None
         } for ac in agent_companies]), 200
     except Exception as e:
-        return jsonify({'error': str(e)}), 500
+        print(f"An error occured {str(e)}")
+        return jsonify({'error': 'An error occured'}), 500
 
 def get_user_contact_info(contact_phone):
     # if contact phone does not start with 0, add 0 at the beginning if it starts with country code like 
@@ -64,6 +70,7 @@ def create_agent_company():
     try:
         data = request.form
         agent_company_code = get_latest_company_code()
+        print(f"The selected company id is {data.get('selected_company')}")
         agent_company = AgentCompany(
             company_name=data.get('company_name'),
             registration_number=f"REG-{uuid.uuid4().hex[:8]}",
@@ -75,6 +82,7 @@ def create_agent_company():
             location_details=data.get('location_details'),
             store_number=data.get('store_number'),    
             agent_number=data.get('agent_number'),    
+            company_id=data.get('selected_company'),    
             established_date=datetime.strptime(data.get('established_date'), '%Y-%m-%d').date() if data.get('established_date') else None,
             float_balance=float(data.get('float_balance', 0.0)),
             status=data.get('status', 'active'),
@@ -120,8 +128,9 @@ def update_agent_company(id):
 
         # Accept both JSON and form-data
         data = request.get_json(silent=True) or request.form or {}
+        print(f"The selected company id is {data.get('selected_company')}")
 
-        company_id = data.get('company_id')
+        company_id = data.get('selected_company')
         if company_id and not Company.query.get(company_id):
             return jsonify({'error': 'Invalid company_id'}), 400
 
@@ -131,6 +140,7 @@ def update_agent_company(id):
         agent_company.registration_number = data.get('registration_number', agent_company.registration_number)
         agent_company.location = data.get('location', agent_company.location)
         agent_company.contact_phone = data.get('contact_phone', agent_company.contact_phone)
+        agent_company.email = data.get('email', agent_company.email)
         agent_company.email = data.get('email', agent_company.email)
         agent_company.agent_number = data.get('agent_number', agent_company.agent_number)
         agent_company.location_details = data.get('location_details', agent_company.location_details)
@@ -232,7 +242,8 @@ def validate_batch_agent_company():
             'invalidAgentCompanies': invalid_agent_companies
         }), 200
     except Exception as e:
-        return jsonify({'error': str(e)}), 400
+        print(f"The error that occured {str(e)}")
+        return jsonify({'error': 'An error occured'}), 400
     
 @agent_company_bp.route('/batch', methods=['POST'])
 def batch_create_agent_company():

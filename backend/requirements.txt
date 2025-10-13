@@ -19,3 +19,4 @@ werkzeug
 wheel
 requests
 openpyxl
+openai

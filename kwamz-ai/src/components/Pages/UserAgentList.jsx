@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
-import { Search, Filter, MoreVertical, Binoculars, Edit, Plus, Download, Upload, RefreshCw } from 'lucide-react';
+import { Search, Filter, MoreVertical, Binoculars, Edit, Plus, Download, Upload, RefreshCw, ChevronRight } from 'lucide-react';
 import axios from 'axios';
 import * as XLSX from 'xlsx';
 import config from '../../Config';
@@ -20,12 +20,14 @@ function UserAgentList() {
   const [currentPage, setCurrentPage] = useState(1);
   const [pageSize, setPageSize] = useState(10);
   const [isDropdownOpen, setIsDropdownOpen] = useState(false);
+  const [isTemplatesSubMenuOpen, setIsTemplatesSubMenuOpen] = useState(false);
   const [isBatchModalOpen, setIsBatchModalOpen] = useState(false);
   const [validUsers, setValidUsers] = useState([]);
   const [invalidUsers, setInvalidUsers] = useState([]);
   const [batchFile, setBatchFile] = useState(null);
   const { showToast } = useToast();
   const fileInputRef = useRef(null);
+  const dropdownRef = useRef(null);
 
   // Fetch users from API
   const fetchUsers = async () => {
@@ -52,6 +54,18 @@ function UserAgentList() {
 
   useEffect(() => {
     fetchUsers();
+  }, []);
+
+  // Close dropdown when clicking outside
+  useEffect(() => {
+    const handleClickOutside = (event) => {
+      if (dropdownRef.current && !dropdownRef.current.contains(event.target)) {
+        setIsDropdownOpen(false);
+        setIsTemplatesSubMenuOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
 
   // Handle search and filter
@@ -168,6 +182,7 @@ function UserAgentList() {
 
     showToast('Excel template downloaded successfully', 'success');
     setIsDropdownOpen(false);
+    setIsTemplatesSubMenuOpen(false);
   };
 
   // Handle batch upload preview
@@ -190,7 +205,6 @@ function UserAgentList() {
 
       const { validUsers, invalidUsers } = response.data;
 
-      // Validate response data
       if (!Array.isArray(validUsers) || !Array.isArray(invalidUsers)) {
         throw new Error('Invalid response format from server');
       }
@@ -204,7 +218,7 @@ function UserAgentList() {
       showToast(error.response?.data?.error || 'Failed to validate batch', 'error');
     } finally {
       setIsLoading(false);
-      fileInputRef.current.value = ''; // Reset file input
+      fileInputRef.current.value = '';
     }
   };
 
@@ -296,53 +310,92 @@ function UserAgentList() {
           <RefreshCw className={`w-4 h-4 ${isLoading ? 'animate-spin' : ''}`} />
           <span>Reload</span>
         </button>
-        <div className="relative">
+        <div className="relative" ref={dropdownRef}>
           <button
             onClick={() => setIsDropdownOpen(!isDropdownOpen)}
-            className="flex items-center space-x-2 py-2 px-4 bg-blue-500 text-white rounded-xl hover:bg-blue-600 transition-colors"
+            className="flex items-center space-x-2 py-2 px-4 bg-blue-500 text-white rounded-xl hover:bg-blue-600 transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 dark:focus:ring-offset-slate-800"
+            aria-haspopup="true"
+            aria-expanded={isDropdownOpen}
           >
             <MoreVertical className="w-4 h-4" />
             <span>Actions</span>
           </button>
           {isDropdownOpen && (
-            <div className="absolute right-0 mt-2 w-48 bg-white dark:bg-slate-700 rounded-xl shadow-lg z-10">
-              <button
-                onClick={handlePerformKYC}
-                disabled={selectedUserIds.length === 0}
-                className="w-full flex items-center px-4 py-2 text-sm text-slate-800 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-600 disabled:opacity-50 disabled:cursor-not-allowed"
-              >
-                <Binoculars className="w-4 h-4 mr-2" />
-                KYC Authentication
-              </button>
-              <button
-                onClick={handleEditUser}
-                disabled={selectedUserIds.length === 0}
-                className="w-full flex items-center px-4 py-2 text-sm text-slate-800 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-600 disabled:opacity-50 disabled:cursor-not-allowed"
-              >
-                <Edit className="w-4 h-4 mr-2" />
-                Edit Selected
-              </button>
-              <button
-                onClick={handleOpenCreateModal}
-                className="w-full flex items-center px-4 py-2 text-sm text-slate-800 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-600"
-              >
-                <Plus className="w-4 h-4 mr-2" />
-                Create User
-              </button>
-              <button
-                onClick={handleDownloadExcelTemplate}
-                className="w-full flex items-center px-4 py-2 text-sm text-slate-800 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-600"
-              >
-                <Download className="w-4 h-4 mr-2" />
-                Download Excel Template
-              </button>
-              <button
-                onClick={() => fileInputRef.current.click()}
-                className="w-full flex items-center px-4 py-2 text-sm text-slate-800 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-600"
-              >
-                <Upload className="w-4 h-4 mr-2" />
-                Upload Batch Excel
-              </button>
+            <div
+              className="absolute right-0 mt-2 w-72 bg-white dark:bg-slate-700 rounded-xl shadow-lg z-10 border border-slate-200 dark:border-slate-600 overflow-visible transition-all duration-200"
+              role="menu"
+            >
+              {/* Main Actions */}
+              <div className="py-2">
+                <button
+                  onClick={handlePerformKYC}
+                  disabled={selectedUserIds.length === 0}
+                  className="w-full flex items-center px-4 py-2 text-sm text-slate-800 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-600 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                  role="menuitem"
+                >
+                  <Binoculars className="w-4 h-4 mr-3" />
+                  KYC Authentication
+                </button>
+                <button
+                  onClick={handleEditUser}
+                  disabled={selectedUserIds.length === 0}
+                  className="w-full flex items-center px-4 py-2 text-sm text-slate-800 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-600 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                  role="menuitem"
+                >
+                  <Edit className="w-4 h-4 mr-3" />
+                  Edit Selected
+                </button>
+                <button
+                  onClick={handleOpenCreateModal}
+                  className="w-full flex items-center px-4 py-2 text-sm text-slate-800 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-600 transition-colors"
+                  role="menuitem"
+                >
+                  <Plus className="w-4 h-4 mr-3" />
+                  Create User
+                </button>
+              </div>
+
+              {/* Templates submenu */}
+              <div className="relative">
+                <button
+                  onClick={() => setIsTemplatesSubMenuOpen(!isTemplatesSubMenuOpen)}
+                  onMouseEnter={() => setIsTemplatesSubMenuOpen(true)}
+                  className="w-full flex items-center justify-between px-4 py-2 text-sm text-slate-800 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-600 transition-colors"
+                >
+                  <div className="flex items-center">
+                    <Download className="w-4 h-4 mr-3" />
+                    Templates
+                  </div>
+                  <ChevronRight className="w-4 h-4 text-slate-500 dark:text-slate-400" />
+                </button>
+
+                {isTemplatesSubMenuOpen && (
+                  <div
+                    className="absolute right-full top-0 mr-1 w-56 bg-white dark:bg-slate-700 rounded-xl shadow-lg border border-slate-200 dark:border-slate-600 z-[60]"
+                    onMouseEnter={() => setIsTemplatesSubMenuOpen(true)}
+                    onMouseLeave={() => setIsTemplatesSubMenuOpen(false)}
+                  >
+                    <button
+                      onClick={handleDownloadExcelTemplate}
+                      className="w-full flex items-center px-4 py-2 text-sm text-slate-800 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-600 transition-colors rounded-t-xl"
+                    >
+                      <Download className="w-4 h-4 mr-3" />
+                      Download Template
+                    </button>
+                    <button
+                      onClick={() => {
+                        fileInputRef.current.click();
+                        setIsDropdownOpen(false);
+                        setIsTemplatesSubMenuOpen(false);
+                      }}
+                      className="w-full flex items-center px-4 py-2 text-sm text-slate-800 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-600 transition-colors rounded-b-xl"
+                    >
+                      <Upload className="w-4 h-4 mr-3" />
+                      Upload Batch
+                    </button>
+                  </div>
+                )}
+              </div>
             </div>
           )}
         </div>
@@ -369,7 +422,7 @@ function UserAgentList() {
           setInvalidUsers([]);
         }}
         onConfirm={handleConfirmUpload}
-        type="users" // This is the default, so optional
+        type="users"
       />
 
       {/* Search and Filter Controls */}

@@ -37,6 +37,7 @@ function CompanyDetailsModal({ isOpen, onClose, onSubmit, isLoading, company }) 
         cr12_file: null,
         cr12_preview: company.cr12_file_location || '',
       });
+      setIsCR12Valid(true);
     } else {
       setFormData({
         company_name: '',
@@ -289,8 +290,6 @@ function CompanyDetailsModal({ isOpen, onClose, onSubmit, isLoading, company }) 
         delete submitData[key];
       }
     });
-
-    console.log('Submitting company data:', submitData);
 
     onSubmit(submitData, company?.id, () => {
       setFormData({
