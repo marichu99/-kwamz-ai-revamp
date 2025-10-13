@@ -30,10 +30,41 @@ class CompanyService:
             file.save(file_path)
             return file_path
         return None
+    
     def get_companies(self):
         """Retrieve all companies."""
         try:
             companies = Company.query.all()
+            return [{
+                'id': c.id,
+                'company_name': c.company_name,
+                'company_number': c.registration_number,  # Changed to match frontend
+                'registration_date': c.registration_date.isoformat() if c.registration_date else None,  # Format date
+                'address': c.address,
+                'primary_owner_name': c.primary_owner_name,
+                'primary_owner_email': c.primary_owner_email,  # Added this field
+                'primary_owner_shares': float(c.primary_owner_shares) if c.primary_owner_shares else 0.0,
+                'secondary_shareholders': [{
+                    'name': sh.name,
+                    'email': sh.email,
+                    'shares': float(sh.shares) if sh.shares else 0.0
+                } for sh in c.shareholders if sh.name != c.primary_owner_name],  
+                'directors': [{
+                    'name': dir.name,
+                    'email': dir.email
+                } for dir in c.directors],  # Assuming directors relationship
+                'cr12_file_location': c.file_location,  # For preview
+                'compliance_status': c.compliance_status,
+                'total_float_balance': float(c.total_float_balance) if c.total_float_balance else 0.0
+            } for c in companies], None
+        except Exception as e:
+            print(f"Error retrieving companies: {str(e)}")
+            return None, str(e)
+            
+    def get_companies_by_userid(self,user_id):
+        """Retrieve all companies."""
+        try:
+            companies = Company.query.filter_by(user_id=user_id).all()
             return [{
                 'id': c.id,
                 'company_name': c.company_name,
@@ -76,6 +107,8 @@ class CompanyService:
         company = self.get_company_by_id(company_id)
         if not company:
             return None, "Company not found"
+        
+        company.user_id = update_data["user_id"]
 
         try:
             # Handle file upload
@@ -310,7 +343,8 @@ class CompanyService:
                     primary_owner_shares=company_data['primary_owner_shares'],
                     address=company_data['address'],
                     company_code=company_code,
-                    file_location=file_location
+                    file_location=file_location,
+                    user_id=company_data["user_id"]
                 )
 
                 # Add primary shareholder

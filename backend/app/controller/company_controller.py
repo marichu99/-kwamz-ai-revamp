@@ -1,7 +1,7 @@
 from flask import Blueprint, request, jsonify
 from app import db
 from app.service.company_service import CompanyService
-from flask_jwt_extended import jwt_required
+from flask_jwt_extended import jwt_required,get_jwt_identity
 from decimal import Decimal, InvalidOperation
 from datetime import datetime
 import json
@@ -10,26 +10,36 @@ company_bp = Blueprint('company', __name__, url_prefix='/company')
 
 company_service = CompanyService(db)
 
-@company_bp.route('/', methods=['GET', 'OPTIONS'])
-@company_bp.route('', methods=['GET','OPTIONS'])
+
+# Handle OPTIONS requests separately
+@company_bp.route('', methods=['OPTIONS'])
+@company_bp.route('/', methods=['OPTIONS'])
+def handle_options():
+    return jsonify({'message': 'OK'}), 200
+
+@company_bp.route('/', methods=['GET'])
 @jwt_required()
 def get_companies():
-    companies, error = company_service.get_companies()
+    user_id = get_jwt_identity()
+    companies, error = company_service.get_companies_by_userid(user_id=user_id)
     if error:
         return jsonify({'error': error}), 500
     return jsonify(companies), 200
 
 @company_bp.route('/', methods=['POST', 'OPTIONS'])
 @company_bp.route('/<int:company_id>', methods=['PUT'])
+@jwt_required()
 def create_or_update_company(company_id=None):
     try:
         data = request.form.to_dict()
         file = request.files.get('cr12_file')
+        current_user_id = get_jwt_identity()
         
         if file:
             data['cr12_file'] = file
         
         print(f"Raw form data: {data}")  # Debug log
+        data["user_id"]=current_user_id
         
         # Parse JSON strings for arrays
         if 'secondary_shareholders' in data:

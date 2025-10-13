@@ -43,7 +43,6 @@ def extract_kra_pin():
             os.remove(file_path)
             
 @document_bp.route('/extract_cr12', methods=['POST'])
-
 def extract_cr12():
     file = request.files['file']
     file_path = file.filename
