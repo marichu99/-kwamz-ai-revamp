@@ -260,8 +260,8 @@ class CompanyService:
                 raise ValueError("Company number is required.")
             if not isinstance(company_data.get('shortcode'), str) or not company_data['shortcode'].strip():
                 raise ValueError("Shortcode must be a non-empty string.")
-            if not 5 <= len(company_data['shortcode']) <= 6 or not company_data['shortcode'].isdigit():
-                raise ValueError("Shortcode must be a 5-6 digit number.")
+            if not 5 <= len(company_data['shortcode']) <= 10 or not company_data['shortcode'].isdigit():
+                raise ValueError("Shortcode must be a 5-10 digit number.")
 
             # Generate unique company code if not provided
             company_code = company_data.get('company_number') or str(uuid.uuid4())[:8].upper()

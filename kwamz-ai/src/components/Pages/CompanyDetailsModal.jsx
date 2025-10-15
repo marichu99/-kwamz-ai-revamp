@@ -211,8 +211,8 @@ function CompanyDetailsModal({ isOpen, onClose, onSubmit, isLoading, company }) 
     }
     if (!formData.shortcode.trim()) {
       newErrors.shortcode = 'Shortcode is required';
-    } else if (!/^\d{5,6}$/.test(formData.shortcode)) {
-      newErrors.shortcode = 'Shortcode must be 5-6 digits';
+    } else if (!/^\d{5,10}$/.test(formData.shortcode)) {
+      newErrors.shortcode = 'Shortcode must be 5-10 digits';
     }
     if (!formData.company_number.trim()) {
       newErrors.company_number = 'Company number is required (upload CR12 document)';
