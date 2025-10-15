@@ -47,7 +47,6 @@ function AgentCompanyDetailsModal({ isOpen, onClose, onSubmit, isLoading, agentC
           headers: { Authorization: `Bearer ${token}` },
         });
 
-        console.log('Fetched companies:', response.data);
         setCompanies(response.data);
       } catch (error) {
         console.error('Error fetching companies:', error);

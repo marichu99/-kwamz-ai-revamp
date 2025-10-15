@@ -2,6 +2,8 @@ from app.model.company import Company
 from app.model.shareholder import Shareholder
 from app.model.director import Director
 from datetime import datetime
+import threading
+from app.utils.email_utils import send_welcome_pack_email
 from decimal import Decimal, InvalidOperation
 from app import db
 import json
@@ -71,6 +73,7 @@ class CompanyService:
                 'company_number': c.registration_number,  # Changed to match frontend
                 'registration_date': c.registration_date.isoformat() if c.registration_date else None,  # Format date
                 'address': c.address,
+                'shortcode': c.shortcode,
                 'primary_owner_name': c.primary_owner_name,
                 'primary_owner_email': c.primary_owner_email,  # Added this field
                 'primary_owner_shares': float(c.primary_owner_shares) if c.primary_owner_shares else 0.0,
@@ -109,6 +112,7 @@ class CompanyService:
             return None, "Company not found"
         
         company.user_id = update_data["user_id"]
+        print(f"The shortcode is {update_data['shortcode']}")
 
         try:
             # Handle file upload
@@ -120,7 +124,7 @@ class CompanyService:
             basic_fields = [
                 'company_name', 'registration_number', 'registration_date', 
                 'address', 'primary_owner_name', 'primary_owner_email',
-                'primary_owner_shares', 'total_float_balance', 'compliance_status'
+                'primary_owner_shares','shortcode', 'total_float_balance', 'compliance_status'
             ]
             
             for field in basic_fields:
@@ -239,10 +243,9 @@ class CompanyService:
         except Exception as e:
             self.db.session.rollback()
             return False, str(e)
-
     def onboard_company(self, company_data):
         """
-        Onboard a company with shareholders and directors.
+        Onboard a company with shareholders and directors, and send welcome emails in a separate thread.
         """
         try:
             # Debug: Print received data structure
@@ -250,11 +253,15 @@ class CompanyService:
             print(f"Raw company_data: {company_data}")
             
             # Input validation
-            required_fields = ['company_name', 'address']
+            required_fields = ['company_name', 'address', 'shortcode']
             if not all(field in company_data and company_data[field] for field in required_fields):
-                raise ValueError("Company name and address are required.")
+                raise ValueError("Company name, address, and shortcode are required.")
             if not company_data.get('company_number'):
-                raise ValueError("company number is required.")
+                raise ValueError("Company number is required.")
+            if not isinstance(company_data.get('shortcode'), str) or not company_data['shortcode'].strip():
+                raise ValueError("Shortcode must be a non-empty string.")
+            if not 5 <= len(company_data['shortcode']) <= 6 or not company_data['shortcode'].isdigit():
+                raise ValueError("Shortcode must be a 5-6 digit number.")
 
             # Generate unique company code if not provided
             company_code = company_data.get('company_number') or str(uuid.uuid4())[:8].upper()
@@ -344,7 +351,8 @@ class CompanyService:
                     address=company_data['address'],
                     company_code=company_code,
                     file_location=file_location,
-                    user_id=company_data["user_id"]
+                    user_id=company_data["user_id"],
+                    shortcode=company_data["shortcode"],
                 )
 
                 # Add primary shareholder
@@ -391,6 +399,38 @@ class CompanyService:
 
                 self.db.session.add(company)
                 self.db.session.flush()  # Assigns company.id
+   
+                # Send to primary owner (if they have an email and shares)
+                if company_data.get('primary_owner_email') and primary_shares > 0:
+                    send_welcome_pack_email(
+                        recipient_email=company_data['primary_owner_email'],
+                        recipient_name=company_data['primary_owner_name'],
+                        role='shareholder',
+                        company_data=company_data,
+                        cr12_file_path=file_location
+                    )
+
+                # Send to secondary shareholders
+                for sh in secondary_shareholders:
+                    if isinstance(sh, dict) and sh.get('email') and sh.get('shares', 0) > 0:
+                        send_welcome_pack_email(
+                            recipient_email=sh['email'],
+                            recipient_name=sh['name'],
+                            role='shareholder',
+                            company_data=company_data,
+                            cr12_file_path=file_location
+                        )
+
+                # Send to directors
+                for dir_data in directors:
+                    if isinstance(dir_data, dict) and dir_data.get('email'):
+                        send_welcome_pack_email(
+                            recipient_email=dir_data['email'],
+                            recipient_name=dir_data['name'],
+                            role='director',
+                            company_data=company_data,
+                            cr12_file_path=file_location
+                        )
 
             return company.id, "Company onboarded successfully"
         except ValueError as ve:
@@ -411,7 +451,6 @@ class CompanyService:
             import traceback
             print(f"Traceback: {traceback.format_exc()}")
             return None, f"Failed to onboard company: {str(e)}"
-    
     def validate_batch_company(self, file):
         """Validate a batch of companies from an Excel file."""
         try:

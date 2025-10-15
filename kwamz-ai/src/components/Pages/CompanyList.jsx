@@ -1,10 +1,11 @@
 import { useState, useEffect, useRef } from 'react';
-import { Search, MoreVertical, Edit, Plus, Download, Upload, RefreshCw, Trash2, ChevronRight } from 'lucide-react';
+import { Search, MoreVertical, Edit, Plus, Download, Upload, RefreshCw, Trash2, ChevronRight, Power } from 'lucide-react';
 import axios from 'axios';
 import * as XLSX from 'xlsx';
 import config from '../../Config';
 import { useToast } from './ToastProvider';
 import CompanyDetailsModal from './CompanyDetailsModal.jsx';
+import MpesaAccountLogin from './MpesaAccountLogin.jsx';
 import BatchUploadModal from './BatchUploadModal';
 
 function CompanyList() {
@@ -13,6 +14,7 @@ function CompanyList() {
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedCompanyIds, setSelectedCompanyIds] = useState([]);
   const [isCompanyModalOpen, setIsCompanyModalOpen] = useState(false);
+  const [isMpesaLoginModalOpen, setIsMpesaModalLoginOpen] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [currentPage, setCurrentPage] = useState(1);
   const [pageSize, setPageSize] = useState(10);
@@ -126,6 +128,20 @@ function CompanyList() {
       return;
     }
     setIsCompanyModalOpen(true);
+    setIsDropdownOpen(false);
+  };
+
+  // Handle login to selected company
+  const handleLoginToCompany = () => {
+    if (selectedCompanyIds.length === 0) {
+      showToast('Please select a company to login to', 'error');
+      return;
+    }
+    if (selectedCompanyIds.length > 1) {
+      showToast('Please select only one company to login', 'error');
+      return;
+    }
+    setIsMpesaModalLoginOpen(true);
     setIsDropdownOpen(false);
   };
 
@@ -258,6 +274,7 @@ function CompanyList() {
       data.append('company_name', formData.company_name);
       data.append('company_number', formData.company_number);
       data.append('address', formData.address);
+      data.append('shortcode', formData.shortcode);
       data.append('primary_owner_name', formData.primary_owner_name);
       data.append('primary_owner_email', formData.primary_owner_email);
       data.append('primary_owner_shares', formData.primary_owner_shares.toString());
@@ -314,7 +331,42 @@ function CompanyList() {
       setIsLoading(false);
     }
   };
+  const handleSubmitLoginCompany = async (formData, resetForm) => {
+    setIsLoading(true);
+    try {
+      const token = localStorage.getItem('token');
+      const url = `${config.API_URL}/document/login_company`;
 
+      const res = await fetch(url, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify(formData)
+      });
+
+      const result = await res.json();
+      if (result.error) {
+        alert(result.error);
+        return;
+      }
+
+      if (!res.ok) {
+        throw new Error(result.error || `Failed to login to company`);
+      }
+
+      setIsMpesaModalLoginOpen(false);
+      setSelectedCompanyIds([]);
+      resetForm();
+      showToast(`Login to company is successful!`, 'success');
+    } catch (error) {
+      console.error(`Error logging in to company:`, error.message);
+      showToast(error.message, 'error');
+    } finally {
+      setIsLoading(false);
+    }
+  };
   return (
     <div className="bg-white dark:bg-slate-800 rounded-xl shadow-lg p-6">
       {/* Action Buttons */}
@@ -352,6 +404,15 @@ function CompanyList() {
                 >
                   <Edit className="w-4 h-4 mr-3" />
                   Edit Selected
+                </button>
+                <button
+                  onClick={handleLoginToCompany}
+                  disabled={selectedCompanyIds.length === 0 || selectedCompanyIds.length > 1}
+                  className="w-full flex items-center px-4 py-2 text-sm text-slate-800 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-600 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                  role="menuitem"
+                >
+                  <Power className="w-4 h-4 mr-3" />
+                  Login to Selected Company
                 </button>
                 <button
                   onClick={handleOpenCreateModal}
@@ -472,6 +533,7 @@ function CompanyList() {
               <th className="px-4 py-3 font-semibold">Company Name</th>
               <th className="px-4 py-3 font-semibold">Registration Number</th>
               <th className="px-4 py-3 font-semibold">Primary Owner</th>
+              <th className="px-4 py-3 font-semibold">Short Code</th>
             </tr>
           </thead>
           <tbody>
@@ -493,6 +555,7 @@ function CompanyList() {
                 <td className="px-4 py-3">{c.company_name}</td>
                 <td className="px-4 py-3">{c.company_number}</td>
                 <td className="px-4 py-3">{c.primary_owner_name}</td>
+                <td className="px-4 py-3">{c.shortcode}</td>
               </tr>
             ))}
           </tbody>
@@ -559,6 +622,18 @@ function CompanyList() {
           setSelectedCompanyIds([]);
         }}
         onSubmit={handleCreateOrUpdateCompany}
+        isLoading={isLoading}
+        company={selectedCompanyIds.length === 1 ? companies.find((c) => c.id === selectedCompanyIds[0]) : null}
+      />
+
+      {/* Mpesa Login Details Modal */}
+      <MpesaAccountLogin
+        isOpen={isMpesaLoginModalOpen}
+        onClose={() => {
+          setIsMpesaModalLoginOpen(false);
+          setSelectedCompanyIds([]);
+        }}
+        onSubmit={handleSubmitLoginCompany}
         isLoading={isLoading}
         company={selectedCompanyIds.length === 1 ? companies.find((c) => c.id === selectedCompanyIds[0]) : null}
       />

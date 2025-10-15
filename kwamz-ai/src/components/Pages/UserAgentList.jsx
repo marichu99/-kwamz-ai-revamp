@@ -255,8 +255,6 @@ function UserAgentList() {
     setIsLoading(true);
     try {
 
-      console.log("FormData as object:", Object.fromEntries(formData.entries()));
-
       const token = localStorage.getItem('token');
       const url = userId ? `${config.API_URL}/useragent/${userId}` : `${config.API_URL}/useragent`;
       const method = userId ? 'PUT' : 'POST';

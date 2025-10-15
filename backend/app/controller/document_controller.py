@@ -4,6 +4,7 @@ from app.utils.company_details import extract_company_number
 from app.model.payment import Payment
 from app.utils.police_clearance_details import extract_clearance_details
 from app.utils.user_service import UserService
+from app.utils.mpesa_automation import login_to_mpesa
 from app.utils.script import authenticate_kra_from_app
 import os
 import re
@@ -68,6 +69,36 @@ def extract_police_clearance():
     file = request.files['file']
     file_path = file.filename
     file.save(file_path)
+
+    try:
+        extracted_details = extract_clearance_details(file_path)
+        if "error" in extracted_details:
+            return jsonify({"error": extracted_details["error"]})
+
+        ref_no = extracted_details["Reference Number"]
+        user_name = extracted_details["Name"]
+        id_no = extracted_details["ID Number"]
+        print(f"the extracted police clearance is {ref_no}")
+        return jsonify({"refNo": ref_no, "idNo": id_no, "name": user_name})
+    finally:
+        if os.path.exists(file_path):
+            os.remove(file_path)
+
+            
+@document_bp.route('/login_company', methods=['POST'])
+def login_company():
+    form_data = request.get_json()
+    print(f"the data is {form_data}")
+    
+    short_code = form_data.get('shortCode')
+    user_name = form_data.get('userName')
+    password = form_data.get('password')
+    
+    is_successful = login_to_mpesa(short_code=short_code, username=user_name, password=password)
+    if not is_successful:
+        return jsonify({"success": False, "message": "Login failed. Please check your credentials and try again."})
+    return jsonify({"success": True})
+
 
     try:
         extracted_details = extract_clearance_details(file_path)

@@ -3,6 +3,12 @@ from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from flask import render_template
 from datetime import datetime
+from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText
+from email.mime.application import MIMEApplication
+import smtplib
+from datetime import datetime
+import os
 
 from dotenv import load_dotenv
 import os
@@ -85,7 +91,77 @@ def send_welcome_email(user_email, username):
         return True
         
     except Exception as e:
-        print(f"Failed to send welcome email: {e}")
+        print(f"Failed to send welcome email: {str(e)}")
+        return False
+    
+def send_welcome_pack_email(recipient_email, recipient_name, role, company_data, cr12_file_path):
+    """
+    Send a welcome pack email to directors and shareholders with CR12 details and attachment.
+    """
+    try:
+        # Email configuration
+        EMAIL_ADDRESS = "marichufx@gmail.com"
+        EMAIL_PASSWORD = os.getenv("APP_PASSWORD")
+        DASHBOARD_URL = os.getenv("DASHBOARD_URL")
+        SMTP_SERVER = "smtp.gmail.com"
+        SMTP_PORT = 587
+        SUPPORT_EMAIL = "support@kwamz-ai.com"
+        TERMS_URL = "https://kwamz-ai.com/terms"
+        PRIVACY_URL = "https://kwamz-ai.com/privacy"
+
+        # Prepare company data for template
+        template_data = {
+            'company_name': company_data.get('company_name', 'Company'),
+            'shortcode': company_data.get('shortcode', 'N/A'),
+            'company_number': company_data.get('company_number', 'N/A'),
+            'registration_date': company_data.get('registration_date', ''),
+            'address': company_data.get('address', 'N/A'),
+            'primary_owner_name': company_data.get('primary_owner_name', 'N/A'),
+            'primary_owner_shares': company_data.get('primary_owner_shares', 0),
+            'secondary_shareholders': company_data.get('secondary_shareholders', []),
+            'directors': company_data.get('directors', []),
+            'cr12_file_location': company_data.get('file_location', ''),
+            'recipient_name': recipient_name,
+            'role': role,
+            'shares': next((sh['shares'] for sh in company_data.get('secondary_shareholders', []) if sh['name'] == recipient_name), 0) if role == 'shareholder' else 0,
+            'dashboard_url': DASHBOARD_URL,
+            'support_email': SUPPORT_EMAIL,
+            'terms_url': TERMS_URL,
+            'privacy_url': PRIVACY_URL,
+            'year': datetime.utcnow().year
+        }
+
+        # Create message
+        msg = MIMEMultipart('alternative')
+        msg['Subject'] = f"Welcome to {company_data.get('company_name', 'Company')} - Your Welcome Pack"
+        msg['From'] = EMAIL_ADDRESS
+        msg['To'] = recipient_email
+
+        # Render HTML template
+        html_content = render_template('company_welcome_pack.html', **template_data)
+        msg.attach(MIMEText(html_content, 'html'))
+
+        # Attach CR12 file if it exists
+        if cr12_file_path and os.path.exists(cr12_file_path):
+            with open(cr12_file_path, 'rb') as f:
+                cr12_attachment = MIMEApplication(f.read(), _subtype="pdf")
+                cr12_attachment.add_header(
+                    'Content-Disposition',
+                    'attachment',
+                    filename=os.path.basename(cr12_file_path)
+                )
+                msg.attach(cr12_attachment)
+
+        # Send email
+        with smtplib.SMTP(SMTP_SERVER, SMTP_PORT) as server:
+            server.starttls()
+            server.login(EMAIL_ADDRESS, EMAIL_PASSWORD)
+            server.send_message(msg)
+
+        print(f"Welcome pack email sent to {recipient_email}")
+        return True
+    except Exception as e:
+        print(f"Failed to send welcome pack email: {str(e)}")
         return False
 
 def send_email_notification(subject, body,recipient_email):

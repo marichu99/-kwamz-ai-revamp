@@ -1,12 +1,15 @@
 from playwright.sync_api import sync_playwright
 from PIL import Image
-# from app import db
-# from app.model.document import Document
-# from app.model.useragent import UserAgent
+from app import db
+from app.model.document import Document
+from app.model.useragent import UserAgent
 import pytesseract
+from openai import OpenAI
 import re
 import sys
 import time
+import base64
+import os
 
 def solve_arithmetic_captcha(captcha_image_path):
     """
@@ -194,6 +197,55 @@ def fill_login_form(page, short_code: str, username: str, password: str):
     page.fill("//input[@id='userAccount']", username)
     page.fill("//input[@id='password']", password)
     print("[INFO] Login form fields filled successfully.")
+    
+        
+def solveCaptchaXai(image_path):
+    # Initialize client with your xAI key
+    xai_key = os.getenv("XAI_API_KEY")
+    print(f"The api key is {xai_key}")
+    
+    client = OpenAI(
+        api_key=xai_key,  # Replace with your key
+        base_url="https://api.x.ai/v1"
+    )
+
+    # Function to encode image to base64
+    def encode_image(image_path):
+        with open(image_path, "rb") as image_file:
+            return base64.b64encode(image_file.read()).decode("utf-8")
+
+    # Your CAPTCHA image path (e.g., from Playwright screenshot)
+    base64_image = encode_image(image_path)
+
+    # Send request
+    response = client.chat.completions.create(
+        model="grok-2-vision-1212",
+        messages=[
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "Extract the exact digits from this CAPTCHA image. It's a 4-6 digit code with possible lines or distortions. Respond only with the number."
+                    },
+                    {
+                        "type": "image_url",
+                        "image_url": {
+                            "url": f"data:image/png;base64,{base64_image}"  # Use 'jpeg' if JPG
+                        }
+                    }
+                ]
+            }
+        ],
+        max_tokens=50,  # Short output for just the number
+        temperature=0.1  # Low for accurate extraction
+    )
+
+    # Print the extracted CAPTCHA
+    captcha_text = response.choices[0].message.content.strip()
+    print(f"Extracted CAPTCHA: {captcha_text}")
+    return captcha_text
+
 
 
 def capture_and_solve_captcha(page) -> str:
@@ -208,6 +260,6 @@ def capture_and_solve_captcha(page) -> str:
     captcha_element.screenshot(path=captcha_path)
     print(f"[INFO] CAPTCHA image saved at {captcha_path}")
 
-    captcha_solution = solve_arithmetic_captcha(captcha_path)
+    captcha_solution = solveCaptchaXai(captcha_path)
     print(f"[INFO] CAPTCHA solved: {captcha_solution}")
     return str(captcha_solution)

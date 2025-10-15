@@ -1,10 +1,11 @@
 import { useState, useEffect } from 'react';
-import { X, Building2, Calendar, MapPin, User, Mail, Users, Plus, Trash2, AlertCircle, Upload, FileText } from 'lucide-react';
+import { X, Building2, Calendar, MapPin, User, Mail, Users, Plus, Trash2, AlertCircle, Upload, FileText, Hash } from 'lucide-react';
 import config from '../../Config';
 
 function CompanyDetailsModal({ isOpen, onClose, onSubmit, isLoading, company }) {
   const [formData, setFormData] = useState({
     company_name: '',
+    shortcode: '',
     company_number: '',
     registration_date: '',
     address: '',
@@ -24,6 +25,7 @@ function CompanyDetailsModal({ isOpen, onClose, onSubmit, isLoading, company }) 
     if (company) {
       setFormData({
         company_name: company.company_name || '',
+        shortcode: company.shortcode || '',
         company_number: company.company_number || '',
         registration_date: company.registration_date
           ? new Date(company.registration_date).toISOString().split('T')[0]
@@ -41,6 +43,7 @@ function CompanyDetailsModal({ isOpen, onClose, onSubmit, isLoading, company }) 
     } else {
       setFormData({
         company_name: '',
+        shortcode: '',
         company_number: '',
         registration_date: '',
         address: '',
@@ -108,8 +111,6 @@ function CompanyDetailsModal({ isOpen, onClose, onSubmit, isLoading, company }) 
         }));
         return;
       }
-
-      console.log('CR12 upload result:', result);
 
       if (result.cr12) {
         setFormData((prev) => ({
@@ -208,6 +209,11 @@ function CompanyDetailsModal({ isOpen, onClose, onSubmit, isLoading, company }) 
     if (!formData.company_name.trim()) {
       newErrors.company_name = 'Company name is required';
     }
+    if (!formData.shortcode.trim()) {
+      newErrors.shortcode = 'Shortcode is required';
+    } else if (!/^\d{5,6}$/.test(formData.shortcode)) {
+      newErrors.shortcode = 'Shortcode must be 5-6 digits';
+    }
     if (!formData.company_number.trim()) {
       newErrors.company_number = 'Company number is required (upload CR12 document)';
     }
@@ -294,6 +300,7 @@ function CompanyDetailsModal({ isOpen, onClose, onSubmit, isLoading, company }) 
     onSubmit(submitData, company?.id, () => {
       setFormData({
         company_name: '',
+        shortcode: '',
         company_number: '',
         registration_date: '',
         address: '',
@@ -344,7 +351,7 @@ function CompanyDetailsModal({ isOpen, onClose, onSubmit, isLoading, company }) 
 
         <div className="flex-1 overflow-y-auto p-6 space-y-6">
           <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
-            <div className="md:col-span-2">
+            <div>
               <label className="flex items-center space-x-2 text-sm font-semibold text-slate-700 dark:text-slate-300 mb-2">
                 <Building2 className="w-4 h-4" />
                 <span>Company Name</span>
@@ -366,6 +373,32 @@ function CompanyDetailsModal({ isOpen, onClose, onSubmit, isLoading, company }) 
                 <p className="text-red-500 text-xs mt-2 ml-1 flex items-center">
                   <span className="mr-1">⚠</span>
                   {errors.company_name}
+                </p>
+              )}
+            </div>
+
+            <div>
+              <label className="flex items-center space-x-2 text-sm font-semibold text-slate-700 dark:text-slate-300 mb-2">
+                <Hash className="w-4 h-4" />
+                <span>Shortcode</span>
+                <span className="text-red-500">*</span>
+              </label>
+              <input
+                type="text"
+                name="shortcode"
+                value={formData.shortcode}
+                onChange={handleChange}
+                className={`w-full px-4 py-3 border-2 rounded-xl focus:outline-none focus:ring-2 focus:ring-emerald-500 dark:bg-slate-800 dark:text-white transition-all ${errors.shortcode
+                    ? 'border-red-300 bg-red-50 dark:bg-red-900/20 dark:border-red-500'
+                    : 'border-slate-200 dark:border-slate-700 hover:border-slate-300'
+                  }`}
+                placeholder="Enter Shortcode"
+                disabled={isLoading}
+              />
+              {errors.shortcode && (
+                <p className="text-red-500 text-xs mt-2 ml-1 flex items-center">
+                  <span className="mr-1">⚠</span>
+                  {errors.shortcode}
                 </p>
               )}
             </div>
@@ -797,4 +830,4 @@ function CompanyDetailsModal({ isOpen, onClose, onSubmit, isLoading, company }) 
   );
 }
 
-export default CompanyDetailsModal;
+export default CompanyDetailsModal; 

@@ -114,7 +114,8 @@ class UserAgentService:
                 is_authentic=data.get('is_authentic') == 'true',
                 authenticity_desc=data.get('authenticity_desc'),
                 image_loc=image_loc,
-                date_of_birth=date_of_birth
+                date_of_birth=date_of_birth,
+                user_id=user_id
             )
 
             # Add agent companies
@@ -149,9 +150,11 @@ class UserAgentService:
     def get_all_users_by_userid(self,user_id):
         """Retrieve all UserAgents."""
         try:
+            print(f"The user id is {user_id}")
             users = UserAgent.query.filter_by(user_id=user_id).all()
             return [self.serialize_user_agent(user) for user in users], None
         except Exception as e:
+            print(f"Error fetching users: {str(e)}")
             current_app.logger.error(f"Error fetching users: {str(e)}")
             return [], 'Internal server error'
 

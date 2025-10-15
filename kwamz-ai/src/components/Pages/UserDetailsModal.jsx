@@ -197,7 +197,6 @@ function UserDetailsModal({ isOpen, onClose, onSubmit, isLoading, user }) {
       }
     });
 
-    console.log('Submitting form data:', Object.fromEntries(formDataToSend.entries()));
     onSubmit(formDataToSend, isEditMode ? user.id : null);
   };
 

@@ -14,6 +14,7 @@ class Company(db.Model):
     primary_owner_name = db.Column(db.Text, nullable=True)
     primary_owner_email = db.Column(db.Text, nullable=True)
     company_code = db.Column(db.String(100), nullable=False)
+    shortcode = db.Column(db.String(100), nullable=True,unique=True)
     compliance_status = db.Column(db.String(20), default='compliant', nullable=False)  # e.g., 'compliant', 'under_review', 'suspended'
     total_float_balance = db.Column(db.Numeric(precision=15, scale=2), default=Decimal('0.00'), nullable=False)
     primary_owner_shares = db.Column(db.Numeric(precision=15, scale=2), default=Decimal('0.00'), nullable=True)
@@ -28,7 +29,7 @@ class Company(db.Model):
 
     def __init__(self, company_name, registration_number, address, company_code, registration_date=None,
                  compliance_status='compliant',primary_owner_name=None,primary_owner_email=None,primary_owner_shares=Decimal('0.00'), total_float_balance=Decimal('0.00'), file_location=None,
-                 last_compliance_audit=None, shareholders=None, directors=None, user_id=None):
+                 last_compliance_audit=None, shareholders=None, directors=None, user_id=None, shortcode=None):
         self.company_name = company_name
         self.registration_number = registration_number
         self.registration_date = registration_date
@@ -42,6 +43,7 @@ class Company(db.Model):
         self.file_location = file_location
         self.last_compliance_audit = last_compliance_audit
         self.user_id = user_id
+        self.shortcode = shortcode
         if shareholders:
             self.shareholders = shareholders
         if directors:
