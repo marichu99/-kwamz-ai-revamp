@@ -1,11 +1,49 @@
 #!/bin/bash
 
+# Set default display
+export DISPLAY=:99
+
+# Start Xvfb for headless=False support if not using host display
+if [ "$USE_HOST_DISPLAY" != "true" ]; then
+    echo "Starting virtual display on $DISPLAY..."
+    Xvfb $DISPLAY -screen 0 1920x1080x24 -ac +extension GLX +render -noreset &
+    XVFB_PID=$!
+    
+    # Wait for Xvfb to be ready
+    sleep 2
+    
+    # Check if Xvfb started successfully
+    if ! ps -p $XVFB_PID > /dev/null; then
+        echo "Warning: Xvfb failed to start. Headless mode may not work properly."
+    else
+        echo "Xvfb started successfully (PID: $XVFB_PID)"
+    fi
+else
+    echo "Using host display: $DISPLAY"
+fi
+
+# Optional: Start VNC server for remote debugging
+if [ "$ENABLE_VNC" = "true" ]; then
+    echo "Starting VNC server on port 5900..."
+    x11vnc -display $DISPLAY -forever -shared -rfbport 5900 -passwd "${VNC_PASSWORD:-vncpassword}" &
+    VNC_PID=$!
+    echo "VNC server started (PID: $VNC_PID)"
+fi
+
 # Install Playwright browsers if not already installed
-# if [ ! -d "/home/flaskuser/.cache/ms-playwright" ] || [ -z "$(ls -A /home/flaskuser/.cache/ms-playwright 2>/dev/null)" ]; then
-#     echo "Installing Playwright browsers..."
-#     python -m playwright install-deps || echo "Warning: Could not install system dependencies"
-#     python -m playwright install chromium || echo "Warning: Could not install Chromium"
-# fi
+if [ ! -d "/home/flaskuser/.cache/ms-playwright" ] || [ -z "$(ls -A /home/flaskuser/.cache/ms-playwright 2>/dev/null)" ]; then
+    echo "Installing Playwright browsers..."
+    playwright install-deps || echo "Warning: Could not install system dependencies"
+    playwright install chromium || echo "Warning: Could not install Chromium"
+    
+    # Install additional browsers if needed
+    if [ "$INSTALL_FIREFOX" = "true" ]; then
+        playwright install firefox
+    fi
+    if [ "$INSTALL_WEBKIT" = "true" ]; then
+        playwright install webkit
+    fi
+fi
 
 # Extract database host and port from DATABASE_URL or use defaults
 DB_HOST=${DB_HOST:-"localhost"}
@@ -53,6 +91,16 @@ fi
 if [ "$RUN_MIGRATIONS" = "true" ]; then
     echo "Running database migrations..."
     python manage.py db upgrade || echo "Migration failed or not applicable"
+fi
+
+# Health check for Xvfb if running in headful mode
+if [ "$USE_HOST_DISPLAY" != "true" ] && [ "$CHECK_XVFB" = "true" ]; then
+    echo "Checking if Xvfb is ready..."
+    if xdpyinfo -display $DISPLAY >/dev/null 2>&1; then
+        echo "Xvfb is ready on display $DISPLAY"
+    else
+        echo "Warning: Xvfb is not responding on display $DISPLAY"
+    fi
 fi
 
 # Execute the main command

@@ -38,7 +38,7 @@ COPY . .
 
 # Copy entrypoint script and set permissions
 COPY entryPoint.sh /app/entryPoint.sh
-RUN chmod +x /app/entryPoint.sh
+RUN chmod +x /app/entryPoint.sh 
 
 # Create a non-root user for security and set permissions
 RUN useradd -m -u 1000 flaskuser && chown -R flaskuser:flaskuser /app

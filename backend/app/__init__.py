@@ -12,14 +12,6 @@ migrate = Migrate()
 bcrypt = Bcrypt()
 jwt = JWTManager()
 
-# Import models here so they are always registered
-from app.model.company import Company
-from app.model.agentcompany import AgentCompany
-from app.model.useragent import UserAgent
-from app.model.director import Director
-from app.model.shareholder import Shareholder
-from app.model.document import Document
-from app.model.payment import Payment
 
 def create_app():
     app = Flask(__name__, instance_relative_config=True)
@@ -38,6 +30,20 @@ def create_app():
     bcrypt.init_app(app)
     jwt.init_app(app)
     CORS(app)
+    
+    # Import models here so they are always registered
+    from app.model.company import Company
+    from app.model.agentcompany import AgentCompany
+    from app.model.useragent import UserAgent
+    from app.model.director import Director
+    from app.model.shareholder import Shareholder
+    from app.model.document import Document
+    from app.model.user import User
+    from app.model.payment import Payment
+    from app.model.otp import Otp
+    
+    with app.app_context():
+        db.create_all()
 
     # Register blueprints
     from app.controller.user_controller import user_bp

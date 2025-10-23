@@ -1,0 +1,16 @@
+# Frontend .dockerignore (place in frontend directory)
+node_modules
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.git
+.gitignore
+README.md
+.env
+.nyc_output
+coverage
+.vscode
+.idea
+.DS_Store
+build
+dist

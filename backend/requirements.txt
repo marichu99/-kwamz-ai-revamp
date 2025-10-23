@@ -20,3 +20,5 @@ wheel
 requests
 openpyxl
 openai
+bs4
+pandas
