@@ -1,6 +1,6 @@
 from flask import Flask, render_template, request, jsonify
 from utils.kra_pin_details import extract_taxpayer_details
-import utils.mpesa_service as mpesa_service
+import app.service.mpesa_service as mpesa_service
 from utils.police_clearance_details import extract_clearance_details
 from backend.app.utils.script import authenticate_kra_from_app
 from flask_cors import CORS

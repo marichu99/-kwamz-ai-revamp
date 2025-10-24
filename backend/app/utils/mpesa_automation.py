@@ -11,6 +11,7 @@ import re
 import base64
 import os
 import time
+import traceback
 
 
 # Load environment variables
@@ -26,116 +27,133 @@ def login_to_mpesa():
         browser = p.chromium.launch(headless=False)
         page = browser.new_page()
         page.goto(url, timeout=600000)
-        max_retries = 3
         wait_after_click = 5  # seconds
 
-        # Fill login fields first time
+        # Fill login fields once
         fill_login_form(page, short_code, username, password)
+        print("[INFO] Login form filled")
 
-        attempt = 0
+        # Solve captcha initially
+        captcha_solution = capture_and_solve_captcha(page)
+        print(f"[DEBUG] Initial captcha solution: {captcha_solution}")
+
+        # Fill verification code input and submit
+        page.fill("//input[@id='verifyCode']", captcha_solution)
+        page.click("//button[@id='loginBtn']")
+        print("[INFO] Login button clicked; waiting for response...")
+
+        error_text = "the Verification Code is incorrect or has expired."
+        error_text_ = "Must be not greater than 4 characters."
         last_error = None
 
-        while attempt < max_retries:
-            attempt += 1
-            print(f"[INFO] Login attempt {attempt}/{max_retries}")
+        try:
+            # Wait for either success or error
+            start = time.time()
+            timeout_seconds = 10
+            found_success = False
+            found_error = False
+            error_message = None
 
-            # Solve captcha
-            captcha_solution = capture_and_solve_captcha(page)
-            print(f"[DEBUG] Captcha solution obtained: {captcha_solution}")
+            while time.time() - start < timeout_seconds:
+                locator = page.locator(".hlds-error-tip-content")
+                error_element = page.query_selector("//div[@class='el-form-item__error']")
+                if page.query_selector(f"text={error_text}") or page.query_selector(f"text={error_text_}"):
+                    found_error = True
+                    error_message = error_text if page.query_selector(f"text={error_text}") else error_text_
+                    print(f"[DEBUG] Detected error message: '{error_message}'")
+                elif error_element and error_element.is_visible():
+                    found_error = True
+                    error_message = error_element.inner_text().strip()
+                    print(f"[DEBUG] Detected el-form-item__error message: '{error_message}'")
+                elif locator.is_visible():
+                    found_error = True
+                    error_message = locator.inner_text().strip()
+                    print(f"[DEBUG] Detected hlds-error-tip-content message: '{error_message}'")
+                else:
+                    found_success = True
+                time.sleep(0.5)
 
-            # Fill verification code input and submit
-            page.fill("//input[@id='verifyCode']", captcha_solution)
-            page.click("//button[@id='loginBtn']")
-            print("[INFO] Login button clicked; waiting for response...")
+                if found_error or found_success:
+                    break
 
-            error_text = "the Verification Code is incorrect or has expired."
-            error_text_ = "Must be not greater than 4 characters."
-            error_element = page.query_selector("//div[@class='el-form-item__error' and normalize-space()='Must be not greater than 4 characters.']")
-            
+            if found_success:
+                print("[INFO] Login appears successful (no error detected).")
+            elif found_error:
+                print(f"[WARN] Detected error: '{error_message}' — retrying captcha.")
+                # Click the SVG element to refresh captcha
+                svg_element = page.query_selector("//div[@class='img-part']//*[name()='svg']")
+                if svg_element:
+                    svg_element.click()
+                    print("[INFO] Clicked SVG element to refresh captcha")
+                else:
+                    print("[ERROR] SVG element not found")
+                    last_error = "SVG element not found"
+                    raise Exception("Failed to locate SVG element for captcha refresh")
 
-            try:
-                # Wait either for success or the error text (whichever appears first).
-                # We'll poll for short durations so we can check both.
+                # Re-solve captcha
+                captcha_solution = capture_and_solve_captcha(page)
+                print(f"[DEBUG] New captcha solution: {captcha_solution}")
+
+                # Refill captcha input
+                page.fill("//input[@id='verifyCode']", captcha_solution)
+                page.click("//button[@id='loginBtn']")
+                print("[INFO] Login button clicked again after captcha refresh")
+
+                # Check for errors again
                 start = time.time()
-                timeout_seconds = 10
                 found_success = False
                 found_error = False
-
                 while time.time() - start < timeout_seconds:
-                    # check explicit error message
-                    # Using a contains text check — Playwright allows text= matchers or query the DOM
                     locator = page.locator(".hlds-error-tip-content")
-                    if page.query_selector(f"text={error_text}"):
+                    error_element = page.query_selector("//div[@class='el-form-item__error']")
+                    if page.query_selector(f"text={error_text}") or page.query_selector(f"text={error_text_}"):
                         found_error = True
-                    if error_element:
-                        print("Error div found via XPath!")
+                        error_message = error_text if page.query_selector(f"text={error_text}") else error_text_
+                        print(f"[DEBUG] Detected error message after retry: '{error_message}'")
+                    elif error_element and error_element.is_visible():
                         found_error = True
-                        print(error_element.inner_text())
-                    if locator.is_visible():
-                        error_text = locator.inner_text().strip()
+                        error_message = error_element.inner_text().strip()
+                        print(f"[DEBUG] Detected el-form-item__error message after retry: '{error_message}'")
+                    elif locator.is_visible():
                         found_error = True
-                        print(f"[DEBUG] Detected error message: '{error_text}'")
+                        error_message = locator.inner_text().strip()
+                        print(f"[DEBUG] Detected hlds-error-tip-content message after retry: '{error_message}'")
                     else:
                         found_success = True
                     time.sleep(0.5)
 
                 if found_success:
-                    print("[INFO] Login appears successful (success selector found).")
-                    last_error = None
-                    break  # exit retry loop — success
-                if found_error:
-                    last_error = error_text
-                    print(f"[WARN] Detected captcha error message: '{error_text}' — retrying.")
-                    # continue the loop to re-solve captcha and retry
-                    continue
+                    print("[INFO] Login successful after captcha retry")
+                else:
+                    last_error = error_message
+                    print(f"[ERROR] Login failed after retry: '{error_message}'")
 
-                # If neither detected in timeout window, attempt a longer wait for navigation or some other success indicator
-                try:
-                    page.wait_for_timeout(wait_after_click * 1000)  # give page some more time
-                except PlaywrightTimeoutError:
-                    pass
+            # Wait for navigation or further page load
+            try:
+                page.wait_for_timeout(wait_after_click * 1000)
+            except PlaywrightTimeoutError:
+                pass
 
-                # Final check after extra wait
-                if page.query_selector(f"text={error_text}"):
-                    last_error = error_text
-                    print(f"[WARN] Detected captcha error message after waiting: '{error_text}' — retrying.")
-                    continue
+        except Exception as exc:
+            last_error = str(exc)
+            print(f"[ERROR] Exception during login process: {exc}")
 
-                # If nothing decisive, log and retry
-                print("[WARN] No explicit success or captcha error detected; retrying (site may show different messages).")
-                last_error = "No explicit success or known error detected."
-                # Optionally reload the page or re-fill username/password if session cleared:
-                # page.reload()
-                # fill_login_form(page, short_code, username, password)
-                continue
-
-            except Exception as exc:
-                navigate_to_child_organization(page)                
-                print(f"[ERROR] Exception while waiting for login result: {exc}")
-                last_error = str(exc)
-                continue
-
-        # After loop: either we succeeded, or exhausted retries
+        # Save page content
         html_content = page.content()
         soup = BeautifulSoup(html_content, "html.parser")
-
         with open("login.html", "w", encoding="utf-8") as f:
             f.write(soup.prettify())
 
         if last_error:
-            print(f"[RESULT] Finished attempts. Last error/notice: {last_error}")
+            print(f"[RESULT] Login process completed. Last error: {last_error}")
         else:
             print("[RESULT] Login likely successful and HTML saved to login.html")
 
-        print("[INFO] Browser will remain open for inspection. Press ENTER to close.")
-        # input()
-        
         print("[INFO] Navigating to child organization page...")
         navigate_to_child_organization(page)
 
-        # print("[✅] Saved login page HTML to login.html")
-        # page.wait_for_timeout(99999999)
-        # # browser.close()  # Removed
+        print("[INFO] Browser will remain open for inspection. Press ENTER to close.")
+        # input()
 
 def navigate_to_child_organization(page):
     """
@@ -168,6 +186,7 @@ def navigate_to_child_organization(page):
         "//button[normalize-space()='Child Organization']",
         timeout=60000
     )
+    # //button[@aria-label='Go to next page']
     child_org_btn.click()
     print("[INFO] 'Child Organization' clicked. Waiting for page to load...")
 
@@ -239,107 +258,119 @@ def select_first_float_option_by_index(page, parent_xpath: str = None):
 
 def save_table_to_dataframe(page: Page, row_index: int) -> tuple[pd.DataFrame, list]:
     """
-    Extracts data from the specified table across all pages and returns a pandas DataFrame and headers.
-
-    Args:
-        page: Playwright Page object.
-        row_index: Index of the current row being processed (for adding to DataFrame).
-
-    Returns:
-        tuple: (DataFrame containing table data, list of headers). Returns (None, None) on failure.
+    Extracts **all** rows from a paginated Element-UI table.
     """
     try:
-        print("[INFO] Attempting to extract table data with pagination...")
+        print("[INFO] Starting full table extraction...")
 
-        # Initialize lists for headers and data rows
         headers = []
         all_data_rows = []
 
-        # Table selector
+        # ------------------- SELECTORS -------------------
+        header_selector = (
+            "//div[contains(@class,'el-table--fit') and contains(@class,'is-scrolling-none')]"
+            "//table[@class='el-table__header']"
+        )
         table_selector = (
-            "//div[@class='el-table--fit el-table--border el-table--enable-row-hover "
-            "el-table--enable-row-transition el-table el-table--layout-fixed is-scrolling-none']"
+            "//div[contains(@class,'el-table--fit') and contains(@class,'is-scrolling-none')]"
             "//table[@class='el-table__body']"
         )
+        next_btn_xpath = "//button[@aria-label='Go to next page']"
 
-        # Pagination loop
-        page_number = 1
+        # ------------------- HEADERS -------------------
+        page.wait_for_load_state("networkidle", timeout=10_000)
+        header_tbl = page.wait_for_selector(header_selector, timeout=10_000)
+        if not header_tbl or not header_tbl.is_visible():
+            print("[ERROR] Header table not found.")
+            return None, None
+
+        soup = BeautifulSoup(header_tbl.inner_html(), "html.parser")
+        tr = soup.find("thead").find("tr")
+        headers = [th.get_text(strip=True) for th in tr.find_all("th")]
+        if not headers:
+            print("[ERROR] No header cells.")
+            return None, None
+        print(f"[SUCCESS] Headers ({len(headers)}): {headers}")
+
+        # ------------------- PAGINATION LOOP -------------------
+        page_no = 1
         while True:
-            print(f"[INFO] Processing table page {page_number}...")
+            print(f"\n[INFO] --- Page {page_no} ---")
 
-            # Wait for table to be visible
-            try:
-                page.wait_for_load_state("networkidle", timeout=10000)
-                table = page.wait_for_selector(table_selector, timeout=10000)
-                if not table:
-                    print("[ERROR] Table not found with the specified XPath.")
-                    return None, None
-                if not table.is_visible():
-                    print("[ERROR] Table is not visible.")
-                    return None, None
-                print("[✓] Found table element.")
-            except Exception as e:
-                print(f"[ERROR] Failed to locate table on page {page_number}: {e}")
-                return None, None
+            # ---- wait for body table ----
+            page.wait_for_load_state("networkidle", timeout=10_000)
+            body_tbl = page.wait_for_selector(table_selector, timeout=10_000)
+            if not body_tbl:
+                print("[WARN] Body table missing – probably 'No Data'.")
+                break
+            if not body_tbl.is_visible():
+                print("[ERROR] Body table not visible.")
+                break
+            print("[SUCCESS] Body table ready.")
 
-            # Get the table HTML content
-            table_html = table.inner_html()
-            soup = BeautifulSoup(table_html, "html.parser")
-
-            # Extract headers from <thead> (only on the first page)
-            if page_number == 1:
-                thead = soup.find("thead")
-                if thead:
-                    header_row = thead.find("tr")
-                    if header_row:
-                        headers = [th.get_text(strip=True) for th in header_row.find_all("th")]
-                if not headers:
-                    print("[ERROR] No headers found in the table.")
-                    return None, None
-                print(f"[✓] Extracted {len(headers)} headers: {headers}")
-
-            # Extract data rows from <tbody>
+            # ---- extract rows ----
+            soup = BeautifulSoup(body_tbl.inner_html(), "html.parser")
             tbody = soup.find("tbody")
+            page_has_rows = False
+
             if tbody:
-                rows = tbody.find_all("tr")
-                for row in rows:
-                    cells = [td.get_text(strip=True) for td in row.find_all("td")]
-                    if cells and len(cells) == len(headers):  # Ensure row matches header count
-                        # Add row_index as the first cell
+                for tr in tbody.find_all("tr"):
+                    cells = [td.get_text(strip=True) for td in tr.find_all("td")]
+                    if len(cells) == len(headers):
                         all_data_rows.append([row_index] + cells)
+                        page_has_rows = True
                     else:
-                        print(f"[WARN] Skipping row with {len(cells)} cells (expected {len(headers)})")
+                        print(f"[WARN] Row skipped – {len(cells)} cells (expected {len(headers)})")
+                print(f"[SUCCESS] {len(tbody.find_all('tr'))} rows from page {page_no}")
             else:
-                print(f"[WARN] No <tbody> found in the table on page {page_number}.")
-                return None, None
+                print("[WARN] No <tbody> – empty page.")
+                if page_no == 1 and "no data" in body_tbl.inner_html().lower():
+                    print("[WARN] Table shows 'No Data'.")
 
-            print(f"[✓] Extracted {len(rows)} data rows from page {page_number}.")
+            # ---- NEXT-PAGE BUTTON ----
+            next_btn = page.locator(f"xpath={next_btn_xpath}").first
 
-            # Check for 'Next Page' button
-            next_page_btn = page.query_selector("(//button[@aria-label='Go to next page'])[1]")
-            if next_page_btn and not next_page_btn.is_disabled():
-                print("[INFO] Clicking 'Next Page' button...")
-                next_page_btn.click()
-                page.wait_for_timeout(5000)  # Wait for page to load
-                page_number += 1
+            # 1. scroll into view (makes hidden pagination visible)
+            try:
+                next_btn.scroll_into_view_if_needed(timeout=5_000)
+            except Exception as e:
+                print(f"[WARN] Scroll failed: {e}")
+
+            # 2. check visibility + enabled state
+            try:
+                visible = next_btn.is_visible()      # no timeout argument
+                enabled = not next_btn.is_disabled()  # no timeout argument
+            except Exception as e:
+                print(f"[WARN] Visibility check failed: {e}")
+                visible = enabled = False
+
+            if visible and enabled:
+                print("[ACTION] Clicking next page...")
+                next_btn.click()
+                page.wait_for_load_state("networkidle", timeout=15_000)
+                page_no += 1
+                continue          # go to next iteration
             else:
-                print("[INFO] No more pages to process.")
+                print("[INFO] Next button missing or disabled → **LAST PAGE**")
                 break
 
+        # ------------------- BUILD DATAFRAME -------------------
         if not all_data_rows:
-            print("[WARN] No data rows found across all pages.")
-            return None, None
-        print(f"[✓] Extracted {len(all_data_rows)} total data rows across {page_number} pages.")
+            print("[WARN] No rows collected.")
+            df = pd.DataFrame(columns=["OrganizationRowIndex"] + headers)
+        else:
+            df = pd.DataFrame(all_data_rows, columns=["OrganizationRowIndex"] + headers)
+            print(f"[SUCCESS] Total {len(df)} rows from {page_no} page(s)")
 
-        # Create DataFrame with 'OrganizationRowIndex' as the first column
-        df = pd.DataFrame(all_data_rows, columns=["OrganizationRowIndex"] + headers)
-        print("[✓] Created DataFrame with shape:", df.shape)
+        # ------------------- SAVE CSV -------------------
+        csv_path = f"row_{row_index}_float_data.csv"
+        df.to_csv(csv_path, index=False)
+        print(f"[SUCCESS] Saved {csv_path}")
 
         return df, headers
 
     except Exception as exc:
-        print(f"[ERROR] Failed to extract table data: {exc}")
-        import traceback
+        print(f"[FATAL] {exc}")
         traceback.print_exc()
         return None, None
 
@@ -448,6 +479,8 @@ def process_float_account_details(page: Page):
             page.keyboard.press("Enter")
             print("[✓] Pressed Enter to submit form")
             page.wait_for_timeout(3000)  # Wait for page to load results
+            
+            save_table_to_dataframe(page, row_index=1)
             
             # Debug: Verify if submission triggered a change
             if page.query_selector(".el-table__empty-text") or page.query_selector("text=No Data"):
