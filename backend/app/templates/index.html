@@ -91,6 +91,7 @@
             document.getElementById("form").reset();
             return;
           }
+          
           resultFieldIds.forEach(({ id, key }) => {
             document.getElementById(id).value = result[key] || 'Not found';
           });

@@ -1,6 +1,6 @@
 from playwright.sync_api import sync_playwright,Page, TimeoutError as PlaywrightTimeoutError
-# from app.utils.script import fill_login_form, capture_and_solve_captcha
-from script import fill_login_form, capture_and_solve_captcha
+from app.utils.script import fill_login_form, capture_and_solve_captcha
+# from script import fill_login_form, capture_and_solve_captcha
 from PIL import Image, ImageFilter, ImageOps
 from dotenv import load_dotenv
 from openai import OpenAI
@@ -24,11 +24,17 @@ def login_to_mpesa():
     url = "https://org.ke.m-pesa.com/#/login?service=https%3A%2F%2Forg.ke.m-pesa.com%2Forgportal%2Fv1%2Fsso%2Fhome"
 
     with sync_playwright() as p:
-        browser = p.chromium.launch(headless=False)
-        page = browser.new_page()
+        browser = p.chromium.launch(
+            headless=False,
+            args=['--start-maximized']  # Use --start-maximized instead
+        )
+        
+        # Create context with no default viewport to use full screen
+        context = browser.new_context(no_viewport=True)
+        page = context.new_page()
+        
         page.goto(url, timeout=600000)
         wait_after_click = 5  # seconds
-
         # Fill login fields once
         fill_login_form(page, short_code, username, password)
         print("[INFO] Login form filled")
@@ -36,6 +42,16 @@ def login_to_mpesa():
         # Solve captcha initially
         captcha_solution = capture_and_solve_captcha(page)
         print(f"[DEBUG] Initial captcha solution: {captcha_solution}")
+        if(len(captcha_solution) > 4):
+            svg_element = page.query_selector("//div[@class='img-part']//*[name()='svg']")
+            if svg_element:
+                svg_element.click()
+                print("[INFO] Clicked SVG element to refresh captcha")
+                captcha_solution = capture_and_solve_captcha(page)
+            else:
+                print("[ERROR] SVG element not found")
+                last_error = "SVG element not found"
+                raise Exception("Failed to locate SVG element for captcha refresh")
 
         # Fill verification code input and submit
         page.fill("//input[@id='verifyCode']", captcha_solution)
@@ -155,6 +171,20 @@ def login_to_mpesa():
         print("[INFO] Browser will remain open for inspection. Press ENTER to close.")
         # input()
 
+def maximize_page(page: Page) -> None:
+    """
+    Maximizes the page by setting the viewport to a large size (e.g., 1920x1080).
+    
+    Args:
+        page: Playwright Page object
+    """
+    try:
+        # Set viewport to a large size (can adjust based on your needs)
+        page.set_viewport_size({"width": 1920, "height": 1080})
+        print("[SUCCESS] Page maximized to 1920x1080")
+    except Exception as e:
+        print(f"[ERROR] Failed to maximize page: {e}")
+        
 def navigate_to_child_organization(page):
     """
     Navigates after login: hover on the index icon, click 'My Organization',
@@ -255,6 +285,21 @@ def select_first_float_option_by_index(page, parent_xpath: str = None):
         import traceback
         traceback.print_exc()
         return False
+
+def scroll_to_bottom(page: Page) -> None:
+    """
+    Scrolls to the bottom of the page.
+    
+    Args:
+        page: Playwright Page object
+    """
+    time.sleep(3)  # Wait for page to settle before scrolling
+    try:
+        page.evaluate("window.scrollTo(0, document.body.scrollHeight);")
+        time.sleep(10)
+        print("[SUCCESS] Scrolled to bottom of page")
+    except Exception as e:
+        print(f"[ERROR] Failed to scroll to bottom: {e}")
 
 def save_table_to_dataframe(page: Page, row_index: int) -> tuple[pd.DataFrame, list]:
     """
@@ -374,6 +419,155 @@ def save_table_to_dataframe(page: Page, row_index: int) -> tuple[pd.DataFrame, l
         traceback.print_exc()
         return None, None
 
+
+def save_table_to_dataframe_(page: Page, row_index: int) -> tuple[pd.DataFrame, list]:
+    """
+    Extracts **all** rows from a paginated Element-UI table.
+    Selects pagination size by clicking the dropdown, pressing down arrow 4 times, and pressing enter.
+    Reads table data, navigates to the next page if clickable, and saves results to a CSV.
+    """
+    try:
+        print("[INFO] Starting full table extraction...")
+
+        headers = []
+        all_data_rows = []
+
+        # ------------------- SELECTORS -------------------
+        header_selector = (
+            "//div[contains(@class,'el-table--fit') and contains(@class,'is-scrolling-none')]"
+            "//table[@class='el-table__header']"
+        )
+        table_selector = (
+            "//div[contains(@class,'el-table--fit') and contains(@class,'is-scrolling-none')]"
+            "//table[@class='el-table__body']"
+        )
+        dropdown_selector = (
+            "//span[@class='el-pagination__sizes']//i[@class='el-icon el-select__caret el-select__icon']"
+        )
+        next_btn_xpath = "//button[@aria-label='Go to next page']//i[@class='el-icon']"
+
+        # ------------------- SET PAGINATION SIZE -------------------
+        print("[INFO] Setting pagination size...")
+        page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+        time.sleep(2)  # Wait for page to settle
+        page.wait_for_load_state("networkidle", timeout=10_000)
+        dropdown = page.wait_for_selector(f"xpath={dropdown_selector}", timeout=10_000)
+        if not dropdown or not dropdown.is_visible():
+            print("[ERROR] Pagination dropdown not found or not visible.")
+            return None, None
+
+        try:
+            dropdown.click()
+            print("[ACTION] Clicked pagination dropdown.")
+            time.sleep(4)  # Wait for dropdown to open
+            for _ in range(3):
+                page.keyboard.press("ArrowDown")
+                time.sleep(0.5)  # Wait for each key press to register
+                print("[ACTION] Pressed ArrowDown.")
+            page.keyboard.press("Enter")
+            print("[ACTION] Pressed Enter to select pagination size.")
+            page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+        
+            time.sleep(1)  # Wait for selection to apply
+        except Exception as e:
+            print(f"[ERROR] Failed to set pagination size: {e}")
+            return None, None
+
+        # ------------------- HEADERS -------------------
+        header_tbl = page.wait_for_selector(header_selector, timeout=10_000)
+        if not header_tbl or not header_tbl.is_visible():
+            print("[ERROR] Header table not found.")
+            return None, None
+
+        soup = BeautifulSoup(header_tbl.inner_html(), "html.parser")
+        tr = soup.find("thead").find("tr")
+        headers = [th.get_text(strip=True) for th in tr.find_all("th")]
+        if not headers:
+            print("[ERROR] No header cells.")
+            return None, None
+        print(f"[SUCCESS] Headers ({len(headers)}): {headers}")
+
+        # ------------------- PAGINATION LOOP -------------------
+        page_no = 1
+        while True:
+            print(f"\n[INFO] --- Page {page_no} ---")
+
+            # ---- wait for body table ----
+            page.wait_for_load_state("networkidle", timeout=10_000)
+            body_tbl = page.wait_for_selector(table_selector, timeout=10_000)
+            if not body_tbl:
+                print("[WARN] Body table missing – probably 'No Data'.")
+                break
+            if not body_tbl.is_visible():
+                print("[ERROR] Body table not visible.")
+                break
+            print("[SUCCESS] Body table ready.")
+
+            # ---- extract rows ----
+            soup = BeautifulSoup(body_tbl.inner_html(), "html.parser")
+            tbody = soup.find("tbody")
+            page_has_rows = False
+
+            if tbody:
+                for tr in tbody.find_all("tr"):
+                    cells = [td.get_text(strip=True) for td in tr.find_all("td")]
+                    if len(cells) == len(headers):
+                        all_data_rows.append([row_index] + cells)
+                        page_has_rows = True
+                    else:
+                        print(f"[WARN] Row skipped – {len(cells)} cells (expected {len(headers)})")
+                print(f"[SUCCESS] {len(tbody.find_all('tr'))} rows from page {page_no}")
+            else:
+                print("[WARN] No <tbody> – empty page.")
+                if page_no == 1 and "no data" in body_tbl.inner_html().lower():
+                    print("[WARN] Table shows 'No Data'.")
+
+            # ---- NEXT-PAGE BUTTON ----
+            next_btn = page.locator(f"xpath={next_btn_xpath}").first
+
+            # 1. scroll into view
+            try:
+                next_btn.scroll_into_view_if_needed(timeout=5_000)
+            except Exception as e:
+                print(f"[WARN] Scroll failed: {e}")
+
+            # 2. check visibility + enabled state
+            try:
+                visible = next_btn.is_visible()
+                enabled = not next_btn.is_disabled()
+            except Exception as e:
+                print(f"[WARN] Visibility check failed: {e}")
+                visible = enabled = False
+
+            if visible and enabled:
+                print("[ACTION] Clicking next page icon...")
+                next_btn.click()
+                page.wait_for_load_state("networkidle", timeout=15_000)
+                page_no += 1
+                continue
+            else:
+                print("[INFO] Next page icon missing or disabled → **LAST PAGE**")
+                break
+
+        # ------------------- BUILD DATAFRAME -------------------
+        if not all_data_rows:
+            print("[WARN] No rows collected.")
+            df = pd.DataFrame(columns=["OrganizationRowIndex"] + headers)
+        else:
+            df = pd.DataFrame(all_data_rows, columns=["OrganizationRowIndex"] + headers)
+            print(f"[SUCCESS] Total {len(df)} rows from {page_no} page(s)")
+
+        # ------------------- SAVE CSV -------------------
+        csv_path = f"row_{row_index}_float_data.csv"
+        df.to_csv(csv_path, index=False)
+        print(f"[SUCCESS] Saved {csv_path}")
+
+        return df, headers
+
+    except Exception as exc:
+        print(f"[FATAL] {exc}")
+        traceback.print_exc()
+        return None, None
 def process_float_account_details(page: Page):
     """
     Processes the float account details page:
@@ -480,7 +674,7 @@ def process_float_account_details(page: Page):
             print("[✓] Pressed Enter to submit form")
             page.wait_for_timeout(3000)  # Wait for page to load results
             
-            save_table_to_dataframe(page, row_index=1)
+            save_table_to_dataframe_(page, row_index=1)
             
             # Debug: Verify if submission triggered a change
             if page.query_selector(".el-table__empty-text") or page.query_selector("text=No Data"):
@@ -567,6 +761,8 @@ def process_organization_rows(page):
     """
     while True:
         print("[INFO] Processing rows on current page...")
+        
+        time.sleep(2)  # Wait for page to load completely
         # Find all rows in the tbody with class 'childTableRow'
         rows = page.query_selector_all("//tbody//tr[@class='el-table__row childTableRow']")
         if not rows:

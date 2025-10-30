@@ -41,6 +41,9 @@ def create_app():
     from app.model.user import User
     from app.model.payment import Payment
     from app.model.otp import Otp
+    from app.model.pesalpalpayment import PesapalPayment
+    from app.model.pesapalipnconfig import PesapalIPNConfig
+    from app.model.pesapalrefund import PesapalRefund
     
     with app.app_context():
         db.create_all()

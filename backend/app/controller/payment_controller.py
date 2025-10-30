@@ -1,12 +1,14 @@
-from flask import Blueprint, jsonify, request
+from flask import Blueprint, jsonify, request,redirect
 from app.model.payment import Payment
 from app.utils.user_service import UserService
 from flask_jwt_extended import jwt_required,get_jwt_identity
 from datetime import datetime,timedelta
+from app.utils.pesapalutils import PesapalPaymentService
 
 import os
 
 payment_bp = Blueprint('payment', __name__)
+payment_service = PesapalPaymentService()
 
 @payment_bp.route('/get-payments', methods=['GET'])
 @jwt_required()
@@ -72,3 +74,100 @@ def get_latest_payment():
         'last_payment_date': last_payment_date.isoformat() if last_payment_date else None,
         'today_date': today.isoformat()
     }), 200
+    
+@payment_bp.route('/create', methods=['POST'])
+@jwt_required()
+def create_payment():
+    data = request.json
+    current_user_id = get_jwt_identity()
+    user = UserService.get_user_by_id(user_id=current_user_id)
+    if not user:
+        return jsonify({'error': 'User not found'}), 404
+
+    # try:
+    payment = payment_service.create_payment(
+        user_id=current_user_id,
+        amount=data['amount'],
+        currency=data.get('currency', 'KES'),
+        description=data['description'],
+        customer_email=user.email,
+        customer_phone=user.phone_number,
+        customer_first_name=user.username,
+        customer_last_name=user.username
+    )
+    
+    # Redirect user to Pesapal payment page
+    return jsonify({
+        'success': True,
+        'merchant_reference': payment.merchant_reference,
+        'redirect_url': payment.redirect_url
+    })
+        
+    # except Exception as e:
+    #     return jsonify({'success': False, 'error': str(e)}), 400
+
+
+@payment_bp.route('/callback')
+def payment_callback():
+    # User is redirected here after payment
+    order_tracking_id = request.args.get('OrderTrackingId')
+    
+    if order_tracking_id:
+        try:
+            payment = payment_service.update_payment_status(order_tracking_id)
+            
+            if payment.is_paid:
+                return redirect(f'/payment/success?ref={payment.merchant_reference}')
+            else:
+                return redirect(f'/payment/failed?ref={payment.merchant_reference}')
+        except Exception as e:
+            return redirect('/payment/error')
+    
+    return redirect('/payment/error')
+
+
+@payment_bp.route('/ipn', methods=['GET'])
+def payment_ipn():
+    # Pesapal sends IPN notification here
+    order_tracking_id = request.args.get('OrderTrackingId')
+    
+    if order_tracking_id:
+        try:
+            payment = payment_service.process_ipn_callback(order_tracking_id)
+            return jsonify({'success': True, 'status': payment.payment_status})
+        except Exception as e:
+            return jsonify({'success': False, 'error': str(e)}), 400
+    
+    return jsonify({'success': False, 'error': 'Missing OrderTrackingId'}), 400
+
+
+@payment_bp.route('/status/<merchant_reference>')
+def payment_status(merchant_reference):
+    payment = payment_service.get_payment_by_merchant_reference(merchant_reference)
+    
+    if payment:
+        return jsonify(payment.to_dict())
+    
+    return jsonify({'error': 'Payment not found'}), 404
+
+
+@payment_bp.route('/refund', methods=['POST'])
+def refund_payment():
+    data = request.json
+    
+    try:
+        refund = payment_service.initiate_refund(
+            payment_id=data['payment_id'],
+            refund_amount=data['refund_amount'],
+            initiated_by=data['initiated_by'],
+            remarks=data.get('remarks')
+        )
+        
+        return jsonify({
+            'success': True,
+            'refund_id': refund.id,
+            'status': refund.refund_status
+        })
+        
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 400
