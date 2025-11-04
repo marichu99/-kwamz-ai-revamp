@@ -41,7 +41,8 @@ const menuItems = [
             { id: "catalog", label: "Product Catalog" },
             { id: "inventory", label: "Inventory" },
             { id: "categories", label: "Categories" },
-            { id: "checkout", label: "Pricing" }
+            { id: "checkout", label: "Pricing" },
+            { id: "pesapal", label: "PesaPal" }
         ]
     },
     {

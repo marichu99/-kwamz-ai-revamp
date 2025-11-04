@@ -45,8 +45,23 @@ def create_app():
     from app.model.pesapalipnconfig import PesapalIPNConfig
     from app.model.pesapalrefund import PesapalRefund
     
+    # Initialize Pesapal Client and Payment Service
+    from app.utils.pesapalclient import PesapalClient, PesapalConfig, FlaskIPNStorage
+    from app.utils.pesapalutils import PesapalPaymentService
+    
+    flaskipn_storage = FlaskIPNStorage()
+    pesapal_config = PesapalConfig()
+    pesapal_client = PesapalClient(config=pesapal_config,ipn_storage=flaskipn_storage)
+    payment_service = PesapalPaymentService(pesapal_client=pesapal_client)
+    
     with app.app_context():
         db.create_all()
+        pesapal_client.initialize()
+        
+    # Attach to app for access in blueprints
+    app.payment_service = payment_service
+    app.pesapal_client = pesapal_client
+        
 
     # Register blueprints
     from app.controller.user_controller import user_bp

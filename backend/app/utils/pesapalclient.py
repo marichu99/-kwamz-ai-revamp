@@ -18,18 +18,22 @@ class PesapalConfig:
     
     def __init__(
         self,
-        consumer_key: str,
-        consumer_secret: str,
+        consumer_key: Optional[str] = None,
+        consumer_secret: Optional[str] = None,
         base_url: str = "https://pay.pesapal.com/v3",
         callback_url: Optional[str] = None,
         ipn_url: Optional[str] = None,
         environment: str = "SANDBOX"
     ):
-        self.consumer_key = consumer_key
-        self.consumer_secret = consumer_secret
+        self.consumer_key = consumer_key or os.getenv('PESAPAL_CONSUMER_KEY')
+        if not self.consumer_key:
+            raise ValueError("PESAPAL_CONSUMER_KEY is required")
+        self.consumer_secret = consumer_secret or os.getenv('PESAPAL_CONSUMER_SECRET')
+        if not self.consumer_secret:
+            raise ValueError("PESAPAL_CONSUMER_SECRET is required")
         self.base_url = base_url
-        self.callback_url = callback_url or os.getenv('PESAPAL_CALLBACK_URL')
-        self.ipn_url = ipn_url
+        self.callback_url = callback_url or "https://dc8d3ec5cd74.ngrok-free.app/payment/callback"
+        self.ipn_url = ipn_url or "https://dc8d3ec5cd74.ngrok-free.app/payment/ipn"
         self.environment = environment
         self._access_token = None
         self._token_expiry = None
@@ -83,9 +87,19 @@ class PaymentService:
         
         # Use registered IPN if no notification_id provided
         if not notification_id and self.client.ipn_storage:
+            print("No notification ID provided, checking registered IPNs...")
             ipn_configs = self.client.ipn_storage.list_ipn_configs()
             if ipn_configs:
+                print(f"Found {len(ipn_configs)} registered IPN configurations.")
+                for config in ipn_configs:
+                    print(f"Found IPN config: {config}")
+                    print(f"IPN URL: {config.get('ipn_url')}")
+                    print(f"IPN ID: {config.get('notification_id')}")
                 notification_id = ipn_configs[0].get('notification_id')
+        
+        print("We are trying to make a payment with the following details:")
+        print(f"The callback URL is: {callback_url}")
+        print(f"The notification id is: {notification_id}")
         
         order_data = {
             "id": merchant_reference,
@@ -103,6 +117,7 @@ class PaymentService:
                 "last_name": customer_last_name or ""
             }
         }
+        
         
         # Remove None values
         order_data = {k: v for k, v in order_data.items() if v is not None}
@@ -235,13 +250,16 @@ class PesapalClient:
         Args:
             ipn_url: IPN URL to register (uses config.ipn_url if not provided)
         """
+        print("Initializing Pesapal client...")
         # Get access token
         self._authenticate()
         
         # Register IPN if URL is provided and storage is available
         if self.ipn_storage:
+            print("IPN storage is available, checking for IPN registration...")
             ipn_url = ipn_url or self.config.ipn_url
             if ipn_url:
+                print(f"Registering IPN URL: {ipn_url}")
                 # Check if IPN is already registered
                 existing_config = self.ipn_storage.get_ipn_config(ipn_url)
                 if not existing_config:
@@ -250,13 +268,18 @@ class PesapalClient:
                         print(f"IPN registered successfully: {ipn_url}")
                     except Exception as e:
                         print(f"Failed to register IPN: {e}")
+            else:
+                print("No IPN URL provided, skipping registration.")
     
     def _authenticate(self) -> None:
         """Authenticate with Pesapal and get access token"""
+        print("Checking authentication status...")
         # Check if token is still valid
-        if (self._access_token and self._token_expiry and 
+        if (self.config._access_token and self._token_expiry and 
             datetime.utcnow() < self._token_expiry):
             return
+        
+        print("Authenticating with Pesapal...")
         
         auth_url = f"{self.config.base_url}/api/Auth/RequestToken"
         
@@ -268,19 +291,24 @@ class PesapalClient:
         try:
             response = self.session.post(auth_url, json=auth_data)
             response.raise_for_status()
-            
+                        
             auth_response = response.json()
-            self._access_token = auth_response.get('token')
+            
+            print(f"The response status code is: {auth_response}")
+            print(f"The url is: {auth_url}")
+            print(f"The auth data is: {auth_data}")
+            self.config._access_token = auth_response.get('token')
             
             # Set token expiry (typically 1 hour, but we'll use 55 minutes for safety)
             self._token_expiry = datetime.utcnow() + timedelta(minutes=55)
             
             # Update session headers with new token
             self.session.headers.update({
-                "Authorization": f"Bearer {self._access_token}"
+                "Authorization": f"Bearer {self.config._access_token}"
             })
             
         except requests.exceptions.RequestException as e:
+            print(f"Authentication request failed: {str(e)}")
             raise Exception(f"Authentication failed: {str(e)}")
     
     def _make_request(self, method: str, endpoint: str, data: Optional[Dict] = None) -> Dict:
@@ -307,6 +335,10 @@ class PesapalClient:
                 response = self.session.post(url, json=data)
             
             response.raise_for_status()
+            print(f"Request to {url} successful with method {method}")
+            print(f"Request data: {data}")
+            print(f"Response status code: {response.status_code}")
+            print(f"Response content: {response.json()}")
             return response.json()
             
         except requests.exceptions.HTTPError as e:
@@ -345,87 +377,3 @@ class PesapalClient:
 # ============================================================================
 # Usage with your existing code
 # ============================================================================
-
-def main():
-    # Initialize configuration
-    pesapal_config = PesapalConfig(
-        consumer_key=os.getenv('PESAPAL_CONSUMER_KEY'),
-        consumer_secret=os.getenv('PESAPAL_CONSUMER_SECRET'),
-        base_url=os.getenv('PESAPAL_BASE_URL', 'https://pay.pesapal.com/v3'),
-        callback_url=os.getenv('PESAPAL_CALLBACK_URL'),
-        ipn_url=os.getenv('PESAPAL_IPN_URL'),
-        environment=os.getenv('PESAPAL_ENVIRONMENT', 'SANDBOX')
-    )
-    
-    # Initialize IPN storage
-    ipn_storage = FlaskIPNStorage()
-    
-    # Create client
-    pesapal_client = PesapalClient(config=pesapal_config, ipn_storage=ipn_storage)
-    
-    # Initialize client (register IPN, etc.)
-    pesapal_client.initialize()
-    
-    # Example usage of payment service
-    payment_service = PaymentService(pesapal_client)
-    
-    # Submit an order
-    order_response = payment_service.submit_order(
-        merchant_reference="order123",
-        amount=1.0,
-        currency="KES",
-        description="Test Order",
-        customer_email="",
-        customer_phone="254799692741",
-        customer_first_name="John",
-        customer_last_name="Doe",
-        callback_url="https://yourdomain.com/payment/callback",
-        cancellation_url="https://yourdomain.com/payment/cancel"
-    )
-    print("Order Response:", order_response)
-    # Get transaction status
-    status_response = payment_service.get_transaction_status(order_response['order_tracking_id'])
-    print("Transaction Status:", status_response)
-
-if __name__ == "__main__":
-    main()
-"""
-# Initialize the client in your Flask app:
-
-from pesapal_client import PesapalClient, PesapalConfig
-from app.models import FlaskIPNStorage
-
-# Configuration
-pesapal_config = PesapalConfig(
-    consumer_key=os.getenv('PESAPAL_CONSUMER_KEY'),
-    consumer_secret=os.getenv('PESAPAL_CONSUMER_SECRET'),
-    base_url=os.getenv('PESAPAL_BASE_URL', 'https://pay.pesapal.com/v3'),
-    callback_url=os.getenv('PESAPAL_CALLBACK_URL'),
-    ipn_url=os.getenv('PESAPAL_IPN_URL'),
-    environment=os.getenv('PESAPAL_ENVIRONMENT', 'SANDBOX')
-)
-
-# Initialize storage and client
-ipn_storage = FlaskIPNStorage()
-pesapal_client = PesapalClient(config=pesapal_config, ipn_storage=ipn_storage)
-
-# Initialize (register IPN, etc.)
-pesapal_client.initialize()
-
-# Now use with your payment service
-payment_service = PesapalPaymentService(pesapal_client)
-"""
-
-# ============================================================================
-# Environment Variables Example
-# ============================================================================
-
-"""
-# .env file or environment variables:
-PESAPAL_CONSUMER_KEY=your_consumer_key
-PESAPAL_CONSUMER_SECRET=your_consumer_secret
-PESAPAL_BASE_URL=https://pay.pesapal.com/v3  # or sandbox URL
-PESAPAL_CALLBACK_URL=https://yourdomain.com/payment/callback
-PESAPAL_IPN_URL=https://yourdomain.com/payment/ipn
-PESAPAL_ENVIRONMENT=SANDBOX  # or LIVE
-"""

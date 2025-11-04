@@ -51,6 +51,16 @@ class PesapalPaymentService:
         if not merchant_reference:
             merchant_reference = f"ORDER-{datetime.utcnow().strftime('%Y%m%d%H%M%S')}-{user_id or 'GUEST'}"
         
+        print("We are trying to make a payment with the following details:")
+        print(f"User ID: {user_id}")
+        print(f"Merchant Reference: {merchant_reference}")
+        print(f"Amount: {amount}")
+        print(f"Currency: {currency}")
+        print(f"Description: {description}")
+        print(f"Customer Email: {customer_email}")
+        print(f"Customer Phone: {customer_phone}")
+        print(f"Customer First Name: {customer_first_name}")
+        print(f"Customer Last Name: {customer_last_name}")
         # Create payment record in database
         payment = PesapalPayment(
             user_id=user_id,
@@ -246,130 +256,3 @@ class PesapalPaymentService:
             db.session.add(refund)
             db.session.commit()
             raise
-
-
-# ============================================================================
-# Usage Example
-# ============================================================================
-
-"""
-# In your Flask app initialization (app/__init__.py or similar):
-
-from flask import Flask
-from flask_sqlalchemy import SQLAlchemy
-from pesapal_utils import PesapalClient, PesapalConfig
-
-app = Flask(__name__)
-app.config['SQLALCHEMY_DATABASE_URI'] = 'postgresql://user:pass@localhost/dbname'
-db = SQLAlchemy(app)
-
-# Initialize Pesapal client with storage
-from models import FlaskIPNStorage
-
-ipn_storage = FlaskIPNStorage()
-pesapal_client = PesapalClient(ipn_storage=ipn_storage)
-
-# Initialize IPN (do this once)
-pesapal_client.initialize()
-
-# Create payment service
-payment_service = PesapalPaymentService(pesapal_client)
-
-
-# In your routes (app/routes/payment.py):
-
-from flask import request, jsonify, redirect
-from models import payment_service
-
-@app.route('/payment/create', methods=['POST'])
-def create_payment():
-    data = request.json
-    
-    try:
-        payment = payment_service.create_payment(
-            user_id=data.get('user_id'),
-            amount=data['amount'],
-            currency=data.get('currency', 'KES'),
-            description=data['description'],
-            customer_email=data['customer_email'],
-            customer_phone=data['customer_phone'],
-            customer_first_name=data['customer_first_name'],
-            customer_last_name=data['customer_last_name']
-        )
-        
-        # Redirect user to Pesapal payment page
-        return jsonify({
-            'success': True,
-            'merchant_reference': payment.merchant_reference,
-            'redirect_url': payment.redirect_url
-        })
-        
-    except Exception as e:
-        return jsonify({'success': False, 'error': str(e)}), 400
-
-
-@app.route('/payment/callback')
-def payment_callback():
-    # User is redirected here after payment
-    order_tracking_id = request.args.get('OrderTrackingId')
-    
-    if order_tracking_id:
-        try:
-            payment = payment_service.update_payment_status(order_tracking_id)
-            
-            if payment.is_paid:
-                return redirect(f'/payment/success?ref={payment.merchant_reference}')
-            else:
-                return redirect(f'/payment/failed?ref={payment.merchant_reference}')
-        except Exception as e:
-            return redirect('/payment/error')
-    
-    return redirect('/payment/error')
-
-
-@app.route('/payment/ipn', methods=['GET'])
-def payment_ipn():
-    # Pesapal sends IPN notification here
-    order_tracking_id = request.args.get('OrderTrackingId')
-    
-    if order_tracking_id:
-        try:
-            payment = payment_service.process_ipn_callback(order_tracking_id)
-            return jsonify({'success': True, 'status': payment.payment_status})
-        except Exception as e:
-            return jsonify({'success': False, 'error': str(e)}), 400
-    
-    return jsonify({'success': False, 'error': 'Missing OrderTrackingId'}), 400
-
-
-@app.route('/payment/status/<merchant_reference>')
-def payment_status(merchant_reference):
-    payment = payment_service.get_payment_by_merchant_reference(merchant_reference)
-    
-    if payment:
-        return jsonify(payment.to_dict())
-    
-    return jsonify({'error': 'Payment not found'}), 404
-
-
-@app.route('/payment/refund', methods=['POST'])
-def refund_payment():
-    data = request.json
-    
-    try:
-        refund = payment_service.initiate_refund(
-            payment_id=data['payment_id'],
-            refund_amount=data['refund_amount'],
-            initiated_by=data['initiated_by'],
-            remarks=data.get('remarks')
-        )
-        
-        return jsonify({
-            'success': True,
-            'refund_id': refund.id,
-            'status': refund.refund_status
-        })
-        
-    except Exception as e:
-        return jsonify({'success': False, 'error': str(e)}), 400
-"""

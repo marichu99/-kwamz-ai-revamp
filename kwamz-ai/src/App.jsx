@@ -27,18 +27,18 @@ function App() {
             headers: { Authorization: `Bearer ${token}` },
           });
 
-          // Step 2: Check if payment is made or in free trial
-          const paymentResponse = await axios.get(`${config.API_URL}/payment/get-latest-payment`, {
-            headers: { Authorization: `Bearer ${token}` },
-          });
+          // // Step 2: Check if payment is made or in free trial
+          // const paymentResponse = await axios.get(`${config.API_URL}/payment/get-latest-payment`, {
+          //   headers: { Authorization: `Bearer ${token}` },
+          // });
 
-          const paymentData = paymentResponse.data;
-          console.log('Payment check result:', paymentData);
+          // const paymentData = paymentResponse.data;
+          // console.log('Payment check result:', paymentData);
 
-          if (paymentData.status === 'NOT_PAID') {
-            // Show M-Pesa modal
-            setShowPaymentModal(true);
-          }
+          // if (paymentData.status === 'NOT_PAID') {
+          //   // Show M-Pesa modal
+          //   setShowPaymentModal(true);
+          // }
 
           setIsAuthenticated(true);
           if (['/', '/login', '/signup'].includes(location.pathname)) {
@@ -63,17 +63,17 @@ function App() {
     verifyToken();
   }, [navigate, location.pathname]);
 
-  const handlePaymentSubmit = (result) => {
-    console.log('Payment result:', result);
-    if (result.success) {
-      alert(result.message);
-      setShowPaymentModal(false); // Close modal after successful payment
-    }
-  };
+  // const handlePaymentSubmit = (result) => {
+  //   console.log('Payment result:', result);
+  //   if (result.success) {
+  //     alert(result.message);
+  //     setShowPaymentModal(false); // Close modal after successful payment
+  //   }
+  // };
 
-  const handleCloseModal = () => {
-    setShowPaymentModal(false);
-  };
+  // const handleCloseModal = () => {
+  //   setShowPaymentModal(false);
+  // };
 
   if (isLoading) {
     return <div>Loading...</div>;
@@ -118,12 +118,12 @@ function App() {
       </div>
 
       {/* Show M-Pesa Modal when payment not done */}
-      {showPaymentModal && (
+      {/* {showPaymentModal && (
         <MpesaModal
           onClose={handleCloseModal}
           onSubmit={handlePaymentSubmit}
         />
-      )}
+      )} */}
     </div>
   );
 }

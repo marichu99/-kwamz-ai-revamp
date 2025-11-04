@@ -1,6 +1,6 @@
 from playwright.sync_api import sync_playwright,Page, TimeoutError as PlaywrightTimeoutError
 from app.utils.script import fill_login_form, capture_and_solve_captcha
-# from script import fill_login_form, capture_and_solve_captcha
+#from script import fill_login_form, capture_and_solve_captcha
 from PIL import Image, ImageFilter, ImageOps
 from dotenv import load_dotenv
 from openai import OpenAI
@@ -11,6 +11,7 @@ import re
 import base64
 import os
 import time
+import random
 import traceback
 
 
@@ -444,6 +445,7 @@ def save_table_to_dataframe_(page: Page, row_index: int) -> tuple[pd.DataFrame, 
         dropdown_selector = (
             "//span[@class='el-pagination__sizes']//i[@class='el-icon el-select__caret el-select__icon']"
         )
+        
         next_btn_xpath = "//button[@aria-label='Go to next page']//i[@class='el-icon']"
 
         # ------------------- SET PAGINATION SIZE -------------------
@@ -459,7 +461,7 @@ def save_table_to_dataframe_(page: Page, row_index: int) -> tuple[pd.DataFrame, 
         try:
             dropdown.click()
             print("[ACTION] Clicked pagination dropdown.")
-            time.sleep(4)  # Wait for dropdown to open
+            time.sleep(2)  # Wait for dropdown to open
             for _ in range(3):
                 page.keyboard.press("ArrowDown")
                 time.sleep(0.5)  # Wait for each key press to register
@@ -468,7 +470,18 @@ def save_table_to_dataframe_(page: Page, row_index: int) -> tuple[pd.DataFrame, 
             print("[ACTION] Pressed Enter to select pagination size.")
             page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
         
-            time.sleep(1)  # Wait for selection to apply
+            time.sleep(3)  # Wait for selection to apply
+        
+            # Save page HTML
+            html_content = page.content()
+            from bs4 import BeautifulSoup
+            soup = BeautifulSoup(html_content, "html.parser")
+
+            with open("float_details.html", "w", encoding="utf-8") as f:
+                f.write(soup.prettify())
+                
+            time.sleep(10)  # Wait for selection to apply
+            
         except Exception as e:
             print(f"[ERROR] Failed to set pagination size: {e}")
             return None, None
@@ -568,6 +581,54 @@ def save_table_to_dataframe_(page: Page, row_index: int) -> tuple[pd.DataFrame, 
         print(f"[FATAL] {exc}")
         traceback.print_exc()
         return None, None
+    
+def first_day_of_quarter() -> str:
+    """
+    Returns the first calendar day of the current fiscal quarter
+    in the format dd/MM/yyyy (e.g. 01/10/2025 for Q4 2025).
+    """
+    now = datetime.now()
+    # Quarter number (1-based)
+    quarter = (now.month - 1) // 3 + 1
+    # First month of that quarter
+    first_month = (quarter - 1) * 3 + 1
+    # First day of that month, year unchanged
+    first_day = now.replace(month=first_month, day=1)
+    return first_day.strftime("%d/%m/%Y")
+
+def click_random_spot(page, padding: int = 50) -> None:
+    """
+    Clicks a random location inside the current viewport.
+    
+    Args:
+        page: Playwright Page object
+        padding: Minimum distance (px) from the edges to avoid clicking scrollbars, etc.
+    """
+    # 1. Get the current viewport size
+    viewport = page.viewport_size
+    if not viewport:
+        raise RuntimeError("Viewport size not available – make sure the page is loaded.")
+
+    width  = viewport["width"]
+    height = viewport["height"]
+
+    # 2. Calculate safe area (exclude padding from each side)
+    x_min = padding
+    x_max = width  - padding
+    y_min = padding
+    y_max = height - padding
+
+    if x_max <= x_min or y_max <= y_min:
+        raise ValueError(f"Padding {padding}px is too large for viewport {width}x{height}")
+
+    # 3. Pick a random coordinate
+    rand_x = random.randint(x_min, x_max)
+    rand_y = random.randint(y_min, y_max)
+
+    # 4. Click it
+    page.mouse.click(rand_x, rand_y)
+    print(f"[Success] Clicked random spot at ({rand_x}, {rand_y})")
+    
 def process_float_account_details(page: Page):
     """
     Processes the float account details page:
@@ -624,10 +685,23 @@ def process_float_account_details(page: Page):
         
         # Step 3: Fill Start Time with first day of current month in dd/MM/yyyy format
         try:
-            first_day = datetime.now().replace(day=1).strftime("%d/%m/%Y")
+            #first_day = datetime.now().replace(day=1).strftime("%d/%m/%Y")
+            first_day_q = first_day_of_quarter()
             
             # Click the Start Time input to focus
-            start_time_input.click()
+            #start_time_input.click()
+            start_time_icon = page.wait_for_selector(
+                "//div[@aria-expanded='true']//div[@class='el-input__wrapper']", 
+                timeout=5000
+            )
+            start_time_icon.click()
+            
+            # start_time_inner_input = page.wait_for_selector(
+            #     "//div[@aria-expanded='true']//i[@class='el-icon el-input__icon']", 
+            #     timeout=5000
+            # )
+                        
+            start_time_input = page.locator('input.el-input__inner[placeholder*="Select Date"]').first
             page.wait_for_timeout(500)
             
             # Clear existing value using keyboard shortcuts
@@ -637,9 +711,12 @@ def process_float_account_details(page: Page):
             page.wait_for_timeout(500)
             
             # Type the new date
-            start_time_input.type(first_day, delay=100)  # Type with delay for stability
-            print(f"[✓] Set Start Time to {first_day}")
+            start_time_input.type(first_day_q, delay=100)  # Type with delay for stability
+            time.sleep(2)  # Wait for typing to complete
+            page.keyboard.press("Enter")
+            print(f"[✓] Set Start Time to {first_day_q}")
             page.wait_for_timeout(1000)
+            click_random_spot(page, padding=50)
             
         except Exception as e:
             print(f"[ERROR] Could not fill Start Time input: {e}")
