@@ -474,7 +474,6 @@ def save_table_to_dataframe_(page: Page, row_index: int) -> tuple[pd.DataFrame, 
         
             # Save page HTML
             html_content = page.content()
-            from bs4 import BeautifulSoup
             soup = BeautifulSoup(html_content, "html.parser")
 
             with open("float_details.html", "w", encoding="utf-8") as f:
@@ -689,34 +688,50 @@ def process_float_account_details(page: Page):
             first_day_q = first_day_of_quarter()
             
             # Click the Start Time input to focus
-            #start_time_input.click()
-            start_time_icon = page.wait_for_selector(
-                "//div[@aria-expanded='true']//div[@class='el-input__wrapper']", 
+            start_time_input.click()
+            
+            print(f"We have just clicked the start time")
+            previous_month_icon = page.wait_for_selector(
+                "//div[@actualvisible='true']//button[@aria-label='Previous Month']", 
                 timeout=5000
             )
-            start_time_icon.click()
+            
+            for i in range(3):
+                previous_month_icon.click() 
+            
+            print("The previous button has been clicked thrice .......")
+            first_day_button = page.wait_for_selector(
+                "//body[1]/div[2]/div[24]/div[1]/div[1]/div[1]/div[3]/table[1]/tbody[1]/tr[2]/td[4]", 
+                timeout=5000
+            )
+            # click the first day button
+            first_day_button.click()
+            #press enter
+            page.keyboard.press("Enter")
+            
+            #//body[1]/div[2]/div[24]/div[1]/div[1]/div[1]/div[3]/table[1]/tbody[1]/tr[2]/td[4]
             
             # start_time_inner_input = page.wait_for_selector(
             #     "//div[@aria-expanded='true']//i[@class='el-icon el-input__icon']", 
             #     timeout=5000
             # )
                         
-            start_time_input = page.locator('input.el-input__inner[placeholder*="Select Date"]').first
-            page.wait_for_timeout(500)
+            # start_time_input = page.locator('input.el-input__inner[placeholder*="Select Date"]').first
+            # page.wait_for_timeout(500)
             
-            # Clear existing value using keyboard shortcuts
-            start_time_input.press("Control+A")  # Select all
-            page.wait_for_timeout(200)
-            start_time_input.press("Backspace")  # Delete
-            page.wait_for_timeout(500)
+            # # Clear existing value using keyboard shortcuts
+            # start_time_input.press("Control+A")  # Select all
+            # page.wait_for_timeout(200)
+            # start_time_input.press("Backspace")  # Delete
+            # page.wait_for_timeout(500)
             
-            # Type the new date
-            start_time_input.type(first_day_q, delay=100)  # Type with delay for stability
-            time.sleep(2)  # Wait for typing to complete
-            page.keyboard.press("Enter")
-            print(f"[✓] Set Start Time to {first_day_q}")
-            page.wait_for_timeout(1000)
-            click_random_spot(page, padding=50)
+            # # Type the new date
+            # start_time_input.type(first_day_q, delay=100)  # Type with delay for stability
+            # time.sleep(2)  # Wait for typing to complete
+            # page.keyboard.press("Enter")
+            # print(f"[✓] Set Start Time to {first_day_q}")
+            # page.wait_for_timeout(1000)
+            # click_random_spot(page, padding=50)
             
         except Exception as e:
             print(f"[ERROR] Could not fill Start Time input: {e}")
@@ -859,6 +874,7 @@ def process_organization_rows(page):
                     timeout=30000
                 )
                 first_div.click()
+                
                 print("[INFO] Clicked first div in vertical-page-container.")
                 page.wait_for_timeout(2000)
                 
@@ -882,7 +898,6 @@ def process_organization_rows(page):
                 
                 # Save page HTML
                 html_content = page.content()
-                from bs4 import BeautifulSoup
                 soup = BeautifulSoup(html_content, "html.parser")
 
                 with open("organization.html", "w", encoding="utf-8") as f:

@@ -32,8 +32,8 @@ class PesapalConfig:
         if not self.consumer_secret:
             raise ValueError("PESAPAL_CONSUMER_SECRET is required")
         self.base_url = base_url
-        self.callback_url = callback_url or "https://dc8d3ec5cd74.ngrok-free.app/payment/callback"
-        self.ipn_url = ipn_url or "https://dc8d3ec5cd74.ngrok-free.app/payment/ipn"
+        self.callback_url = callback_url or "https://5f148dc78026.ngrok-free.app/payment/callback"
+        self.ipn_url = ipn_url or "https://5f148dc78026.ngrok-free.app/payment/ipn"
         self.environment = environment
         self._access_token = None
         self._token_expiry = None
@@ -250,16 +250,13 @@ class PesapalClient:
         Args:
             ipn_url: IPN URL to register (uses config.ipn_url if not provided)
         """
-        print("Initializing Pesapal client...")
         # Get access token
         self._authenticate()
         
         # Register IPN if URL is provided and storage is available
         if self.ipn_storage:
-            print("IPN storage is available, checking for IPN registration...")
             ipn_url = ipn_url or self.config.ipn_url
             if ipn_url:
-                print(f"Registering IPN URL: {ipn_url}")
                 # Check if IPN is already registered
                 existing_config = self.ipn_storage.get_ipn_config(ipn_url)
                 if not existing_config:
@@ -273,7 +270,6 @@ class PesapalClient:
     
     def _authenticate(self) -> None:
         """Authenticate with Pesapal and get access token"""
-        print("Checking authentication status...")
         # Check if token is still valid
         if (self.config._access_token and self._token_expiry and 
             datetime.utcnow() < self._token_expiry):
@@ -293,10 +289,7 @@ class PesapalClient:
             response.raise_for_status()
                         
             auth_response = response.json()
-            
-            print(f"The response status code is: {auth_response}")
-            print(f"The url is: {auth_url}")
-            print(f"The auth data is: {auth_data}")
+
             self.config._access_token = auth_response.get('token')
             
             # Set token expiry (typically 1 hour, but we'll use 55 minutes for safety)

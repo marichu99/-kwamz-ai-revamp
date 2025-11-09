@@ -57,6 +57,7 @@ coverage.xml
 .pytest_cache/
 cover/
 uploads/
+service_account.json
 
 # Translations
 *.mo

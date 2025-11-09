@@ -4,6 +4,7 @@ from flask_migrate import Migrate
 from flask_cors import CORS
 from flask_bcrypt import Bcrypt
 from flask_jwt_extended import JWTManager
+from google.cloud import storage
 import os
 from dotenv import load_dotenv
 
@@ -23,7 +24,7 @@ def create_app():
     app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
     app.config['JWT_SECRET_KEY'] = os.getenv('JWT_SECRET_KEY', 'your-secret-key')
     app.config['JWT_ACCESS_TOKEN_EXPIRES'] = 3600
-
+    app.config['GCP_BUCKET'] = os.getenv('GCP_BUCKET', 'trovana-docs')
     # Initialize extensions
     db.init_app(app)
     migrate.init_app(app, db)
@@ -54,6 +55,14 @@ def create_app():
     pesapal_client = PesapalClient(config=pesapal_config,ipn_storage=flaskipn_storage)
     payment_service = PesapalPaymentService(pesapal_client=pesapal_client)
     
+    # initialize Google Cloud Storage client
+    from app.service.document_service import DocumentProcessingService
+    storage_client = storage.Client.from_service_account_json(
+                    os.getenv('GOOGLE_APPLICATION_CREDENTIALS')
+                    )
+    bucket_name = os.getenv('GCP_BUCKET', 'trovana-docs')
+    document_service = DocumentProcessingService(storage_client=storage_client, bucket_name=bucket_name)        
+    
     with app.app_context():
         db.create_all()
         pesapal_client.initialize()
@@ -61,7 +70,7 @@ def create_app():
     # Attach to app for access in blueprints
     app.payment_service = payment_service
     app.pesapal_client = pesapal_client
-        
+    app.document_service = document_service        
 
     # Register blueprints
     from app.controller.user_controller import user_bp
@@ -81,3 +90,4 @@ def create_app():
     app.register_blueprint(company_bp, url_prefix='/company')
 
     return app
+

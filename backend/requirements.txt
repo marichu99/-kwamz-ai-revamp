@@ -22,3 +22,4 @@ openpyxl
 openai
 bs4
 pandas
+google-cloud-storage

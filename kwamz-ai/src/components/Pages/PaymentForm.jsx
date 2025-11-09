@@ -6,7 +6,7 @@ const API_BASE_URL = config.API_URL || 'http://localhost:5000';
 
 const pesapalApi = {
   getAuthToken: () => localStorage.getItem('token'),
-  
+
   async createPayment(data) {
     const token = this.getAuthToken();
     const headers = {
@@ -183,8 +183,8 @@ const PaymentForm = ({ onSuccess, userInfo }) => {
 
       {/* ==================== MODAL WITH IFRAME ==================== */}
       {modalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black bg-opacity-60">
-          <div className="relative w-full max-w-3xl bg-white rounded-xl shadow-2xl overflow-hidden">
+        <div className="fixed inset-0 bg-gradient-to-br from-black/60 via-black/50 to-black/40 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+          <div className="bg-white/95 dark:bg-slate-900/95 backdrop-blur-lg rounded-2xl shadow-2xl border border-white/20 dark:border-slate-700/50 w-full max-w-3xl transform transition-all duration-300 max-h-[90vh] overflow-hidden flex flex-col">
             {/* Header */}
             <div className="flex justify-between items-center p-4 border-b bg-gray-50">
               <h3 className="text-lg font-semibold text-gray-800">Complete Payment</h3>
