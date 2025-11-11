@@ -25,6 +25,7 @@ function UserAgentList() {
   const [validUsers, setValidUsers] = useState([]);
   const [invalidUsers, setInvalidUsers] = useState([]);
   const [batchFile, setBatchFile] = useState(null);
+  const [loadingDownload, setLoadingDownload] = useState(false);
   const { showToast } = useToast();
   const fileInputRef = useRef(null);
   const dropdownRef = useRef(null);
@@ -145,6 +146,61 @@ function UserAgentList() {
     setIsUserModalOpen(true);
     setIsDropdownOpen(false);
   };
+
+  const handleDownloadAgentDocs = async () => {
+    try {
+      setLoadingDownload(true);
+      const agentId = selectedUserIds[0];
+      const downloadResponse = await fetch(
+        `${config.API_URL}/document/download-all/${agentId}`
+      );
+
+      // Check content type
+      const contentType = downloadResponse.headers.get("content-type");
+
+      if (!downloadResponse.ok) {
+        setLoadingDownload(false);
+        // Server returned an error status
+        const errorText = await downloadResponse.text();
+        let errorJson;
+        try {
+          errorJson = JSON.parse(errorText);
+        } catch {
+          errorJson = { error: errorText };
+        }
+        showToast(errorJson.error || "Download failed", "error");
+        return;
+      }
+
+      if (contentType && contentType.includes("application/json")) {
+        setLoadingDownload(false);
+        // Response is JSON (error message)
+        const responseJson = await downloadResponse.json();
+        showToast(responseJson.error || "Download failed", "error");
+        return;
+      }
+
+      // Otherwise, assume it's a binary file (ZIP)
+      const blob = await downloadResponse.blob();
+      const url = window.URL.createObjectURL(blob);
+
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = `${agentId}.zip`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      window.URL.revokeObjectURL(url);
+      setLoadingDownload(false);
+
+      showToast(`Downloaded ${agentId}.zip`, "success");
+    } catch (err) {
+      setLoadingDownload(false);
+      console.error("Download error:", err);
+      showToast("Unexpected error occurred", "error");
+    }
+  };
+
 
   // Handle KYC authentication
   const handlePerformKYC = () => {
@@ -449,6 +505,31 @@ function UserAgentList() {
         </div>
       </div>
 
+      {loadingDownload && (
+        <div className="fixed inset-0 bg-gradient-to-br from-black/60 via-black/50 to-black/40 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+          <div className="bg-white backdrop-blur-lg rounded-2xl shadow-2xl border border-white/20 p-8 w-full max-w-2xl transform transition-all duration-300 scale-100 max-h-[90vh] overflow-y-auto">
+            <div className="loader mb-3"></div>
+            <p className="text-gray-700 font-medium">Preparing your download...</p>
+          </div>
+        </div>
+      )}
+
+      {/* Simple CSS loader */}
+      <style>{`
+        .loader {
+          border: 4px solid #f3f3f3;
+          border-top: 4px solid #3498db;
+          border-radius: 50%;
+          width: 40px;
+          height: 40px;
+          animation: spin 1s linear infinite;
+        }
+        @keyframes spin {
+          0% { transform: rotate(0deg); }
+          100% { transform: rotate(360deg); }
+        }
+      `}</style>
+
       {/* Users Grid */}
       <div className="overflow-x-auto">
         <table className="w-full table-auto">
@@ -501,12 +582,12 @@ function UserAgentList() {
                   <button
                     onClick={() => {
                       setSelectedUserIds([user.id]);
-                      handleEditUser();
+                      handleDownloadAgentDocs();
                     }}
                     className="flex items-center space-x-1 text-blue-500 hover:text-blue-600 dark:hover:text-blue-400"
                   >
-                    <Edit className="w-4 h-4" />
-                    <span>Edit</span>
+                    <Download className="w-4 h-4" />
+                    <span>Documents</span>
                   </button>
                 </td>
               </tr>

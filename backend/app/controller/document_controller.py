@@ -362,14 +362,14 @@ def list_agent_documents(agent_id):
         if doc_type:
             query = query.filter_by(doc_type=doc_type)
         
-        documents = query.order_by(AgentDocuments.created_at.desc()).all()
+        documents = query.order_by(AgentDocuments.uploaded_at.desc()).all()
         
         documents_list = [
             {
                 "id": doc.id,
                 "doc_type": doc.doc_type,
                 "filename": doc.filename,
-                "uploaded_at": doc.created_at.isoformat() if doc.created_at else None,
+                "uploaded_at": doc.uploaded_at.isoformat() if doc.uploaded_at else None,
                 "gcp_url": doc.gcp_url,
                 "gcp_path": doc.gcp_path,
                 "extracted_data": doc.extracted_data
@@ -396,7 +396,7 @@ def get_document_status(agent_id, doc_type):
     Path Parameters:
         - agent_id: ID of the agent
         - doc_type: Type of document to check
-        
+            
     Response:
         {
             "exists": true,
@@ -419,8 +419,9 @@ def get_document_status(agent_id, doc_type):
                 "document": {
                     "id": document.id,
                     "filename": document.filename,
-                    "uploaded_at": document.created_at.isoformat() if document.created_at else None,
-                    "gcp_url": document.gcp_url
+                    "uploaded_at": document.uploaded_at.isoformat() if document.uploaded_at else None,
+                    "gcp_url": document.gcp_url,
+                    "extracted_data": document.extracted_data
                 }
             }), 200
         else:
@@ -506,7 +507,7 @@ def download_all_agent_documents(agent_id):
             for doc in documents:
                 manifest_content += f"\nDocument Type: {doc.doc_type}\n"
                 manifest_content += f"Filename: {doc.filename}\n"
-                manifest_content += f"Uploaded: {doc.created_at.strftime('%Y-%m-%d %H:%M:%S') if doc.created_at else 'N/A'}\n"
+                manifest_content += f"Uploaded: {doc.uploaded_at.strftime('%Y-%m-%d %H:%M:%S') if doc.uploaded_at else 'N/A'}\n"
                 manifest_content += "-" * 50 + "\n"
             
             zip_file.writestr("MANIFEST.txt", manifest_content)

@@ -25,7 +25,7 @@ class DocumentProcessingService:
 
         # Then access their associated agent companies
         agent_companies = user_agent.agent_companies
-        if len(agent_companies>0):
+        if len(agent_companies)>0:
             company = agent_companies[0].company_id
             print(f"The company id is {company}")
             return company
