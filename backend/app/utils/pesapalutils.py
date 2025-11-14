@@ -7,15 +7,8 @@ from app.model.pesalpalpayment import PesapalPayment
 from app.model.pesapalrefund import PesapalRefund
 from app.utils.pesapalclient import PesapalClient
 
-# ============================================================================
-# Flask-SQLAlchemy Storage Implementation
-# ============================================================================
 
 from typing import Optional, Dict, List
-
-# ============================================================================
-# Integrated Payment Service
-# ============================================================================
 
 class PesapalPaymentService:
     """Service class to handle Pesapal payments with database integration"""

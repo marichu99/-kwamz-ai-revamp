@@ -20,11 +20,10 @@ const ConfirmationDialog = ({ isOpen, onClose, onConfirm, title, message, type =
                     </button>
                     <button
                         onClick={onConfirm}
-                        className={`px-4 py-2 rounded-md text-white transition-colors ${
-                            type === 'danger'
-                                ? 'bg-red-600 hover:bg-red-700'
-                                : 'bg-blue-600 hover:bg-blue-700'
-                        }`}
+                        className={`px-4 py-2 rounded-md text-white transition-colors ${type === 'danger'
+                            ? 'bg-red-600 hover:bg-red-700'
+                            : 'bg-blue-600 hover:bg-blue-700'
+                            }`}
                     >
                         Confirm
                     </button>
@@ -36,7 +35,7 @@ const ConfirmationDialog = ({ isOpen, onClose, onConfirm, title, message, type =
 
 const KYCDocumentUploadPage = ({
     isOpen = true,
-    onClose = () => {},
+    onClose = () => { },
     user = { idnumber: '12345678', id: '1' },
     onSubmitSuccess
 }) => {
@@ -60,15 +59,17 @@ const KYCDocumentUploadPage = ({
         isOpen: false,
         title: '',
         message: '',
-        onConfirm: () => {},
+        onConfirm: () => { },
         type: 'danger'
     });
 
     const kraPinFileRef = useRef(null);
     const policeClearanceFileRef = useRef(null);
+    const genericFileRef = useRef(null);
 
     // Check for existing documents when modal opens
     useEffect(() => {
+
         if (isOpen && user?.id) {
             checkExistingDocuments();
         }
@@ -77,6 +78,7 @@ const KYCDocumentUploadPage = ({
     // Validate name match
     useEffect(() => {
         if (taxPayerName && clearedUserName) {
+
             if (taxPayerName !== clearedUserName) {
                 showToast('The taxpayer name does not match police clearance form details', 'error');
                 setErrors(prev => ({ ...prev, nameMatch: 'The taxpayer name does not match police clearance form details' }));
@@ -93,11 +95,9 @@ const KYCDocumentUploadPage = ({
                 `${config.API_URL}/document/status/${user.id}/kra_pin`
             );
             const kraData = await kraResponse.json();
-            
-            console.log("The kra data",kraData);
-            console.log("The kra pin",kraData.document.extracted_data["PIN"]);
+
             if (kraData.exists) {
-                
+
                 setKraPin(kraData.document.extracted_data["PIN"] || '');
                 setTaxPayerName(kraData.document.extracted_data["Taxpayer Name"] || '');
                 setEmail(kraData.document.extracted_data["Email address"] || '');
@@ -110,6 +110,7 @@ const KYCDocumentUploadPage = ({
                         documentId: kraData.document.id
                     }
                 }));
+                setErrors(prev => ({ ...prev, nameMatch: '' }));
             }
 
             // Check Police Clearance document
@@ -117,8 +118,7 @@ const KYCDocumentUploadPage = ({
                 `${config.API_URL}/document/status/${user.id}/police_clearance`
             );
             const policeData = await policeResponse.json();
-            
-            console.log("The police data",policeData);
+
             if (policeData.exists) {
 
                 setPoliceClearance(policeData.document.extracted_data["Reference Number"] || '');
@@ -133,6 +133,7 @@ const KYCDocumentUploadPage = ({
                         documentId: policeData.document.id
                     }
                 }));
+                setErrors(prev => ({ ...prev, nameMatch: '' }));
             }
         } catch (err) {
             console.error('Error checking existing documents:', err);
@@ -152,9 +153,9 @@ const KYCDocumentUploadPage = ({
                 method: 'POST',
                 body: formData
             });
-            
+
             const result = await res.json();
-            
+
             if (!res.ok || result.error) {
                 showToast(result.error || 'Upload failed', 'error');
                 return;
@@ -165,7 +166,7 @@ const KYCDocumentUploadPage = ({
                 setKraPin(result.kraPin || '');
                 setTaxPayerName(result.taxPayerName || '');
                 setEmail(result.email || '');
-                
+
                 setDocumentStatus(prev => ({
                     ...prev,
                     kra: {
@@ -175,6 +176,7 @@ const KYCDocumentUploadPage = ({
                         documentId: null // Backend doesn't return ID in extract response
                     }
                 }));
+                setErrors(prev => ({ ...prev, nameMatch: '' }));
             }
 
             // Handle Police Clearance response
@@ -182,9 +184,9 @@ const KYCDocumentUploadPage = ({
                 // Validate ID number match
                 if (result.idNo && idNumber && result.idNo !== idNumber) {
                     showToast('The ID number does not match police clearance form details', 'error');
-                    setErrors(prev => ({ 
-                        ...prev, 
-                        nameMatch: 'The ID number does not match police clearance form details' 
+                    setErrors(prev => ({
+                        ...prev,
+                        nameMatch: 'The ID number does not match police clearance form details'
                     }));
                     resetPoliceClearance();
                     return;
@@ -193,7 +195,7 @@ const KYCDocumentUploadPage = ({
                 setPoliceClearance(result.refNo || '');
                 setClearedUserName(result.name || '');
                 if (result.idNo) setIdNumber(result.idNo);
-                
+
                 setDocumentStatus(prev => ({
                     ...prev,
                     police: {
@@ -203,6 +205,8 @@ const KYCDocumentUploadPage = ({
                         documentId: null
                     }
                 }));
+
+                setErrors(prev => ({ ...prev, nameMatch: '' }));
             }
 
             showToast(
@@ -220,7 +224,7 @@ const KYCDocumentUploadPage = ({
 
     const handleDownload = async (docType) => {
         const doc = documentStatus[docType];
-        
+
         if (!doc.uploaded) {
             showToast('No document to download', 'error');
             return;
@@ -232,7 +236,7 @@ const KYCDocumentUploadPage = ({
                 const response = await fetch(
                     `${config.API_URL}/document/download/${doc.documentId}?inline=false`
                 );
-                
+
                 if (!response.ok) {
                     throw new Error('Download failed');
                 }
@@ -246,7 +250,7 @@ const KYCDocumentUploadPage = ({
                 link.click();
                 document.body.removeChild(link);
                 window.URL.revokeObjectURL(url);
-                
+
                 showToast(`Downloading ${doc.fileName}`, 'success');
             } else if (doc.fileUrl) {
                 // Fallback: open the GCP URL
@@ -261,17 +265,17 @@ const KYCDocumentUploadPage = ({
 
     const handleDelete = async (docType) => {
         const doc = documentStatus[docType];
-        
+
         setConfirmDialog({
             isOpen: true,
             title: 'Delete Document',
-            message: `Are you sure you want to delete this ${
-                docType === 'kra' ? 'KRA PIN' : 'Police Clearance'
-            } document? This action cannot be undone.`,
+            message: `Are you sure you want to delete this ${docType === 'kra' ? 'KRA PIN' : 'Police Clearance'
+                } document? This action cannot be undone.`,
             type: 'danger',
             onConfirm: async () => {
                 setConfirmDialog(prev => ({ ...prev, isOpen: false }));
-                
+                setLoading(true);
+
                 try {
                     // If we have a document ID, call the delete endpoint
                     if (doc.documentId) {
@@ -279,7 +283,7 @@ const KYCDocumentUploadPage = ({
                             `${config.API_URL}/document/delete/${doc.documentId}`,
                             { method: 'DELETE' }
                         );
-                        
+
                         if (!response.ok) {
                             throw new Error('Delete failed');
                         }
@@ -299,33 +303,85 @@ const KYCDocumentUploadPage = ({
                         ...prev,
                         [docType]: { uploaded: false, fileName: '', fileUrl: '', documentId: null }
                     }));
+                    setLoading(false);
 
                     showToast('Document deleted successfully', 'success');
                 } catch (err) {
                     console.error('Delete error:', err);
+                    setLoading(false);
                     showToast('Delete failed', 'error');
                 }
             }
         });
     };
 
-    const handleReupload = (docType, fileRef) => {
+    const handleReupload = async (docType) => {
+        console.log("The docType is >>", docType)
         setConfirmDialog({
             isOpen: true,
             title: 'Re-upload Document',
-            message: `Are you sure you want to replace the existing ${
-                docType === 'kra' ? 'KRA PIN' : 'Police Clearance'
-            } document?`,
+            message: `Are you sure you want to replace the existing ${docType === 'kra' ? 'KRA PIN' : 'Police Clearance'
+                } document?`,
             type: 'warning',
-            onConfirm: () => {
-                fileRef.current?.click();
+            onConfirm: async () => {
+                // fileRef.current?.click();
                 setConfirmDialog(prev => ({ ...prev, isOpen: false }));
+
+                // Create a promise to wait for file selection
+                const file = await new Promise((resolve) => {
+                    const input = genericFileRef.current;
+
+                    // Create a one-time event listener for file selection
+                    const handleFileSelect = (e) => {
+                        const selectedFile = e.target.files[0];
+                        // Clean up: remove the event listener
+                        input.removeEventListener('change', handleFileSelect);
+                        // Reset input value so same file can be selected again
+                        setTimeout(() => {
+                            input.value = '';
+                        }, 100);
+                        resolve(selectedFile);
+                    };
+
+                    // Add the event listener
+                    input.addEventListener('change', handleFileSelect);
+
+                    // Trigger the file input
+                    input.click();
+
+                    // Optional: Add a timeout to resolve with null if user cancels
+                    setTimeout(() => {
+                        input.removeEventListener('change', handleFileSelect);
+                        resolve(null);
+                    }, 60000); // 60 second timeout
+                });
+
+                // Check if a file was selected
+                if (!file) {
+                    console.log("No file selected");
+                    showToast("No file was selected", "error");
+                    return;
+                }
+
+                console.log("Selected file:", file);
+
+                // Delete the old document first (optional)
+                const doc = documentStatus[docType];
+
+                // Upload the new file
+                setLoading(true);
+                if (docType === 'kra') {
+                    await uploadFile('/extract_kra_pin', file, 'kra');
+                } else if (docType === 'police') {
+                    await uploadFile('/extract_police_clearance', file, 'police');
+                }
+
             }
         });
     };
 
     const handleSubmitData = async () => {
-        setErrors({});
+        setErrors(prev => ({ ...prev, nameMatch: '' }));
 
         const newErrors = {};
         if (!kraPin) newErrors.kraPin = 'KRA PIN is required';
@@ -509,7 +565,7 @@ const KYCDocumentUploadPage = ({
                                                     <span>Download</span>
                                                 </button>
                                                 <button
-                                                    onClick={() => handleReupload(docType, fileRef)}
+                                                    onClick={() => handleReupload(docType)}
                                                     className="inline-flex items-center space-x-1 px-2 py-1 text-xs font-medium text-orange-700 bg-orange-100 rounded hover:bg-orange-200 transition-colors"
                                                 >
                                                     <RefreshCw className="h-3 w-3" />
@@ -607,6 +663,13 @@ const KYCDocumentUploadPage = ({
                             isIdNumber={true}
                         />
 
+                        <input
+                            type="file"
+                            accept=".pdf"
+                            ref= {genericFileRef}
+                            className="hidden"
+                        />
+
                         {errors.submit && (
                             <div className="mb-4 p-3 bg-red-50 border border-red-200 rounded-md flex items-center space-x-2">
                                 <AlertCircle className="h-5 w-5 text-red-600" />
@@ -619,7 +682,12 @@ const KYCDocumentUploadPage = ({
                         <button
                             type="button"
                             onClick={handleSubmitData}
-                            disabled={loading || !kraPin || !policeClearance || !idNumber || !taxPayerName || errors}
+                            disabled={loading ||
+                                !kraPin ||
+                                !policeClearance ||
+                                !idNumber ||
+                                !taxPayerName
+                                || errors.nameMatch.length > 0}
                             className="flex-1 bg-blue-600 text-white px-4 py-2 rounded-md hover:bg-blue-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed font-medium"
                         >
                             Submit Documents

@@ -149,8 +149,13 @@ function UserAgentList() {
 
   const handleDownloadAgentDocs = async () => {
     try {
-      setLoadingDownload(true);
       const agentId = selectedUserIds[0];
+      if (!agentId) {
+        showToast("Kindly select the record first", "error");
+        return;
+      }
+      setLoadingDownload(true);
+
       const downloadResponse = await fetch(
         `${config.API_URL}/document/download-all/${agentId}`
       );
