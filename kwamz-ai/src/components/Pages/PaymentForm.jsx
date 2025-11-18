@@ -1,6 +1,8 @@
 import React, { useState } from 'react';
 import { CreditCard, AlertCircle, Loader2, X } from 'lucide-react';
 import config from "../../Config";
+import { useToast } from './ToastProvider';
+import axios from 'axios';
 
 const API_BASE_URL = config.API_URL || 'http://localhost:5000';
 
@@ -27,6 +29,27 @@ const pesapalApi = {
 
     return response.json();
   },
+
+  async checkPaymentStatus(data) {
+    const token = this.getAuthToken();
+    const headers = {
+      'Content-Type': 'application/json',
+      ...(token && { 'Authorization': `Bearer ${token}` }),
+    };
+
+    const response = await fetch(`${API_BASE_URL}/payment/callback`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify(data),
+    });
+
+    if (!response.ok) {
+      const error = await response.json().catch(() => ({ error: 'Request failed' }));
+      throw new Error(error.error || error.message || 'Something went wrong');
+    }
+
+    return response.json();
+  },
 };
 
 const PaymentForm = ({ onSuccess, userInfo }) => {
@@ -34,6 +57,7 @@ const PaymentForm = ({ onSuccess, userInfo }) => {
   const [error, setError] = useState(null);
   const [modalOpen, setModalOpen] = useState(false);
   const [iframeUrl, setIframeUrl] = useState('');
+  const { showToast } = useToast();
 
   const [formData, setFormData] = useState({
     amount: '100',
@@ -53,11 +77,57 @@ const PaymentForm = ({ onSuccess, userInfo }) => {
     setError(null);
   };
 
-  // MODIFIED: Open modal with iframe instead of redirect
+  // Start polling when popup closes
+  var counter = 0;
+  const startPolling = async (orderId) => {
+    counter++;
+
+    var myInterval = setInterval(async () => {
+      console.log("Polling for order ID:", orderId);
+      try {
+
+        var data = {
+          order_id: orderId,
+        };
+        const res = await pesapalApi.checkPaymentStatus(data);
+
+        console.log("Polling response:", res);
+
+        var paymentStatus = res.payment.payment_status;
+
+        console.log("Current payment status:", paymentStatus);
+
+        if (paymentStatus === 'COMPLETED') {
+          clearInterval(myInterval); // Stop polling
+          console.log("Payment completed successfully!");
+          showToast('Payment completed successfully!', 'success');
+          setModalOpen(false);
+          setIframeUrl('');
+          onSuccess();
+        }else if (paymentStatus === 'FAILED') {
+          clearInterval(myInterval); // Stop polling
+          console.log("Payment completed successfully!");
+          showToast('The payment was not successful. Please try again', 'error');
+          setModalOpen(false);
+          setIframeUrl('');
+          onSuccess();
+        }
+        if (counter >= 100) {
+          clearInterval(myInterval);
+          console.log("Polling timed out.");
+          showToast('Payment confirmation timed out. Please check your payment status later.', 'error');
+        }
+      } catch (err) {
+        console.warn('Polling error:', err);
+      }
+    }, 6000);
+  };
+
   const handleSubmit = async (e) => {
     e.preventDefault();
     setLoading(true);
     setError(null);
+
 
     try {
       const response = await pesapalApi.createPayment({
@@ -66,8 +136,12 @@ const PaymentForm = ({ onSuccess, userInfo }) => {
         amount: parseFloat(formData.amount),
       });
 
+      console.log("The response from createPayment is:", response);
+
       if (response.success && response.redirect_url) {
         setIframeUrl(response.redirect_url);
+        console.log("Starting polling for order ID:", response.order_id);
+        startPolling(response.order_id);
         setModalOpen(true); // Open modal
       } else {
         setError('Failed to initiate payment');

@@ -1,6 +1,6 @@
 from playwright.sync_api import sync_playwright,Page, TimeoutError as PlaywrightTimeoutError
-from app.utils.script import fill_login_form, capture_and_solve_captcha
-#from script import fill_login_form, capture_and_solve_captcha
+# from app.utils.script import fill_login_form, capture_and_solve_captcha
+from script import fill_login_form, capture_and_solve_captcha
 from PIL import Image, ImageFilter, ImageOps
 from dotenv import load_dotenv
 from openai import OpenAI
@@ -628,7 +628,7 @@ def click_random_spot(page, padding: int = 50) -> None:
     page.mouse.click(rand_x, rand_y)
     print(f"[Success] Clicked random spot at ({rand_x}, {rand_y})")
     
-def process_float_account_details(page: Page):
+def process_float_account_details(page: Page,business_short_code: int):
     """
     Processes the float account details page:
     1. Finds the Start Time date picker input (first date picker)
@@ -709,30 +709,6 @@ def process_float_account_details(page: Page):
             #press enter
             page.keyboard.press("Enter")
             
-            #//body[1]/div[2]/div[24]/div[1]/div[1]/div[1]/div[3]/table[1]/tbody[1]/tr[2]/td[4]
-            
-            # start_time_inner_input = page.wait_for_selector(
-            #     "//div[@aria-expanded='true']//i[@class='el-icon el-input__icon']", 
-            #     timeout=5000
-            # )
-                        
-            # start_time_input = page.locator('input.el-input__inner[placeholder*="Select Date"]').first
-            # page.wait_for_timeout(500)
-            
-            # # Clear existing value using keyboard shortcuts
-            # start_time_input.press("Control+A")  # Select all
-            # page.wait_for_timeout(200)
-            # start_time_input.press("Backspace")  # Delete
-            # page.wait_for_timeout(500)
-            
-            # # Type the new date
-            # start_time_input.type(first_day_q, delay=100)  # Type with delay for stability
-            # time.sleep(2)  # Wait for typing to complete
-            # page.keyboard.press("Enter")
-            # print(f"[✓] Set Start Time to {first_day_q}")
-            # page.wait_for_timeout(1000)
-            # click_random_spot(page, padding=50)
-            
         except Exception as e:
             print(f"[ERROR] Could not fill Start Time input: {e}")
             return False
@@ -766,34 +742,20 @@ def process_float_account_details(page: Page):
             print("[✓] Pressed Enter to submit form")
             page.wait_for_timeout(3000)  # Wait for page to load results
             
-            save_table_to_dataframe_(page, row_index=1)
+            df,headers = save_table_to_dataframe_(page, row_index=business_short_code)
             
-            # Debug: Verify if submission triggered a change
-            if page.query_selector(".el-table__empty-text") or page.query_selector("text=No Data"):
-                print("[WARN] Table shows 'No Data' after submission. Form may not have submitted correctly.")
+            if df is not None:
+                print("[INFO] Table extracted after submission.")
+                return True
+            else:
+                print("[ERROR] Table extraction failed after submission.")
+                return False
             
         except Exception as e:
             print(f"[ERROR] Could not complete Tab/Enter submission: {e}")
             import traceback
             traceback.print_exc()
             return False
-        
-        # Step 5: Save page content to output/float_details.html
-        try:
-            html_content = page.content()
-            soup = BeautifulSoup(html_content, "html.parser")
-            
-            os.makedirs("output", exist_ok=True)
-            with open("output/float_details.html", "w", encoding="utf-8") as f:
-                f.write(soup.prettify())
-            
-            print("[✅] Saved page content to output/float_details.html")
-        except Exception as e:
-            print(f"[ERROR] Could not save HTML file: {e}")
-            return False
-        
-        print("[SUCCESS] Float account details processed successfully")
-        return True
         
     except Exception as exc:
         print(f"[ERROR] process_float_account_details failed: {exc}")
@@ -846,6 +808,7 @@ def solveCaptchaXai(image_path):
     captcha_text = response.choices[0].message.content.strip()
     print(f"Extracted CAPTCHA: {captcha_text}")
     return captcha_text
+
 def process_organization_rows(page):
     """
     Processes each row in the organization table, performing actions for 'float' and 'commission' options,
@@ -860,9 +823,31 @@ def process_organization_rows(page):
         if not rows:
             print("[INFO] No rows found on this page. Exiting.")
             break
+        print(f"[INFO] Found {len(rows)} rows to process.")
 
         for index, row in enumerate(rows, 1):
             try:
+    
+                # Get row HTML
+                # row_html = row.evaluate("element => element.outerHTML")
+                
+                # # Save to file
+                # with open(f"row_{index}.html", "w", encoding="utf-8") as f:
+                #     f.write(row_html)
+                
+                # print(f"Saved row {index} HTML to file")
+                
+                row_text = row.text_content()
+                print("Row text:", row_text)  # This should give you "2797220 SNAP CORPORATION bazaar shopWAIYAKI WAY"
+
+                # Extract just the first part (2797220)
+                first_number = row_text.split()[0] if row_text else None
+                
+                match = re.match(r'^(\d+)', first_number)
+                if match:
+                    first_number = match.group(1)
+                    
+                print("Extracted number:", first_number)
                 # Click the row
                 print(f"[INFO] Clicking row {index}/{len(rows)}...")
                 row.click()
@@ -917,12 +902,24 @@ def process_organization_rows(page):
                 # Now select the float option (dropdown is already open)
                 is_selected = select_first_float_option_by_index(page)
                 
+                rows_processed = False
                 if not is_selected:
                     print("[WARN] No 'float' option found in dropdown. Skipping this row.")
                     continue
                 else:
-                    process_float_account_details(page)
+                    rows_processed = process_float_account_details(page=page,business_short_code=int(first_number))
 
+                if rows_processed:
+                    # //div[@title='Organization Detail']
+                    org_detail = page.wait_for_selector(
+                    "//div[@title='Organization Detail']",
+                    timeout=30000
+                    )
+                    org_detail.click()
+                    print(f"[SUCCESS] Processed float account details for row {index}.")
+                else:
+                    print(f"[WARN] Processing float account details failed for row {index}.")
+                    continue
                 # Continue with the rest of your processing...
                 # (Uncomment and add your date picker, search, export logic here)
 
