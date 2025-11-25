@@ -45,6 +45,8 @@ def create_app():
     from app.model.pesalpalpayment import PesapalPayment
     from app.model.pesapalipnconfig import PesapalIPNConfig
     from app.model.pesapalrefund import PesapalRefund
+    from app.model.bank_config import BankConfig
+    from app.model.bank_models import Bank
     
     # Initialize Pesapal Client and Payment Service
     from app.utils.pesapalclient import PesapalClient, PesapalConfig, FlaskIPNStorage
@@ -74,6 +76,7 @@ def create_app():
 
     # Register blueprints
     from app.controller.user_controller import user_bp
+    from app.controller.bank_controller import bank_bp
     from app.controller.document_controller import document_bp
     from app.controller.mpesa_controller import mpesa_bp
     from app.controller.payment_controller import payment_bp
@@ -82,6 +85,7 @@ def create_app():
     from app.controller.company_controller import company_bp
 
     app.register_blueprint(user_bp, url_prefix='/users')
+    app.register_blueprint(bank_bp, url_prefix='/banks')
     app.register_blueprint(document_bp, url_prefix='/document')
     app.register_blueprint(mpesa_bp, url_prefix='/mpesa')
     app.register_blueprint(payment_bp, url_prefix='/payment')

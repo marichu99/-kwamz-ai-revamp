@@ -4,6 +4,7 @@ import {
     Users,
     Package,
     Wallet,
+    Wrench,
     ShoppingCart,
     Settings,
     Shield,
@@ -29,6 +30,7 @@ export const adminMenuItems = [
             { id: "company-hierarchy", label: "Company Hierarchy" }          
         ]
     },
+
     {
         id: "products",
         icon: Package,
@@ -41,6 +43,16 @@ export const adminMenuItems = [
             { id: "pesapal", label: "PesaPal" }
         ]
     },
+    {
+        id: "setup",
+        icon: Wrench,
+        label: "Setup",
+        submenu: [
+            { id: "bank-list", label: "Bank Details" },
+            { id: "inventory", label: "Inventory" },
+        ]
+    },
+    
     {
         id: "transactions",
         icon: Wallet,
