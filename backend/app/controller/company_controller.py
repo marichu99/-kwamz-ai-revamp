@@ -1,6 +1,11 @@
 from flask import Blueprint, request, jsonify
 from app import db
 from app.service.company_service import CompanyService
+from app.model.agentcompany import AgentCompany
+from app.model.user import User
+from app.model.pesalpalpayment import PesapalPayment
+from app.model.company import Company
+from app.model.agent_documents import AgentDocuments
 from flask_jwt_extended import jwt_required,get_jwt_identity
 from decimal import Decimal, InvalidOperation
 from datetime import datetime
@@ -123,6 +128,329 @@ def update_company(id):
     
     except Exception as e:
         return jsonify({'error': f'Server error: {str(e)}'}), 500
+
+@company_bp.route('/agent-payments', methods=['GET'])
+def get_agent_payments():
+    # try:
+    # Get all companies with agent_user_id
+    companies_with_agents = Company.query.filter(Company.agent_user_id.isnot(None)).all()
+    
+    # Group companies by agent_user_id
+    agents_data = {}
+    
+    for company in companies_with_agents:
+        agent_user_id = company.agent_user_id
+        
+        if agent_user_id not in agents_data:
+            # Get agent user details
+            agent_user = User.query.get(agent_user_id)
+            agents_data[agent_user_id] = {
+                'agent_user_id': agent_user_id,
+                'agent_name': f"{agent_user.firstname} {agent_user.lastname}" if agent_user.firstname and agent_user.lastname else agent_user.username,
+                'agent_email': agent_user.email,
+                'agent_phone': agent_user.phone_number,
+                'total_payments_count': 0,
+                'total_payments_amount': 0,
+                'companies': []
+            }
+        
+        # Get Pesapal payments for this company initiated by the agent
+        company_payments = PesapalPayment.query.filter_by(
+            user_id=agent_user_id
+        ).all()
+        
+        # Alternative: If you have a direct company_id in PesapalPayment, use:
+        # company_payments = PesapalPayment.query.filter_by(
+        #     user_id=agent_user_id,
+        #     company_id=company.id  # If you add this field to PesapalPayment
+        # ).all()
+        
+        company_data = {
+            'id': company.id,
+            'company_name': company.company_name,
+            'registration_number': company.registration_number,
+            'address': company.address,
+            'company_code': company.company_code,
+            'compliance_status': company.compliance_status,
+            'total_payments_count': len(company_payments),
+            'total_payments_amount': sum(payment.amount for payment in company_payments),
+            'payments': []
+        }
+        
+        for payment in company_payments:
+            payment_data = {
+                'id': payment.id,
+                'merchant_reference': payment.merchant_reference,
+                'order_tracking_id': payment.order_tracking_id,
+                'confirmation_code': payment.confirmation_code,
+                'amount': float(payment.amount),
+                'currency': payment.currency,
+                'description': payment.description,
+                'customer_email': payment.customer_email,
+                'customer_phone': payment.customer_phone,
+                'customer_first_name': payment.customer_first_name,
+                'customer_last_name': payment.customer_last_name,
+                'payment_status': payment.payment_status,
+                'payment_method': payment.payment_method,
+                'status_code': payment.status_code,
+                'payment_status_description': payment.payment_status_description,
+                'created_at': payment.created_at.isoformat() if payment.created_at else None,
+                'updated_at': payment.updated_at.isoformat() if payment.updated_at else None,
+                'paid_at': payment.paid_at.isoformat() if payment.paid_at else None,
+                'error_message': payment.error_message,
+                'callback_data': payment.callback_data,
+                'ipn_data': payment.ipn_data
+            }
+            company_data['payments'].append(payment_data)
+        
+        agents_data[agent_user_id]['companies'].append(company_data)
+        agents_data[agent_user_id]['total_payments_count'] += len(company_payments)
+        agents_data[agent_user_id]['total_payments_amount'] += sum(payment.amount for payment in company_payments)
+    
+    # Convert to list
+    result = list(agents_data.values())
+    
+    return jsonify({
+        'success': True,
+        'data': result,
+        'total_agents': len(result),
+        'timestamp': datetime.utcnow().isoformat()
+    })
+        
+    # except Exception as e:
+    #     return jsonify({
+    #         'success': False,
+    #         'error': str(e),
+    #         'data': []
+    #     }), 500
+
+# Alternative route if you want to add company_id to PesapalPayment model
+@company_bp.route('/agent-payments-direct', methods=['GET'])
+def get_agent_payments_direct():
+    try:
+        # This version assumes you add company_id to PesapalPayment model
+        agents_data = {}
+        
+        # Get all Pesapal payments with company relationships
+        payments_with_companies = db.session.query(
+            PesapalPayment, Company
+        ).join(
+            Company, PesapalPayment.company_id == Company.id
+        ).filter(
+            Company.agent_user_id.isnot(None)
+        ).all()
+        
+        for payment, company in payments_with_companies:
+            agent_user_id = company.agent_user_id
+            
+            if agent_user_id not in agents_data:
+                agent_user = User.query.get(agent_user_id)
+                agents_data[agent_user_id] = {
+                    'agent_user_id': agent_user_id,
+                    'agent_name': f"{agent_user.firstname} {agent_user.lastname}" if agent_user.firstname and agent_user.lastname else agent_user.username,
+                    'agent_email': agent_user.email,
+                    'agent_phone': agent_user.phone_number,
+                    'total_payments_count': 0,
+                    'total_payments_amount': 0,
+                    'companies': {}
+                }
+            
+            agent_data = agents_data[agent_user_id]
+            
+            # Initialize company data if not exists
+            if company.id not in agent_data['companies']:
+                agent_data['companies'][company.id] = {
+                    'id': company.id,
+                    'company_name': company.company_name,
+                    'registration_number': company.registration_number,
+                    'address': company.address,
+                    'company_code': company.company_code,
+                    'compliance_status': company.compliance_status,
+                    'total_payments_count': 0,
+                    'total_payments_amount': 0,
+                    'payments': []
+                }
+            
+            company_data = agent_data['companies'][company.id]
+            
+            # Add payment data
+            payment_data = payment.to_dict()
+            company_data['payments'].append(payment_data)
+            company_data['total_payments_count'] += 1
+            company_data['total_payments_amount'] += payment.amount
+            
+            # Update agent totals
+            agent_data['total_payments_count'] += 1
+            agent_data['total_payments_amount'] += payment.amount
+        
+        # Convert to desired format
+        result = []
+        for agent_id, agent_data in agents_data.items():
+            agent_data['companies'] = list(agent_data['companies'].values())
+            result.append(agent_data)
+        
+        return jsonify({
+            'success': True,
+            'data': result,
+            'total_agents': len(result)
+        })
+        
+    except Exception as e:
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
+    
+@company_bp.route('/company-hierarchy', methods=['GET'])
+@jwt_required()
+def get_company_hierarchy():
+    """
+    Get hierarchical report: Company -> AgentCompany -> UserAgents
+    """
+    try:
+        # Query all companies with their relationships
+        companies = Company.query.all()
+        
+        hierarchy = []
+        
+        for company in companies:
+            print(f"Processing company: {company.company_name}")
+            print(f"Processing company: {company.id}")
+            # Get all agent companies for this company
+            agent_companies = AgentCompany.query.filter_by(company_id=company.id).all()
+            
+            agent_companies_data = []
+            total_agents = 0
+            
+            for agent_company in agent_companies:
+                # Get all user agents for this agent company
+                user_agents = agent_company.user_agents.all()
+                total_agents += len(user_agents)
+                
+                user_agents_data = []
+                for user_agent in user_agents:
+                    # Get document count for this agent
+                    doc_count = AgentDocuments.query.filter_by(agent_id=user_agent.id).count()
+                    
+                    user_agents_data.append({
+                        'id': user_agent.id,
+                        'firstname': user_agent.firstname,
+                        'lastname': user_agent.lastname,
+                        'fullname': f"{user_agent.firstname} {user_agent.lastname}",
+                        'idnumber': user_agent.idnumber,
+                        'phone_number': user_agent.phone_number,
+                        'is_authentic': user_agent.is_authentic,
+                        'authenticity_desc': user_agent.authenticity_desc,
+                        'date_of_birth': user_agent.date_of_birth.isoformat() if user_agent.date_of_birth else None,
+                        'document_count': doc_count
+                    })
+                
+                agent_companies_data.append({
+                    'id': agent_company.id,
+                    'company_name': agent_company.company_name,
+                    'store_number': agent_company.store_number,
+                    'location': agent_company.location,
+                    'agent_count': len(user_agents_data),
+                    'user_agents': user_agents_data
+                })
+            
+            hierarchy.append({
+                'id': company.id,
+                'company_name': company.company_name,
+                'registration_number': company.registration_number,
+                'company_code': company.company_code,
+                'shortcode': company.shortcode,
+                'address': company.address,
+                'compliance_status': company.compliance_status,
+                'total_float_balance': float(company.total_float_balance),
+                'registration_date': company.registration_date.isoformat() if company.registration_date else None,
+                'agent_company_count': len(agent_companies_data),
+                'total_agent_count': total_agents,
+                'agent_companies': agent_companies_data
+            })
+        
+        return jsonify({
+            'success': True,
+            'data': hierarchy,
+            'total_companies': len(hierarchy)
+        }), 200
+        
+    except Exception as e:
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
+
+
+@company_bp.route('/company-hierarchy/<int:company_id>', methods=['GET'])
+@jwt_required()
+def get_single_company_hierarchy(company_id):
+    """
+    Get hierarchical report for a single company
+    """
+    try:
+        company = company_service.get_company_by_id(company_id=company_id)
+        
+        agent_companies = AgentCompany.query.filter_by(company_id=company.id).all()
+        
+        agent_companies_data = []
+        total_agents = 0
+        
+        for agent_company in agent_companies:
+            user_agents = agent_company.user_agents.all()
+            total_agents += len(user_agents)
+            
+            user_agents_data = []
+            for user_agent in user_agents:
+                doc_count = AgentDocuments.query.filter_by(agent_id=user_agent.id).count()
+                
+                user_agents_data.append({
+                    'id': user_agent.id,
+                    'firstname': user_agent.firstname,
+                    'lastname': user_agent.lastname,
+                    'fullname': f"{user_agent.firstname} {user_agent.lastname}",
+                    'idnumber': user_agent.idnumber,
+                    'phone_number': user_agent.phone_number,
+                    'is_authentic': user_agent.is_authentic,
+                    'authenticity_desc': user_agent.authenticity_desc,
+                    'date_of_birth': user_agent.date_of_birth.isoformat() if user_agent.date_of_birth else None,
+                    'document_count': doc_count
+                })
+            
+            agent_companies_data.append({
+                'id': agent_company.id,
+                'company_name': agent_company.company_name,
+                'store_number': agent_company.store_number,
+                'location': agent_company.location,
+                'agent_count': len(user_agents_data),
+                'user_agents': user_agents_data
+            })
+        
+        data = {
+            'id': company.id,
+            'company_name': company.company_name,
+            'registration_number': company.registration_number,
+            'company_code': company.company_code,
+            'shortcode': company.shortcode,
+            'address': company.address,
+            'compliance_status': company.compliance_status,
+            'total_float_balance': float(company.total_float_balance),
+            'registration_date': company.registration_date.isoformat() if company.registration_date else None,
+            'agent_company_count': len(agent_companies_data),
+            'total_agent_count': total_agents,
+            'agent_companies': agent_companies_data
+        }
+        
+        return jsonify({
+            'success': True,
+            'data': data
+        }), 200
+        
+    except Exception as e:
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
     
 @company_bp.route('/company/<int:id>', methods=['DELETE'])
 def delete_company(id):

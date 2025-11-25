@@ -15,21 +15,23 @@ class Company(db.Model):
     primary_owner_email = db.Column(db.Text, nullable=True)
     company_code = db.Column(db.String(100), nullable=False)
     shortcode = db.Column(db.String(100), nullable=True,unique=True)
-    compliance_status = db.Column(db.String(20), default='compliant', nullable=False)  # e.g., 'compliant', 'under_review', 'suspended'
+    compliance_status = db.Column(db.String(20), default='compliant', nullable=False) 
     total_float_balance = db.Column(db.Numeric(precision=15, scale=2), default=Decimal('0.00'), nullable=False)
     primary_owner_shares = db.Column(db.Numeric(precision=15, scale=2), default=Decimal('0.00'), nullable=True)
-    file_location = db.Column(db.Text, nullable=True)  # Storage path for CR12 document
+    file_location = db.Column(db.Text, nullable=True) 
     last_compliance_audit = db.Column(db.Date, nullable=True)
     user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=True)
+    agent_user_id = db.Column(db.Integer, nullable=True)
 
     # Relationships
     shareholders = db.relationship('Shareholder', backref='company', lazy=True, cascade='all, delete-orphan')
     directors = db.relationship('Director', backref='company', lazy=True, cascade='all, delete-orphan')
     agent_companies = db.relationship('AgentCompany', backref='company', lazy=True)
 
-    def __init__(self, company_name, registration_number, address, company_code, registration_date=None,
+    def __init__(self, id,company_name, registration_number, address, company_code, registration_date=None,
                  compliance_status='compliant',primary_owner_name=None,primary_owner_email=None,primary_owner_shares=Decimal('0.00'), total_float_balance=Decimal('0.00'), file_location=None,
                  last_compliance_audit=None, shareholders=None, directors=None, user_id=None, shortcode=None):
+        self.id = id
         self.company_name = company_name
         self.registration_number = registration_number
         self.registration_date = registration_date

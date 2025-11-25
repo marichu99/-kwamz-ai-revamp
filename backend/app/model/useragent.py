@@ -2,7 +2,6 @@ from app import db
 from datetime import date, datetime
 from decimal import Decimal
 
-# Many-to-many association table (define this ONCE at the top)
 user_agent_companies = db.Table('user_agent_companies',
     db.Column('user_agent_id', db.Integer, db.ForeignKey('useragents.id', ondelete='CASCADE'), primary_key=True),
     db.Column('agent_company_id', db.Integer, db.ForeignKey('agentcompanies.id', ondelete='CASCADE'), primary_key=True),
@@ -23,7 +22,6 @@ class UserAgent(db.Model):
     date_of_birth = db.Column(db.Date, nullable=True)
     user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=True)
     
-    # Many-to-many relationship (REMOVE the table definition from here)
     agent_companies = db.relationship('AgentCompany', 
                                     secondary=user_agent_companies,
                                     backref=db.backref('user_agents', lazy='dynamic'),

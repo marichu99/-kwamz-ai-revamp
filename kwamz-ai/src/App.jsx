@@ -13,13 +13,54 @@ function App() {
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [currentPage, setCurrentPage] = useState('dashboard');
   const [isLoading, setIsLoading] = useState(true);
-  const [showPaymentModal, setShowPaymentModal] = useState(false); // Control Mpesa modal
+  const [showPaymentModal, setShowPaymentModal] = useState(false);
   const navigate = useNavigate();
   const location = useLocation();
+
+  // Define public routes that don't require authentication
+  const publicRoutes = [
+    '/', 
+    '/login', 
+    '/signup', 
+    '/admin/signup', 
+    '/agent/signup', 
+    '/admin/login',
+    '/checkout'
+  ];
 
   useEffect(() => {
     const verifyToken = async () => {
       const token = localStorage.getItem('token');
+      
+      // If on a public route, skip token verification
+      if (publicRoutes.includes(location.pathname)) {
+        if (token) {
+          // User is logged in but on a public route, verify token
+          try {
+            await axios.get(`${config.API_URL}/users/verify-token`, {
+              headers: { Authorization: `Bearer ${token}` },
+            });
+            setIsAuthenticated(true);
+            // Redirect authenticated users away from login/signup pages
+            if (['/login', '/signup', '/admin/login', '/admin/signup', '/agent/signup'].includes(location.pathname)) {
+              navigate('/dashboard');
+            }
+          } catch (error) {
+            console.error('Token verification failed:', error.response?.data || error.message);
+            localStorage.removeItem('token');
+            localStorage.removeItem('user');
+            localStorage.removeItem('userRole');
+            localStorage.removeItem('admin');
+            setIsAuthenticated(false);
+          }
+        } else {
+          setIsAuthenticated(false);
+        }
+        setIsLoading(false);
+        return;
+      }
+
+      // For protected routes, verify token
       if (token) {
         try {
           // Step 1: Verify token
@@ -41,21 +82,19 @@ function App() {
           // }
 
           setIsAuthenticated(true);
-          if (['/', '/login', '/signup'].includes(location.pathname)) {
-            navigate('/dashboard');
-          }
         } catch (error) {
           console.error('Verify token or payment check failed:', error.response?.data || error.message);
           localStorage.removeItem('token');
           localStorage.removeItem('user');
+          localStorage.removeItem('userRole');
+          localStorage.removeItem('admin');
           setIsAuthenticated(false);
           navigate('/');
         }
       } else {
+        // No token and trying to access protected route
         setIsAuthenticated(false);
-        if (!['/', '/login', '/signup'].includes(location.pathname)) {
-          navigate('/');
-        }
+        navigate('/');
       }
       setIsLoading(false);
     };
@@ -76,7 +115,14 @@ function App() {
   // };
 
   if (isLoading) {
-    return <div>Loading...</div>;
+    return (
+      <div className="min-h-screen bg-gradient-to-br from-slate-50 via-blue-50 to-indigo-50 dark:from-slate-900 dark:via-slate-800 dark:to-slate-900 flex items-center justify-center">
+        <div className="text-center">
+          <div className="w-16 h-16 border-4 border-blue-500 border-t-transparent rounded-full animate-spin mx-auto mb-4"></div>
+          <p className="text-slate-600 dark:text-slate-400">Loading...</p>
+        </div>
+      </div>
+    );
   }
 
   // Add blur effect when modal is open
@@ -106,7 +152,7 @@ function App() {
             />
           )}
           <main className="flex-1 overflow-y-auto bg-transparent">
-            <div className="p-6 space-y-6">
+            <div className={`${isAuthenticated ? 'p-6' : 'p-0'} space-y-6`}>
               <AppRouter
                 isAuthenticated={isAuthenticated}
                 currentPage={currentPage}

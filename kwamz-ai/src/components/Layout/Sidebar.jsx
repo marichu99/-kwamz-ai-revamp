@@ -1,74 +1,88 @@
+// src/components/Sidebar/Sidebar.js
 import {
-    LayoutDashboard,
-    BarChart3,
-    Users,
-    Package,
-    ShoppingCart,
-    Settings,
     ChevronDown,
     ChevronRight,
     Zap,
-    Wallet,
-    LogOut
+    LogOut,
+    Shield,
+    Loader2
 } from 'lucide-react';
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import UserSettingsModal from '../Pages/UserSettingsModal';
-
-const menuItems = [
-    {
-        id: "dashboard",
-        icon: LayoutDashboard,
-        label: "Dashboard",
-        badge: "New"
-    },
-    {
-        id: "users",
-        icon: Users,
-        label: "Users",
-        count: "12",
-        submenu: [
-            { id: "user-list", label: "Agents" },           
-            { id: "agent-list", label: "Tills" },           
-            { id: "company-list", label: "Companies" },           
-        ]
-    },
-    {
-        id: "products",
-        icon: Package,
-        label: "Products",
-        submenu: [
-            { id: "catalog", label: "Product Catalog" },
-            { id: "inventory", label: "Inventory" },
-            { id: "categories", label: "Categories" },
-            { id: "checkout", label: "Pricing" },
-            { id: "pesapal", label: "PesaPal" }
-        ]
-    },
-    {
-        id: "transactions",
-        icon: Wallet,
-        label: "Transactions",
-    },
-    // {
-    //     id: "orders",
-    //     icon: ShoppingCart,
-    //     label: "Orders",
-    //     badge: "3",
-    //     submenu: [
-    //         { id: "all-orders", label: "All Orders" },
-    //         { id: "pending", label: "Pending Orders" },
-    //         { id: "processing", label: "Processing" },
-    //         { id: "shipped", label: "Shipped" }
-    //     ]
-    // },
-];
+import { getMenuItems,getRoleDisplayName } from '../config/MenuConfig';
+import config from '../../Config';
+import { useToast } from '../Pages/ToastProvider';
 
 function Sidebar({ collapsed, onToggle, currentPage, onPageChange }) {
     const [openSubmenus, setOpenSubmenus] = useState({ analytics: true });
     const [isSettingsOpen, setIsSettingsOpen] = useState(false);
-    const user = JSON.parse(localStorage.getItem("user"));
+    const [userRole, setUserRole] = useState(null);
+    const [isLoadingRole, setIsLoadingRole] = useState(true);
+    const [menuItems, setMenuItems] = useState([]);
     const navigate = useNavigate();
+    const { showToast } = useToast();
+
+    // Get user from localStorage
+    const user = JSON.parse(localStorage.getItem("user") || "{}");
+
+    // Fetch user role
+    useEffect(() => {
+        const fetchUserRole = async () => {
+            setIsLoadingRole(true);
+            try {
+                const token = localStorage.getItem('token');
+                
+                if (!token || !user.username) {
+                    console.error('No token or username found');
+                    // showToast('No token or username found',"error");
+                    setUserRole('user');
+                    setMenuItems(getMenuItems('user'));
+                    setIsLoadingRole(false);
+                    return;
+                }
+
+                const response = await fetch(`${config.API_URL}/users/role/${user.username}`, {
+                    method: 'GET',
+                    headers: {
+                        'Authorization': `Bearer ${token}`,
+                        'Content-Type': 'application/json'
+                    }
+                });
+
+                if (!response.ok) {
+                    throw new Error('Failed to fetch role');
+                }
+
+                const data = await response.json();
+                const role = data.role || 'user';
+
+                console.log("Fetched user role:", role);
+                
+                setUserRole(role);
+                setMenuItems(getMenuItems(role));
+                
+                // Optionally store role in localStorage for faster access
+                localStorage.setItem('userRole', role);
+            } catch (error) {
+                console.error('Error fetching user role:', error);
+                // Fallback to checking localStorage
+                const cachedRole = localStorage.getItem('userRole') || 'user';
+                setUserRole(cachedRole);
+                setMenuItems(getMenuItems(cachedRole));
+            } finally {
+                setIsLoadingRole(false);
+            }
+        };
+
+        if (user.username) {
+            fetchUserRole();
+        } else {
+            setIsLoadingRole(false);
+            setUserRole('user');
+            setMenuItems(getMenuItems('user'));
+        }
+    }, [user.username]);
 
     const toggleSubmenu = (itemId) => {
         setOpenSubmenus(prev => ({
@@ -86,8 +100,21 @@ function Sidebar({ collapsed, onToggle, currentPage, onPageChange }) {
     };
 
     const handleLogout = () => {
+        localStorage.removeItem('userRole'); // Clear cached role
         navigate("/logout");
     };
+
+    // Loading state
+    if (isLoadingRole) {
+        return (
+            <div className='w-72 transition-all duration-300 ease-in-out bg-white/80 dark:bg-slate-900/80 backdrop-blur-xl border-r border-slate-200/50 dark:border-slate-700/50 flex items-center justify-center'>
+                <div className='flex flex-col items-center space-y-3'>
+                    <Loader2 className='w-8 h-8 text-blue-500 animate-spin' />
+                    <p className='text-sm text-slate-600 dark:text-slate-400'>Loading menu...</p>
+                </div>
+            </div>
+        );
+    }
 
     if (collapsed) {
         return (
@@ -120,7 +147,13 @@ function Sidebar({ collapsed, onToggle, currentPage, onPageChange }) {
                 {/* User profile and Logout */}
                 <div className='p-2 border-t border-slate-200/50 dark:border-slate-700/50 space-y-2'>
                     <div className='flex justify-center'>
-                        <div className='w-10 h-10 rounded-full bg-gray-300 ring-2 ring-blue-500'></div>
+                        <div className='w-10 h-10 rounded-full bg-gray-300 ring-2 ring-blue-500 relative'>
+                            {userRole === 'admin' && (
+                                <div className='absolute -top-1 -right-1 w-4 h-4 bg-purple-500 rounded-full flex items-center justify-center'>
+                                    <Shield className='w-2.5 h-2.5 text-white' />
+                                </div>
+                            )}
+                        </div>
                     </div>
                     <button
                         className='w-full flex items-center justify-center p-3 rounded-xl text-slate-600 dark:text-slate-300 hover:bg-red-50 dark:hover:bg-red-900/20 hover:text-red-600 dark:hover:text-red-400 transition-colors duration-200'
@@ -146,7 +179,9 @@ function Sidebar({ collapsed, onToggle, currentPage, onPageChange }) {
                         </div>
                         <div>
                             <h1 className='text-xl font-bold text-slate-800 dark:text-white'>Kwamz-AI</h1>
-                            <p className='text-xs text-slate-500 dark:text-slate-400'>Admin Panel</p>
+                            <p className='text-xs text-slate-500 dark:text-slate-400'>
+                                {getRoleDisplayName(userRole)}
+                            </p>
                         </div>
                     </div>
                 </div>
@@ -220,11 +255,19 @@ function Sidebar({ collapsed, onToggle, currentPage, onPageChange }) {
 
                 {/* User profile and Logout */}
                 <div className='p-4 border-t border-slate-200/50 dark:border-slate-700/50 space-y-4'>
-                    <div className='flex items-center space-x-3 p-3 rounded-xl bg-slate-50 dark:bg-slate-800/50' onClick={() => setIsSettingsOpen(true)}>
-                        <div className='w-10 h-10 rounded-full bg-gray-300 ring-2 ring-blue-500'></div>
+                    <div className='flex items-center space-x-3 p-3 rounded-xl bg-slate-50 dark:bg-slate-800/50 cursor-pointer hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors' onClick={() => setIsSettingsOpen(true)}>
+                        <div className='w-10 h-10 rounded-full bg-gray-300 ring-2 ring-blue-500 relative'>
+                            {userRole === 'admin' && (
+                                <div className='absolute -top-1 -right-1 w-5 h-5 bg-purple-500 rounded-full flex items-center justify-center'>
+                                    <Shield className='w-3 h-3 text-white' />
+                                </div>
+                            )}
+                        </div>
                         <div className='flex-1 min-w-0'>
                             <p className='text-sm font-medium text-slate-800 dark:text-white truncate'>{user.username}</p>
-                            <p className='text-xs text-slate-500 dark:text-slate-400 truncate'>Administrator</p>
+                            <p className='text-xs text-slate-500 dark:text-slate-400 truncate capitalize'>
+                                {userRole}
+                            </p>
                         </div>
                     </div>
 

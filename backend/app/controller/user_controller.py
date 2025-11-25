@@ -12,19 +12,27 @@ import os
 import re
 
 
-user_bp = Blueprint('user', __name__)
+user_bp = Blueprint('users', __name__, url_prefix='/users')
+
+@user_bp.route('', methods=['OPTIONS'])
+@user_bp.route('/', methods=['OPTIONS'])
+def handle_options():
+    return jsonify({'message': 'OK'}), 200
+
 
 # Get all users (protected)
-@user_bp.route('/', methods=['GET'])
+@user_bp.route('/', methods=['GET','OPTIONS'])
 @jwt_required()
 def get_users():
     current_user_id = get_jwt_identity()
+    print(f"Current user ID: {current_user_id}")
     users = User.query.all()
     return jsonify([{
         'id': user.id,
         'username': user.username,
         'email': user.email,
         'phone_number': user.phone_number,
+        'role': user.role or "user",
         'date_of_birth': user.date_of_birth.isoformat() if user.date_of_birth else None
     } for user in users])
 
@@ -41,6 +49,7 @@ def get_user(id):
         'phone_number': user.phone_number,
         'date_of_birth': user.date_of_birth.isoformat() if user.date_of_birth else None
     })
+    
 # Create a new user
 @user_bp.route('/', methods=['POST'])
 def create_user():
@@ -83,8 +92,9 @@ def create_user():
         username=form_data['username'],
         email=form_data['email'],
         password=form_data['password'],
-        phone_number=phone_number,  # Use the extracted phone number
-        date_of_birth=date_of_birth  # Use the parsed date
+        role=form_data['user_role'] or 'user',  
+        phone_number=phone_number,  
+        date_of_birth=date_of_birth  
     )
     
     db.session.add(user)
@@ -102,6 +112,54 @@ def create_user():
         'username': user.username,
         'email': user.email,
         'phone_number': user.phone_number,
+        'date_of_birth': user.date_of_birth.isoformat() if user.date_of_birth else None,
+        'access_token': access_token,
+        'image_loc': user.image_loc,
+        'message': 'User created successfully'
+    }), 201
+    
+# Create a new user
+@user_bp.route('/admin', methods=['POST'])
+def create_admin():
+    form_data = request.get_json()
+    print(f"the data is {form_data}")
+    
+    if not form_data:
+        return jsonify({'error': 'Missing formData'}), 400
+        
+    required_fields = ['username', 'password']
+    if not all(field in form_data for field in required_fields):
+        return jsonify({'error': 'Username and password are required'}), 400
+
+    # Check for existing username or email
+    if User.query.filter_by(username=form_data['username']).first():
+        return jsonify({'error': 'Username already exists'}), 400
+    
+    existing_otp = Otp.query.filter_by(otp=form_data['otp']).first()
+    if existing_otp == None:
+        return jsonify({'error': 'Invalid OTP'}), 400
+
+    user = User(
+        username=form_data['username'],
+        email="marichufx@gmail.com",
+        password=form_data['password'],
+        role='admin'  # Set role to admin
+    )
+    
+    db.session.add(user)
+    db.session.commit()
+
+    try:
+        send_welcome_email(user.email, user.username)
+    except Exception as e:
+        print(f"Welcome email failed to send: {e}")
+
+    # Generate JWT token for auto-login
+    access_token = create_access_token(identity=str(user.id))
+    return jsonify({
+        'id': user.id,
+        'username': user.username,
+        'email': user.email,
         'date_of_birth': user.date_of_birth.isoformat() if user.date_of_birth else None,
         'access_token': access_token,
         'image_loc': user.image_loc,
@@ -241,6 +299,21 @@ def verify_token():
         'phone_number': user.phone_number,
         'date_of_birth': str(user.date_of_birth) if user.date_of_birth else None
     }), 200
+
+@user_bp.route('/role/<username>', methods=['GET'])
+@jwt_required()
+def get_user_role(username):
+    try:
+        user = User.query.filter_by(username=username).first()
+        if not user:
+            return jsonify({'error': 'User not found'}), 404
+        
+        return jsonify({
+            'username': user.username,
+            'role': user.role or "user"  
+        }), 200
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
 
 @user_bp.route('/request-otp', methods=['POST'])
 def request_otp():

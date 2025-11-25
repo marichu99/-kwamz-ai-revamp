@@ -5,7 +5,7 @@ import config from '../../Config';
 import { Eye, EyeOff, User, Mail, Phone, Calendar, Lock, CheckCircle, AlertCircle } from 'lucide-react';
 import OtpVerificationModal from './OtpVerificationModal';
 
-const SignUpForm = ({ onSuccess }) => {
+const SignUpForm = ({ onSuccess,user_role }) => {
   const [formData, setFormData] = useState({
     username: '',
     email: '',
@@ -185,6 +185,8 @@ const SignUpForm = ({ onSuccess }) => {
   };
 
   const handleFinalSubmit = async (enteredOtp) => {
+
+    formData.user_role=user_role;
 
     const newErrors = { ...errors };
     delete newErrors.general;
