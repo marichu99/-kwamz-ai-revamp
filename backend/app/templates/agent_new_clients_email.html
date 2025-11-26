@@ -1,0 +1,212 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>New Clients Assigned – Earn 3% Commission!</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            background-color: #f4f7f6;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            color: #333;
+        }
+        .container {
+            max-width: 680px;
+            margin: 40px auto;
+            background-color: #ffffff;
+            border-radius: 12px;
+            overflow: hidden;
+            box-shadow: 0 10px 30px rgba(0, 128, 96, 0.15);
+            border: 1px solid #e0e0e0;
+        }
+        .header {
+            background: linear-gradient(135deg, #10b981, #059669);
+            color: white;
+            padding: 50px 30px;
+            text-align: center;
+        }
+        .header h1 {
+            margin: 0 0 12px 0;
+            font-size: 30px;
+            font-weight: 700;
+        }
+        .header p {
+            margin: 0;
+            font-size: 18px;
+            opacity: 0.95;
+        }
+        .content {
+            padding: 40px 30px;
+        }
+        .greeting {
+            font-size: 20px;
+            font-weight: 600;
+            color: #065f46;
+            margin-bottom: 20px;
+        }
+        .highlight-box {
+            background-color: #ecfdf5;
+            border: 2px solid #10b981;
+            border-radius: 12px;
+            padding: 25px;
+            text-align: center;
+            margin: 30px 0;
+        }
+        .highlight-box strong {
+            font-size: 42px;
+            color: #059669;
+            display: block;
+            margin-bottom: 8px;
+        }
+        .highlight-box span {
+            color: #065f46;
+            font-size: 19px;
+            font-weight: 600;
+        }
+
+        /* Commission Banner – High Impact */
+        .commission-banner {
+            background: linear-gradient(135deg, #065f46, #059669);
+            color: white;
+            padding: 28px;
+            border-radius: 12px;
+            text-align: center;
+            margin: 35px 0;
+            box-shadow: 0 8px 20px rgba(5, 150, 105, 0.3);
+        }
+        .commission-banner h2 {
+            margin: 0 0 12px 0;
+            font-size: 26px;
+            font-weight: 700;
+        }
+        .commission-banner p {
+            margin: 0;
+            font-size: 18px;
+            opacity: 0.95;
+        }
+        .commission-banner .big-percent {
+            font-size: 56px;
+            font-weight: 900;
+            line-height: 1;
+            display: block;
+            margin: 12px 0;
+            text-shadow: 0 2px 10px rgba(0,0,0,0.3);
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin: 30px 0;
+            background-color: #faffee;
+            border-radius: 10px;
+            overflow: hidden;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.06);
+        }
+        th {
+            background-color: #10b981;
+            color: white;
+            padding: 16px 14px;
+            text-align: left;
+            font-weight: 600;
+        }
+        td {
+            padding: 16px 14px;
+            border-bottom: 1px solid #ddd;
+        }
+        tr:last-child td { border-bottom: none; }
+        tr:nth-child(even) { background-color: #f0fdf4; }
+
+        .btn {
+            display: inline-block;
+            background-color: #10b981;
+            color: white;
+            padding: 16px 36px;
+            text-decoration: none;
+            border-radius: 8px;
+            font-weight: 600;
+            font-size: 17px;
+            margin: 25px 0;
+            box-shadow: 0 6px 18px rgba(16, 185, 129, 0.35);
+            transition: transform 0.2s;
+        }
+        .btn:hover { transform: translateY(-2px); }
+
+        .footer {
+            background-color: #f0fdf4;
+            padding: 35px 30px;
+            text-align: center;
+            color: #059669;
+            font-size: 14px;
+        }
+        .footer a {
+            color: #10b981;
+            text-decoration: none;
+            font-weight: 600;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <!-- Header -->
+        <div class="header">
+            <h1>New Clients Assigned!</h1>
+            <p>You're growing fast – and so are your earnings</p>
+        </div>
+
+        <div class="content">
+            <p class="greeting">Hi {{ agent_name }},</p>
+            <p>Amazing news! You've just been assigned <strong>{{ total_companies }} new client(s)</strong> to your portfolio on Kwamz-AI.</p>
+
+            <div class="highlight-box">
+                <strong>{{ total_companies }}</strong>
+                <span>{% if total_companies == 1 %}New Client Assigned{% else %}New Clients Assigned{% endif %}</span>
+            </div>
+
+            <!-- Commission Announcement – This steals the show -->
+            <div class="commission-banner">
+                <h2>Congratulations – You're Earning More!</h2>
+                <div class="big-percent">3%</div>
+                <p>You will automatically receive <strong>3% commission</strong><br>on <strong>every payment</strong> made by these clients<br>– for the lifetime of their account!</p>
+            </div>
+
+            <p>Here are your newly assigned clients:</p>
+
+            <table>
+                <thead>
+                    <tr>
+                        <th>Company Name</th>
+                        <th>Registration No.</th>
+                        <th>Primary Owner</th>
+                        <th>Registered On</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for company in companies %}
+                    <tr>
+                        <td><strong>{{ company.company_name }}</strong></td>
+                        <td>{{ company.company_number }}</td>
+                        <td>{{ company.primary_owner_name }}</td>
+                        <td>{{ company.registration_date }}</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+
+            <div style="text-align: center;">
+                <a href="{{ dashboard_url }}" class="btn">View Clients & Track Earnings</a>
+            </div>
+
+            <p>Every payment these companies make (filing fees, annual returns, compliance packages, etc.) puts <strong>3% directly into your pocket</strong> – automatically and instantly.</p>
+            
+            <p>Keep bringing in and managing great clients – your income grows with them!</p>
+        </div>
+
+        <div class="footer">
+            <p>© {{ year }} Kwamz-AI • All rights reserved</p>
+            <p>Questions? Reach us anytime at <a href="mailto:support@kwamz-ai.com">support@kwamz-ai.com</a></p>
+        </div>
+    </div>
+</body>
+</html>

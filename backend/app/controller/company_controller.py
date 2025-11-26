@@ -26,7 +26,13 @@ def handle_options():
 @jwt_required()
 def get_companies():
     user_id = get_jwt_identity()
-    companies, error = company_service.get_companies_by_userid(user_id=user_id)
+    user = User.query.get_or_404(user_id)  
+    
+    if user.role is not None and user.role.lower() == 'admin':
+        companies, error = company_service.get_companies()
+    else:
+        companies, error = company_service.get_companies_by_userid(user_id=user_id)
+        
     if error:
         return jsonify({'error': error}), 500
     return jsonify(companies), 200
@@ -380,7 +386,148 @@ def get_company_hierarchy():
             'success': False,
             'error': str(e)
         }), 500
+        
+@company_bp.route('/unassign-company/<int:agent_id>/<int:company_id>', methods=['POST'])
+@jwt_required()
+def unassign_agent_company(agent_id, company_id):
+    """Unassign a specific company from an agent"""
+    try:
+        current_user_id = get_jwt_identity()
+        
+        # Verify agent exists
+        agent = User.query.get_or_404(agent_id)
+        if agent.role != 'agent':
+            return jsonify({'error': 'User is not an agent'}), 400
+        
+        # Verify company exists and is assigned to this agent
+        company = Company.query.filter_by(id=company_id, agent_user_id=agent_id).first()
+        if not company:
+            return jsonify({'error': 'Company not found or not assigned to this agent'}), 404
+        
+        # Unassign the company
+        company.agent_user_id = None
+        company.agent_assigned_at = None
+        db.session.commit()
+        
+        return jsonify({
+            'success': True,
+            'message': 'Company unassigned successfully',
+            'agent_id': agent_id,
+            'company_id': company_id
+        })
+        
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
 
+@company_bp.route('/available-companies', methods=['GET'])
+@jwt_required()
+def get_available_companies_for_agent():
+    """Get companies not assigned to any agent"""
+    try:
+        current_user_id = get_jwt_identity()
+
+        # Get companies not assigned to any agent
+        available_companies = Company.query.filter(Company.agent_user_id.is_(None)).all()
+        
+        companies_data = []
+        for company in available_companies:
+            company_data = {
+                'id': company.id,
+                'company_name': company.company_name,
+                'registration_number': company.registration_number,
+                'address': company.address,
+                'primary_owner_name': company.primary_owner_name,
+                'primary_owner_email': company.primary_owner_email,
+                'primary_owner_shares': float(company.primary_owner_shares) if company.primary_owner_shares else 0.0,
+                'compliance_status': company.compliance_status,
+                'total_float_balance': float(company.total_float_balance) if company.total_float_balance else 0.0
+            }
+            
+            # Add additional company details as needed
+            companies_data.append(company_data)
+        
+        return jsonify({
+            'success': True,
+            'available_companies': companies_data,
+            'total_available': len(companies_data)
+        })
+        
+    except Exception as e:
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
+
+@company_bp.route('/<int:agent_id>/agents', methods=['GET','OPTIONS'])
+@jwt_required()
+def get_agent_companies(agent_id):
+    """Get all companies assigned to a specific agent"""
+    try:
+    
+        # Verify agent exists and is actually an agent
+        agent = User.query.get_or_404(agent_id)
+        if agent.role != 'agent':
+            return jsonify({'error': 'User is not an agent'}), 400
+        
+        # Get companies assigned to this agent
+        companies = Company.query.filter_by(agent_user_id=agent_id).all()
+        
+        companies_data = []
+        for company in companies:
+            company_data = {
+                'id': company.id,
+                'company_name': company.company_name,
+                'registration_number': company.registration_number,
+                'address': company.address,
+                'primary_owner_name': company.primary_owner_name,
+                'primary_owner_email': company.primary_owner_email,
+                'primary_owner_shares': float(company.primary_owner_shares) if company.primary_owner_shares else 0.0,
+                'compliance_status': company.compliance_status,
+                'total_float_balance': float(company.total_float_balance) if company.total_float_balance else 0.0,
+                'registration_date': company.registration_date.isoformat() if company.registration_date else None,
+                'company_code': company.company_code,
+                'file_location': company.file_location,
+                'assigned_at': company.agent_assigned_at.isoformat() if company.agent_assigned_at else None
+            }
+            
+            # Add shareholders if available
+            if hasattr(company, 'shareholders'):
+                company_data['secondary_shareholders'] = [{
+                    'name': sh.name,
+                    'email': sh.email,
+                    'shares': float(sh.shares) if sh.shares else 0.0
+                } for sh in company.shareholders if sh.name != company.primary_owner_name]
+            
+            # Add directors if available
+            if hasattr(company, 'directors'):
+                company_data['directors'] = [{
+                    'name': dir.name,
+                    'email': dir.email
+                } for dir in company.directors]
+            
+            companies_data.append(company_data)
+        
+        return jsonify({
+            'success': True,
+            'agent': {
+                'id': agent.id,
+                'username': agent.username,
+                'email': agent.email,
+                'phone_number': agent.phone_number
+            },
+            'companies': companies_data,
+            'total_companies': len(companies_data)
+        })
+        
+    except Exception as e:
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
 
 @company_bp.route('/company-hierarchy/<int:company_id>', methods=['GET'])
 @jwt_required()

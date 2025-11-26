@@ -5,7 +5,8 @@ from app.model.otp import Otp
 from werkzeug.utils import secure_filename
 from app import db,bcrypt
 from datetime import datetime,timedelta
-from app.utils.email_utils import send_otp_email,send_welcome_email
+from app.model.company import Company
+from app.utils.email_utils import send_otp_email,send_welcome_email,send_agent_new_clients_email
 from sqlalchemy import or_
 import random
 import os
@@ -117,6 +118,72 @@ def create_user():
         'image_loc': user.image_loc,
         'message': 'User created successfully'
     }), 201
+    
+
+@user_bp.route('/agents/assign-companies/<int:agent_id>', methods=['POST'])
+@jwt_required()
+def assign_agent_companies(agent_id):
+    # try:
+        data = request.get_json()
+        company_ids = data.get('company_ids', [])
+        
+        agent = User.query.get_or_404(agent_id)
+        if agent.role != 'agent':
+            return jsonify({'error': 'User is not an agent'}), 400
+
+        # # Get companies that are BEING ASSIGNED now (newly assigned)
+        # previously_assigned = {
+        #     c.id for c in Company.query.filter(Company.agent_user_id == agent_id).all()
+        # }
+        # newly_assigned_ids = [cid for cid in company_ids if cid not in previously_assigned]
+
+        # Perform assignment updates (your existing logic)
+        Company.query.filter(Company.id.in_(company_ids)).update(
+            {Company.agent_user_id: agent_id,
+             Company.agent_assigned_at: datetime.utcnow()},
+            synchronize_session=False
+        )
+        
+        # Company.query.filter(
+        #     Company.agent_user_id == agent_id,
+        #     ~Company.id.in_(company_ids)
+        # ).update(
+        #     {Company.agent_user_id: None},
+        #     synchronize_session=False
+        # )
+        
+        db.session.commit()
+
+        # === SEND EMAIL ONLY IF THERE ARE NEWLY ASSIGNED COMPANIES ===
+        # if newly_assigned_ids:
+        #     newly_assigned_companies = Company.query.filter(Company.id.in_(newly_assigned_ids)).all()
+        newly_assigned_companies = Company.query.filter(Company.id.in_(company_ids)).all()
+            
+        # Reuse your existing get_companies logic or format here
+        companies_data = [{
+            'company_name': c.company_name,
+            'company_number': c.registration_number,
+            'registration_date': c.registration_date.strftime('%d %B %Y') if c.registration_date else 'N/A',
+            'primary_owner_name': c.primary_owner_name,
+            'primary_owner_email': c.primary_owner_email,
+        } for c in newly_assigned_companies]
+
+        send_agent_new_clients_email(
+            agent_email=agent.email,
+            agent_name=agent.username or agent.email.split('@')[0],
+            newly_assigned_companies=companies_data
+        )
+
+        return jsonify({
+            'message': f'Successfully assigned {len(company_ids)} companies to agent',
+            'agent_id': agent_id,
+            'assigned_companies': company_ids
+            # 'newly_assigned': len(newly_assigned_ids)
+        })
+
+    # except Exception as e:
+    #     db.session.rollback()
+    #     return jsonify({'error': str(e)}), 500
     
 # Create a new user
 @user_bp.route('/admin', methods=['POST'])
@@ -264,11 +331,12 @@ def login():
     if not data or not data.get('otp'):
         return jsonify({'error': 'OTP not supplied'}), 400
     
+    user = User.query.filter(or_(User.username == data['username'], User.email == data['username'])).first()
+    
     existing_otp = Otp.query.filter_by(otp=data.get('otp')).first()
-    if existing_otp == None:
+    if existing_otp == None or existing_otp.email != user.email:
         return jsonify({'error': 'Invalid OTP'}), 400
 
-    user = User.query.filter(or_(User.username == data['username'], User.email == data['username'])).first()
     # user = User.query.filter(or_(User.email == data['username'])).first()
     if user and user.check_password(data['password']):
         access_token = create_access_token(identity=str(user.id))

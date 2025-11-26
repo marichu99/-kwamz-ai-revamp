@@ -32,7 +32,7 @@ class CompanyService:
             file.save(file_path)
             return file_path
         return None
-    
+
     def get_companies(self):
         """Retrieve all companies."""
         try:
@@ -41,10 +41,11 @@ class CompanyService:
                 'id': c.id,
                 'company_name': c.company_name,
                 'company_number': c.registration_number,  # Changed to match frontend
-                'registration_date': c.registration_date.isoformat() if c.registration_date else None,  # Format date
+                'registration_number': c.registration_number,  # Keep both for compatibility
+                'registration_date': c.registration_date.isoformat() if c.registration_date else None,
                 'address': c.address,
                 'primary_owner_name': c.primary_owner_name,
-                'primary_owner_email': c.primary_owner_email,  # Added this field
+                'primary_owner_email': c.primary_owner_email,
                 'primary_owner_shares': float(c.primary_owner_shares) if c.primary_owner_shares else 0.0,
                 'secondary_shareholders': [{
                     'name': sh.name,
@@ -53,16 +54,19 @@ class CompanyService:
                 } for sh in c.shareholders if sh.name != c.primary_owner_name],  
                 'directors': [{
                     'name': dir.name,
-                    'email': dir.email
-                } for dir in c.directors],  # Assuming directors relationship
-                'cr12_file_location': c.file_location,  # For preview
+                    'email': dir.email,
+                } for dir in c.directors],
+                'cr12_file_location': c.file_location,
                 'compliance_status': c.compliance_status,
-                'total_float_balance': float(c.total_float_balance) if c.total_float_balance else 0.0
+                'total_float_balance': float(c.total_float_balance) if c.total_float_balance else 0.0,
+                # Add user information if company is linked to a user
+                'user_id': c.user_id,
+                'agent_user_id': c.agent_user_id
             } for c in companies], None
         except Exception as e:
             print(f"Error retrieving companies: {str(e)}")
             return None, str(e)
-            
+    
     def get_companies_by_userid(self,user_id):
         """Retrieve all companies."""
         try:

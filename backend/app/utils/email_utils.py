@@ -183,3 +183,45 @@ def send_email_notification(subject, body,recipient_email):
         print("Notification email sent successfully.")
     except Exception as e:
         print(f"Error sending email: {e}")
+
+def send_agent_new_clients_email(agent_email, agent_name, newly_assigned_companies):
+    """
+    Send a beautiful green-themed email to an agent when new companies are assigned to them.
+    
+    :param agent_email: Email of the agent
+    :param agent_name: First name or full name of the agent
+    :param newly_assigned_companies: List of dicts with company details (from get_companies format)
+    """
+    try:
+        total_companies = len(newly_assigned_companies)
+
+        # Create message
+        msg = MIMEMultipart('alternative')
+        msg['Subject'] = f"🎉 {total_companies} New Client(s) Assigned to You!"
+        msg['From'] = EMAIL_ADDRESS
+        msg['To'] = agent_email
+
+        # Render HTML template
+        html_content = render_template(
+            'agent_new_clients_email.html',
+            agent_name=agent_name.split()[0] if agent_name else "Agent",  # Use first name
+            total_companies=total_companies,
+            companies=newly_assigned_companies,
+            dashboard_url=DASHBOARD_URL,
+            year=datetime.utcnow().year
+        )
+
+        msg.attach(MIMEText(html_content, 'html'))
+
+        # Send email
+        with smtplib.SMTP(SMTP_SERVER, SMTP_PORT) as server:
+            server.starttls()
+            server.login(EMAIL_ADDRESS, EMAIL_PASSWORD)
+            server.send_message(msg)
+
+        print(f"New clients notification email sent to agent: {agent_email}")
+        return True
+
+    except Exception as e:
+        print(f"Failed to send agent new clients email: {str(e)}")
+        return False

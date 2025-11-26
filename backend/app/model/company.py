@@ -20,6 +20,7 @@ class Company(db.Model):
     primary_owner_shares = db.Column(db.Numeric(precision=15, scale=2), default=Decimal('0.00'), nullable=True)
     file_location = db.Column(db.Text, nullable=True) 
     last_compliance_audit = db.Column(db.Date, nullable=True)
+    agent_assigned_at = db.Column(db.Date, nullable=True)
     user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=True)
     agent_user_id = db.Column(db.Integer, nullable=True)
 
@@ -30,7 +31,7 @@ class Company(db.Model):
 
     def __init__(self, id,company_name, registration_number, address, company_code, registration_date=None,
                  compliance_status='compliant',primary_owner_name=None,primary_owner_email=None,primary_owner_shares=Decimal('0.00'), total_float_balance=Decimal('0.00'), file_location=None,
-                 last_compliance_audit=None, shareholders=None, directors=None, user_id=None, shortcode=None):
+                 last_compliance_audit=None, shareholders=None, directors=None, user_id=None, shortcode=None, agent_assigned_at=None):
         self.id = id
         self.company_name = company_name
         self.registration_number = registration_number
@@ -46,6 +47,7 @@ class Company(db.Model):
         self.last_compliance_audit = last_compliance_audit
         self.user_id = user_id
         self.shortcode = shortcode
+        self.agent_assigned_at = agent_assigned_at
         if shareholders:
             self.shareholders = shareholders
         if directors:
