@@ -2,35 +2,127 @@ from flask import Blueprint, jsonify, request,redirect,current_app
 from app.model.payment import Payment
 from app.utils.user_service import UserService
 from flask_jwt_extended import jwt_required,get_jwt_identity
+from app.service.company_service import CompanyService
 from datetime import datetime,timedelta
+from app.model.user import User
+from app.model.company import Company
+from app.model.pesalpalpayment import PesapalPayment
+from app import db
 
 import os
 
 payment_bp = Blueprint('payment', __name__)
+company_service = CompanyService(db)
 
 
-@payment_bp.route('/get-payments', methods=['GET'])
+@payment_bp.route('/get-all-payments', methods=['GET'])
 @jwt_required()
-def get_payments():
-    try:
-        user_id = get_jwt_identity()
-        payments = current_app.payment_service.get_user_payments(user_id=user_id)
+def get_all_payments():
+    try:    
+        current_user_id = get_jwt_identity()
+        current_user = UserService.get_user_by_id(user_id=current_user_id)
+        
+        # Determine which payment model to use based on your needs
+        # Option 1: Use Payment model (original)
+        # payments_query = PesapalPayment.query.options(db.joinedload(PesapalPayment.user).joinedload(User.companies))
+        
+        # Option 2: Use PesapalPayment model (if that's your main payment table)
+        payments_query = PesapalPayment.query.all()
+        
+        # Role-based filtering
+        if current_user.role == 'admin':
+            pass  # Admin sees all
+        elif current_user.role == 'agent':
+            # For Payment model
+            # agent_user_ids = db.session.query(Company.user_id).filter(
+            #     Company.agent_user_id == current_user_id,
+            #     Company.user_id.isnot(None)
+            # ).distinct()
+            
+            companies_tied_to_agent = Company.query.filter_by(agent_user_id=current_user_id).all()
+            company_user_ids = [company.user_id for company in companies_tied_to_agent if company.user_id is not None]
+            
+            # For PesapalPayment model (if using that instead):
+            payments_query = [x for x in payments_query if x.user_id in company_user_ids] 
+            # payments_query.filter(PesapalPayment.user_id.in_(agent_user_ids))
+        else:
+            # Regular user sees only their payments
+            payments_query = payments_query.filter(PesapalPayment.user_id == current_user_id)
+            # For PesapalPayment: payments_query = payments_query.filter(PesapalPayment.user_id == current_user_id)
+        
+        if hasattr(PesapalPayment, 'created_at'):
+            payments_query.sort(key=lambda x: x.created_at, reverse=True)
+        else:
+            payments_query.sort(key=lambda x: x.time_paid, reverse=True)
+        
 
-        print(f"The payments size is {len(payments)}")
+        payments_data = []
+        for payment in payments_query:
+            # Handle both Payment and PesapalPayment models
+            if hasattr(payment, 'to_dict'):
+                payment_data = payment.to_dict()
+            else:
+                payment_data = {
+                    'id': payment.id,
+                    'user_id': payment.user_id,
+                    'result_code': getattr(payment, 'result_code', None),
+                    'time_paid': getattr(payment, 'time_paid', None).isoformat() if getattr(payment, 'time_paid', None) else None,
+                    'amount': float(payment.amount) if payment.amount else 0.0,
+                    'phone_number': getattr(payment, 'phone_number', None),
+                    'checkout_id': getattr(payment, 'checkout_id', None),
+                    'reference_code': getattr(payment, 'reference_code', None),
+                    'result_desc': getattr(payment, 'result_desc', None),
+                    'customer_email': getattr(payment, 'customer_email', None),
+                    'customer_first_name': getattr(payment, 'customer_first_name', None),
+                    'customer_last_name': getattr(payment, 'customer_last_name', None),
+                    'currency': getattr(payment, 'currency', 'KES'),
+                    'created_at': getattr(payment, 'created_at', getattr(payment, 'time_paid', None)).isoformat() if getattr(payment, 'created_at', getattr(payment, 'time_paid', None)) else None,
+                    'checkout_request_id': getattr(payment, 'checkout_request_id', None),
+                    'merchant_request_id': getattr(payment, 'merchant_request_id', None),
+                    'confirmation_code': getattr(payment, 'confirmation_code', getattr(payment, 'reference_code', None)),
+                    'payment_status': getattr(payment, 'payment_status', None),  # For PesapalPayment
+                }
+            
+            # Add user and company information
+            if payment.user:
+                companies, error = company_service.get_companies_by_userid(user_id=payment.user.id)
+                
+                user_data = {
+                    'id': payment.user.id,
+                    'username': payment.user.username,
+                    'email': payment.user.email,
+                    'companies': [{
+                        'id': company["id"],
+                        'company_name': company["company_name"],
+                        'registration_number': company["company_number"],
+                        'compliance_status': company["compliance_status"],
+                        'total_float_balance': float(company["total_float_balance"]) if company["total_float_balance"] else 0.0,
+                        'agent_user_id': company["agent_user_id"],
+                    } for company in companies]
+                }
+                payment_data['user'] = user_data
+            else:
+                payment_data['user'] = None
+            
+            payments_data.append(payment_data)
         
         return jsonify({
             'success': True,
-            'payments': [payment.to_dict() for payment in payments],
-            'count': len(payments)
+            'payments': payments_data,
+            'count': len(payments_data),
+            'user_role': current_user.role
         }), 200
         
     except Exception as e:
+        import traceback
+        print(f"Error in get_all_payments: {str(e)}")
+        print(traceback.format_exc())
         return jsonify({
             'success': False,
             'message': 'Failed to retrieve payments',
             'error': str(e)
         }), 500
-    
+        
 @payment_bp.route('/get-latest-payment', methods=['GET'])
 @jwt_required()
 def get_latest_payment():

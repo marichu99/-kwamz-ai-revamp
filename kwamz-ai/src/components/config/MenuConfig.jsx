@@ -25,22 +25,9 @@ export const adminMenuItems = [
         label: "Users",
         count: "12",
         submenu: [
-            { id: "user-list", label: "Agents" },           
+            // { id: "user-list", label: "Agents" },           
             { id: "system-user-list", label: "System Users" },           
             { id: "company-hierarchy", label: "Company Hierarchy" }          
-        ]
-    },
-
-    {
-        id: "products",
-        icon: Package,
-        label: "Products",
-        submenu: [
-            { id: "catalog", label: "Product Catalog" },
-            { id: "inventory", label: "Inventory" },
-            { id: "categories", label: "Categories" },
-            { id: "checkout", label: "Pricing" },
-            { id: "pesapal", label: "PesaPal" }
         ]
     },
     {
@@ -49,7 +36,6 @@ export const adminMenuItems = [
         label: "Setup",
         submenu: [
             { id: "bank-list", label: "Bank Details" },
-            { id: "inventory", label: "Inventory" },
         ]
     },
     

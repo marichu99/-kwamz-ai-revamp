@@ -92,6 +92,7 @@ class CompanyService:
                 } for dir in c.directors],  # Assuming directors relationship
                 'cr12_file_location': c.file_location,  # For preview
                 'compliance_status': c.compliance_status,
+                'agent_user_id': c.agent_user_id,
                 'total_float_balance': float(c.total_float_balance) if c.total_float_balance else 0.0
             } for c in companies], None
         except Exception as e:

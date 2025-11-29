@@ -500,11 +500,9 @@ function SystemUsersList() {
               <th className="px-4 py-3 font-semibold">ID</th>
               <th className="px-4 py-3 font-semibold">User</th>
               <th className="px-4 py-3 font-semibold">Contact</th>
-              <th className="px-4 py-3 font-semibold">Personal Info</th>
+              <th className="px-4 py-3 font-semibold">Date of Birth</th>
               <th className="px-4 py-3 font-semibold">Role</th>
               <th className="px-4 py-3 font-semibold">Companies</th>
-              <th className="px-4 py-3 font-semibold">Status</th>
-              <th className="px-4 py-3 font-semibold">Actions</th>
             </tr>
           </thead>
           <tbody>
@@ -613,38 +611,6 @@ function SystemUsersList() {
                     ) : (
                       <span className="text-sm text-slate-400 dark:text-slate-500">-</span>
                     )}
-                  </td>
-                  <td className="px-4 py-3">
-                    <span
-                      className={`px-2 py-1 rounded-full text-xs ${user.is_active
-                        ? 'bg-green-100 text-green-600 dark:bg-green-900/50 dark:text-green-400'
-                        : 'bg-red-100 text-red-600 dark:bg-red-900/50 dark:text-red-400'
-                        }`}
-                    >
-                      {user.is_active ? 'Active' : 'Inactive'}
-                    </span>
-                  </td>
-                  <td className="px-4 py-3">
-                    <div className="flex space-x-2">
-                      <button
-                        onClick={() => handleToggleStatus(user.id, user.is_active)}
-                        className={`px-3 py-1 rounded-lg text-xs font-medium ${user.is_active
-                          ? 'bg-red-100 text-red-600 hover:bg-red-200 dark:bg-red-900/50 dark:hover:bg-red-900'
-                          : 'bg-green-100 text-green-600 hover:bg-green-200 dark:bg-green-900/50 dark:hover:bg-green-900'
-                          } transition-colors`}
-                      >
-                        {user.is_active ? 'Deactivate' : 'Activate'}
-                      </button>
-                      <button
-                        onClick={() => {
-                          setSelectedUserIds([user.id]);
-                          setIsRoleModalOpen(true);
-                        }}
-                        className="px-3 py-1 bg-blue-100 text-blue-600 rounded-lg text-xs font-medium hover:bg-blue-200 dark:bg-blue-900/50 dark:hover:bg-blue-900 transition-colors"
-                      >
-                        Change Role
-                      </button>
-                    </div>
                   </td>
                 </tr>
               );

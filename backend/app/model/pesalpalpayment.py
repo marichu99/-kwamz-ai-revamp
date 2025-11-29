@@ -64,6 +64,8 @@ class PesapalPayment(db.Model):
             'currency': self.currency,
             'description': self.description,
             'customer_email': self.customer_email,
+            'customer_first_name': self.customer_first_name,
+            'customer_last_name': self.customer_last_name,
             'customer_phone': self.customer_phone,
             'payment_status': self.payment_status,
             'payment_method': self.payment_method,
