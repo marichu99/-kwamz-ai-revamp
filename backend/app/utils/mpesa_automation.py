@@ -1,6 +1,6 @@
 from playwright.sync_api import sync_playwright,Page, TimeoutError as PlaywrightTimeoutError
-from app.utils.script import fill_login_form, capture_and_solve_captcha
-# from script import fill_login_form, capture_and_solve_captcha
+# from app.utils.script import fill_login_form, capture_and_solve_captcha
+from script import fill_login_form, capture_and_solve_captcha
 from PIL import Image, ImageFilter, ImageOps
 from dotenv import load_dotenv
 from openai import OpenAI
@@ -43,7 +43,7 @@ def login_to_mpesa():
         # Solve captcha initially
         captcha_solution = capture_and_solve_captcha(page)
         print(f"[DEBUG] Initial captcha solution: {captcha_solution}")
-        if(len(captcha_solution) > 4):
+        while(len(captcha_solution) > 4):
             svg_element = page.query_selector("//div[@class='img-part']//*[name()='svg']")
             if svg_element:
                 svg_element.click()
@@ -272,131 +272,12 @@ def scroll_to_bottom(page: Page) -> None:
     Args:
         page: Playwright Page object
     """
-    time.sleep(3)  # Wait for page to settle before scrolling
+    time.sleep(1.5)  # Wait for page to settle before scrolling
     try:
         page.evaluate("window.scrollTo(0, document.body.scrollHeight);")
-        time.sleep(10)
         print("[SUCCESS] Scrolled to bottom of page")
     except Exception as e:
         print(f"[ERROR] Failed to scroll to bottom: {e}")
-
-def save_table_to_dataframe(page: Page, row_index: int) -> tuple[pd.DataFrame, list]:
-    """
-    Extracts **all** rows from a paginated Element-UI table.
-    """
-    try:
-        print("[INFO] Starting full table extraction...")
-
-        headers = []
-        all_data_rows = []
-
-        # ------------------- SELECTORS -------------------
-        header_selector = (
-            "//div[contains(@class,'el-table--fit') and contains(@class,'is-scrolling-none')]"
-            "//table[@class='el-table__header']"
-        )
-        table_selector = (
-            "//div[contains(@class,'el-table--fit') and contains(@class,'is-scrolling-none')]"
-            "//table[@class='el-table__body']"
-        )
-        next_btn_xpath = "//button[@aria-label='Go to next page']"
-
-        # ------------------- HEADERS -------------------
-        page.wait_for_load_state("networkidle", timeout=10_000)
-        header_tbl = page.wait_for_selector(header_selector, timeout=10_000)
-        if not header_tbl or not header_tbl.is_visible():
-            print("[ERROR] Header table not found.")
-            return None, None
-
-        soup = BeautifulSoup(header_tbl.inner_html(), "html.parser")
-        tr = soup.find("thead").find("tr")
-        headers = [th.get_text(strip=True) for th in tr.find_all("th")]
-        if not headers:
-            print("[ERROR] No header cells.")
-            return None, None
-        print(f"[SUCCESS] Headers ({len(headers)}): {headers}")
-
-        # ------------------- PAGINATION LOOP -------------------
-        page_no = 1
-        while True:
-            print(f"\n[INFO] --- Page {page_no} ---")
-
-            # ---- wait for body table ----
-            page.wait_for_load_state("networkidle", timeout=10_000)
-            body_tbl = page.wait_for_selector(table_selector, timeout=10_000)
-            if not body_tbl:
-                print("[WARN] Body table missing – probably 'No Data'.")
-                break
-            if not body_tbl.is_visible():
-                print("[ERROR] Body table not visible.")
-                break
-            print("[SUCCESS] Body table ready.")
-
-            # ---- extract rows ----
-            soup = BeautifulSoup(body_tbl.inner_html(), "html.parser")
-            tbody = soup.find("tbody")
-            page_has_rows = False
-
-            if tbody:
-                for tr in tbody.find_all("tr"):
-                    cells = [td.get_text(strip=True) for td in tr.find_all("td")]
-                    if len(cells) == len(headers):
-                        all_data_rows.append([row_index] + cells)
-                        page_has_rows = True
-                    else:
-                        print(f"[WARN] Row skipped – {len(cells)} cells (expected {len(headers)})")
-                print(f"[SUCCESS] {len(tbody.find_all('tr'))} rows from page {page_no}")
-            else:
-                print("[WARN] No <tbody> – empty page.")
-                if page_no == 1 and "no data" in body_tbl.inner_html().lower():
-                    print("[WARN] Table shows 'No Data'.")
-
-            # ---- NEXT-PAGE BUTTON ----
-            next_btn = page.locator(f"xpath={next_btn_xpath}").first
-
-            # 1. scroll into view (makes hidden pagination visible)
-            try:
-                next_btn.scroll_into_view_if_needed(timeout=5_000)
-            except Exception as e:
-                print(f"[WARN] Scroll failed: {e}")
-
-            # 2. check visibility + enabled state
-            try:
-                visible = next_btn.is_visible()      # no timeout argument
-                enabled = not next_btn.is_disabled()  # no timeout argument
-            except Exception as e:
-                print(f"[WARN] Visibility check failed: {e}")
-                visible = enabled = False
-
-            if visible and enabled:
-                print("[ACTION] Clicking next page...")
-                next_btn.click()
-                page.wait_for_load_state("networkidle", timeout=15_000)
-                page_no += 1
-                continue          # go to next iteration
-            else:
-                print("[INFO] Next button missing or disabled → **LAST PAGE**")
-                break
-
-        # ------------------- BUILD DATAFRAME -------------------
-        if not all_data_rows:
-            print("[WARN] No rows collected.")
-            df = pd.DataFrame(columns=["OrganizationRowIndex"] + headers)
-        else:
-            df = pd.DataFrame(all_data_rows, columns=["OrganizationRowIndex"] + headers)
-            print(f"[SUCCESS] Total {len(df)} rows from {page_no} page(s)")
-
-        # ------------------- SAVE CSV -------------------
-        csv_path = f"row_{row_index}_float_data.csv"
-        df.to_csv(csv_path, index=False)
-        print(f"[SUCCESS] Saved {csv_path}")
-
-        return df, headers
-
-    except Exception as exc:
-        print(f"[FATAL] {exc}")
-        traceback.print_exc()
-        return None, None
 
 def save_table_to_dataframe_(page: Page, row_index: int) -> tuple:
     """Extract all rows from paginated table and save to CSV."""
@@ -411,18 +292,20 @@ def save_table_to_dataframe_(page: Page, row_index: int) -> tuple:
         page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
         page.wait_for_load_state("networkidle", timeout=10000)
         
-        dropdown = page.locator("//span[@class='el-pagination__sizes']//i[@class='el-select__caret']").first
+        pagination_dropdown = "//span[@class='el-pagination__sizes']//i[@class='el-icon el-select__caret el-select__icon']"
+        dropdown = page.locator(pagination_dropdown).first
         
         if dropdown.is_visible():
             dropdown.click()
-            time.sleep(1)
+            time.sleep(0.5)
             
             for _ in range(3):
                 page.keyboard.press("ArrowDown")
-                time.sleep(0.3)
+                # time.sleep(0.3)
             
             page.keyboard.press("Enter")
-            time.sleep(3)
+        else:
+            print("[WARN] Pagination size dropdown not visible")
 
         # Extract headers
         header_tbl = page.wait_for_selector(
@@ -434,10 +317,14 @@ def save_table_to_dataframe_(page: Page, row_index: int) -> tuple:
         tr = soup.find("thead").find("tr")
         headers = [th.get_text(strip=True) for th in tr.find_all("th")]
         print(f"[SUCCESS] Headers: {headers}")
-
+        
+        #
+        scroll_to_bottom(page)
+        
         # Paginate through all data
         page_no = 1
         while True:
+            time.sleep(1)  
             print(f"\n[INFO] Extracting page {page_no}...")
             
             page.wait_for_load_state("networkidle", timeout=10000)
@@ -463,9 +350,11 @@ def save_table_to_dataframe_(page: Page, row_index: int) -> tuple:
             
             try:
                 if next_btn.is_visible() and next_btn.is_enabled():
+                    close_irritative_dialog_box(page)
                     next_btn.click()
                     page.wait_for_load_state("networkidle", timeout=15000)
                     page_no += 1
+                    time.sleep(5)  # Small buffer
                 else:
                     break
             except:
@@ -537,7 +426,140 @@ def click_random_spot(page, padding: int = 50) -> None:
     # 4. Click it
     page.mouse.click(rand_x, rand_y)
     print(f"[Success] Clicked random spot at ({rand_x}, {rand_y})")
+
+def get_organizational_rows(page: Page, row_count: int, re_iterate: bool) -> int:
+    """
+    Extracts all organizational rows from the current page by selecting 'All' in dropdown 
+    and counting across pages if needed.
     
+    Returns:
+        int: Updated total row count
+    """
+    try:
+        elem = page.locator("(//i[@class='el-icon el-select__caret el-select__icon'])").first
+        if not elem.is_visible():
+            print("[ERROR] Dropdown icon not visible, cannot proceed.")
+            return row_count
+
+        print("[INFO] Clicking dropdown icon to expand options...")
+        elem.click()
+
+        # Select "All" option (assuming it's the 3rd or 4th ArrowDown + Enter works)
+        for _ in range(3):
+            page.keyboard.press("ArrowDown")
+        page.keyboard.press("Enter")
+
+        # Now count rows with optional pagination traversal
+        row_count, re_iterate = count_rows_organization(page, row_count, re_iterate)
+
+        if not re_iterate:
+            print(f"[INFO] No re-iteration needed, final row count: {row_count}")
+        
+        return row_count  # ← ALWAYS return the count
+
+    except Exception as e:
+        print(f"[ERROR] in get_organizational_rows: {e}")
+        return row_count  # ← Even on exception, return current count
+
+
+def count_rows_organization(page: Page, row_count: int, re_iterate: bool) -> tuple[int, bool]:
+    try:
+        total_items = get_total_from_pagination(page)
+        if total_items is not None:
+            print(f"Total = {total_items}")
+
+        print("Table HTML saved to table_debug.html")
+        current_page_rows = page.locator("//tbody//tr[@class='el-table__row childTableRow']").count()
+        row_count += current_page_rows
+        print(f"[INFO] Found {current_page_rows} organizational rows on this page. Total so far: {row_count}")
+
+        if re_iterate:
+            print("[INFO] Re-iterating to check for more pages...")
+            return go_forth_and_back(page, row_count, re_iterate)
+        else:
+            return row_count, False
+
+    except Exception as e:
+        print(f"[ERROR] Failed to count organizational rows: {e}")
+        return row_count, False
+
+def get_total_from_pagination(page) -> int | None:
+    locator = page.locator("//div[@id='pagination']/span[contains(text(), 'Total')]").first
+    
+    try:
+        if locator.count() == 0:
+            print("[WARN] Total span not found in pagination")
+            return None
+            
+        text = locator.inner_text().strip()          # e.g. "Total 103"
+        number = int(''.join(filter(str.isdigit, text)))
+        print(f"[INFO] Detected total records: {number}")
+        return number
+    except Exception as e:
+        print(f"[ERROR] Could not parse total: {e}")
+        return None
+
+def go_forth_and_back(page: Page, row_count: int, re_iterate: bool) -> tuple[int, bool]:
+    next_page_btn = page.locator("//button[@aria-label='Go to next page']").first
+    back_page_btn = page.locator("//button[@aria-label='Go to previous page']").first
+
+    try:
+        if re_iterate and next_page_btn.is_visible(timeout=5000) and next_page_btn.is_enabled(timeout=5000):
+            print("[INFO] Navigating to next page...")
+            next_page_btn.click()
+            page.wait_for_load_state("networkidle", timeout=15000)
+            time.sleep(2)  # Small buffer
+
+            # Recursively count on next page
+            new_count, should_continue = count_rows_organization(page, row_count, re_iterate=True)
+            return new_count, should_continue
+        else:
+            # No more pages forward → go back to original
+            while back_page_btn.is_visible(timeout=5000) and back_page_btn.is_enabled(timeout=5000):
+                print("[INFO] Navigating back to previous page...")
+                back_page_btn.click()
+                page.wait_for_load_state("networkidle", timeout=10000)
+                time.sleep(1)
+
+            print(f"[INFO] Finished scanning all pages. Final row count: {row_count}")
+            return row_count, False
+
+    except Exception as e:
+        print(f"[WARNING] Exception in pagination handling: {e}")
+        # Even if something fails, try to return to first page
+        try:
+            while back_page_btn.is_visible(timeout=5000) and back_page_btn.is_enabled(timeout=5000):
+                back_page_btn.click()
+                page.wait_for_load_state("networkidle", timeout=10000)
+        except:
+            pass
+        return row_count, False
+
+def go_forth_on_organization(page: Page, row_count: int):
+    next_page_btn = page.locator("//button[@aria-label='Go to next page']").first
+    back_page_btn = page.locator("//button[@aria-label='Go to previous page']").first
+
+    try:
+        if next_page_btn.is_visible() and next_page_btn.is_enabled():
+            print("[INFO] Navigating to next page...")
+            next_page_btn.click()
+            page.wait_for_load_state("networkidle", timeout=15000)
+            time.sleep(2)  # Small buffer
+            
+        else:
+            print(f"[INFO] No more pages forward. Final row count: {row_count}")
+           
+    except Exception as e:
+        print(f"[WARNING] Exception in pagination handling: {e}")
+        # Even if something fails, try to return to first page
+        try:
+            while back_page_btn.is_visible() and back_page_btn.is_enabled():
+                back_page_btn.click()
+                page.wait_for_load_state("networkidle", timeout=10000)
+        except:
+            pass
+        return row_count, False
+
 def process_float_account_details(page: Page,business_short_code: int):
     """
     Processes the float account details page:
@@ -594,9 +616,7 @@ def process_float_account_details(page: Page,business_short_code: int):
         
         # Step 3: Fill Start Time with first day of current month in dd/MM/yyyy format
         try:
-            #first_day = datetime.now().replace(day=1).strftime("%d/%m/%Y")
-            first_day_q = first_day_of_quarter()
-            
+            #first_day = datetime.now().replace(day=1).strftime("%d/%m/%Y")            
             # Click the Start Time input to focus
             start_time_input.click()
             
@@ -610,32 +630,11 @@ def process_float_account_details(page: Page,business_short_code: int):
                 previous_month_icon.click() 
             
             print("The previous button has been clicked thrice .......")
-            # first_day_button = page.wait_for_selector(
-            #     "//body[1]/div[2]/div[24]/div[1]/div[1]/div[1]/div[3]/table[1]/tbody[1]/tr[2]/td[4]", 
-            #     timeout=5000
-            # )
             
-            element = page.wait_for_selector(
-                "//div[@actualvisible='true']//table[@aria-label='Use the arrow keys and enter to select the day of the month']",
-                timeout=10000
-            )
-
-            if element:
-                outer_html = element.evaluate("element => element.outerHTML")
-                
-                # Save to file
-                filename = f"table_element_.html"
-                with open(filename, "w", encoding="utf-8") as f:
-                    f.write(outer_html)
-                
-                print(f"HTML saved to {filename}")
-                
-            else:
-                print("Element not found")
-            exit(0)
-            # click the first day button
-            first_day_button.click()
-            #press enter
+            for i in range(5):
+                page.keyboard.press("Tab")
+                print("Tab pressed")
+            
             page.keyboard.press("Enter")
             
         except Exception as e:
@@ -718,7 +717,7 @@ def solveCaptchaXai(image_path):
                 "content": [
                     {
                         "type": "text",
-                        "text": "Extract the exact digits from this CAPTCHA image. It's a 4-6 digit code with possible lines or distortions. Respond only with the number."
+                        "text": "Extract the exact digits from this CAPTCHA image. It's a 4 digit code with possible lines or distortions. Respond only with the number."
                     },
                     {
                         "type": "image_url",
@@ -793,13 +792,7 @@ def process_float_selection(page, business_short_code: int) -> bool:
                 time.sleep(0.3)
             
             page.keyboard.press("Enter")
-            time.sleep(3)
-        
-        # # Select float option
-        # if not select_first_float_option_by_index(page):
-        #     print("[WARN] No float option found in dropdown")
-        #     return False
-        
+
         # Process float account details
         if not process_float_account_details(page, business_short_code):
             print("[WARN] Failed to process float account details")
@@ -810,6 +803,18 @@ def process_float_selection(page, business_short_code: int) -> bool:
     except Exception as e:
         print(f"[ERROR] Float selection failed: {e}")
         return False
+    
+def close_irritative_dialog_box(page):
+    """Close any irritative dialog boxes that may block interactions."""
+    try:
+        dialog_box = page.locator("//button[@aria-label='Close this dialog']").first
+        if dialog_box.is_visible():
+            dialog_box.click()
+            page.wait_for_timeout(1000)
+            return True
+    except Exception as e:
+        print(f"[ERROR] Failed to close irritative dialog box: {e}")
+    return False
     
 def close_detail_panel(page):
     """Attempt to close any open detail panels and return to list."""
@@ -856,6 +861,8 @@ def process_organization_rows(page):
     - Uses index-based selection instead of storing element handles
     - Better error handling and state management
     """
+    
+    # adjust the page size
     while True:
         print("[INFO] Processing rows on current page...")
         
@@ -864,17 +871,32 @@ def process_organization_rows(page):
         time.sleep(1)
         
         # Count total rows (don't store handles)
-        row_count = page.locator("//tbody//tr[@class='el-table__row childTableRow']").count()
-        
+        # row_count = page.locator("//tbody//tr[@class='el-table__row childTableRow']").count()
+        row_count = 0
+        re_iterate = True
+
+        row_count = get_total_from_pagination(page)
+
         if row_count == 0:
-            print("[INFO] No rows found on this page. Exiting.")
-            break
+            print("[INFO] No rows found across pages.")
+        else:
+            print(f"[SUCCESS] Total organizational rows: {row_count}")
             
         print(f"[INFO] Found {row_count} rows to process.")
 
         # Process each row by index (re-query each time)
         for index in range(row_count):
             try:
+                if(index > 1):
+                    print(f"[INFO] Refreshing page to avoid stale element references...")
+                    page.keyboard.press("Control+R")    
+                
+                if index % 10 == 1 and index > 1:
+                    go_forth_on_organization(page, row_count)
+                
+                print(f"[INFO] Preparing to process row {index + 1}...")
+                time.sleep(1)
+                    
                 # Re-query rows to get fresh element handles
                 page.wait_for_load_state("networkidle", timeout=10000)
                 rows = page.locator("//tbody//tr[@class='el-table__row childTableRow']")

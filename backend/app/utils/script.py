@@ -1,8 +1,8 @@
 from playwright.sync_api import sync_playwright
 from PIL import Image
-from app import db
-from app.model.document import Document
-from app.model.useragent import UserAgent
+# from app import db
+# from app.model.document import Document
+# from app.model.useragent import UserAgent
 import pytesseract
 from openai import OpenAI
 import re

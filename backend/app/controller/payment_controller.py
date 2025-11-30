@@ -33,11 +33,6 @@ def get_all_payments():
         if current_user.role == 'admin':
             pass  # Admin sees all
         elif current_user.role == 'agent':
-            # For Payment model
-            # agent_user_ids = db.session.query(Company.user_id).filter(
-            #     Company.agent_user_id == current_user_id,
-            #     Company.user_id.isnot(None)
-            # ).distinct()
             
             companies_tied_to_agent = Company.query.filter_by(agent_user_id=current_user_id).all()
             company_user_ids = [company.user_id for company in companies_tied_to_agent if company.user_id is not None]
