@@ -44,133 +44,49 @@ def login_to_mpesa():
         captcha_solution = capture_and_solve_captcha(page)
         print(f"[DEBUG] Initial captcha solution: {captcha_solution}")
         while(len(captcha_solution) > 4):
-            svg_element = page.query_selector("//div[@class='img-part']//*[name()='svg']")
-            if svg_element:
-                svg_element.click()
-                print("[INFO] Clicked SVG element to refresh captcha")
-                captcha_solution = capture_and_solve_captcha(page)
-            else:
-                print("[ERROR] SVG element not found")
-                last_error = "SVG element not found"
-                raise Exception("Failed to locate SVG element for captcha refresh")
+            captcha_solution = retry_captcha_login(page)
+            
+        if(has_verification_error_regex(page)):
+            captcha_solution = retry_captcha_login(page)
 
         # Fill verification code input and submit
         page.fill("//input[@id='verifyCode']", captcha_solution)
         page.click("//button[@id='loginBtn']")
         print("[INFO] Login button clicked; waiting for response...")
-
-        error_text = "the Verification Code is incorrect or has expired."
-        error_text_ = "Must be not greater than 4 characters."
-        last_error = None
-
-        try:
-            # Wait for either success or error
-            start = time.time()
-            timeout_seconds = 10
-            found_success = False
-            found_error = False
-            error_message = None
-
-            while time.time() - start < timeout_seconds:
-                locator = page.locator(".hlds-error-tip-content")
-                error_element = page.query_selector("//div[@class='el-form-item__error']")
-                if page.query_selector(f"text={error_text}") or page.query_selector(f"text={error_text_}"):
-                    found_error = True
-                    error_message = error_text if page.query_selector(f"text={error_text}") else error_text_
-                    print(f"[DEBUG] Detected error message: '{error_message}'")
-                elif error_element and error_element.is_visible():
-                    found_error = True
-                    error_message = error_element.inner_text().strip()
-                    print(f"[DEBUG] Detected el-form-item__error message: '{error_message}'")
-                elif locator.is_visible():
-                    found_error = True
-                    error_message = locator.inner_text().strip()
-                    print(f"[DEBUG] Detected hlds-error-tip-content message: '{error_message}'")
-                else:
-                    found_success = True
-                time.sleep(0.5)
-
-                if found_error or found_success:
-                    break
-
-            if found_success:
-                print("[INFO] Login appears successful (no error detected).")
-            elif found_error:
-                print(f"[WARN] Detected error: '{error_message}' — retrying captcha.")
-                # Click the SVG element to refresh captcha
-                svg_element = page.query_selector("//div[@class='img-part']//*[name()='svg']")
-                if svg_element:
-                    svg_element.click()
-                    print("[INFO] Clicked SVG element to refresh captcha")
-                else:
-                    print("[ERROR] SVG element not found")
-                    last_error = "SVG element not found"
-                    raise Exception("Failed to locate SVG element for captcha refresh")
-
-                # Re-solve captcha
-                captcha_solution = capture_and_solve_captcha(page)
-                print(f"[DEBUG] New captcha solution: {captcha_solution}")
-
-                # Refill captcha input
-                page.fill("//input[@id='verifyCode']", captcha_solution)
-                page.click("//button[@id='loginBtn']")
-                print("[INFO] Login button clicked again after captcha refresh")
-
-                # Check for errors again
-                start = time.time()
-                found_success = False
-                found_error = False
-                while time.time() - start < timeout_seconds:
-                    locator = page.locator(".hlds-error-tip-content")
-                    error_element = page.query_selector("//div[@class='el-form-item__error']")
-                    if page.query_selector(f"text={error_text}") or page.query_selector(f"text={error_text_}"):
-                        found_error = True
-                        error_message = error_text if page.query_selector(f"text={error_text}") else error_text_
-                        print(f"[DEBUG] Detected error message after retry: '{error_message}'")
-                    elif error_element and error_element.is_visible():
-                        found_error = True
-                        error_message = error_element.inner_text().strip()
-                        print(f"[DEBUG] Detected el-form-item__error message after retry: '{error_message}'")
-                    elif locator.is_visible():
-                        found_error = True
-                        error_message = locator.inner_text().strip()
-                        print(f"[DEBUG] Detected hlds-error-tip-content message after retry: '{error_message}'")
-                    else:
-                        found_success = True
-                    time.sleep(0.5)
-
-                if found_success:
-                    print("[INFO] Login successful after captcha retry")
-                else:
-                    last_error = error_message
-                    print(f"[ERROR] Login failed after retry: '{error_message}'")
-
-            # Wait for navigation or further page load
-            try:
-                page.wait_for_timeout(wait_after_click * 1000)
-            except PlaywrightTimeoutError:
-                pass
-
-        except Exception as exc:
-            last_error = str(exc)
-            print(f"[ERROR] Exception during login process: {exc}")
-
-        # Save page content
-        html_content = page.content()
-        soup = BeautifulSoup(html_content, "html.parser")
-        with open("login.html", "w", encoding="utf-8") as f:
-            f.write(soup.prettify())
-
-        if last_error:
-            print(f"[RESULT] Login process completed. Last error: {last_error}")
-        else:
-            print("[RESULT] Login likely successful and HTML saved to login.html")
-
+        
         print("[INFO] Navigating to child organization page...")
         navigate_to_child_organization(page)
 
         print("[INFO] Browser will remain open for inspection. Press ENTER to close.")
         # input()
+
+def has_verification_error_regex(page) -> bool:
+    """Checks if the page contains a verification code error using regex."""
+    # with open("debug_page.html", "w", encoding="utf-8") as f:
+    #     f.write(page.content())
+    body_text = page.locator("body").inner_text()
+    pattern = re.compile(r"verification\s+code\s+is\s+incorrect\s+or\s+has\s+expired", re.IGNORECASE)
+    return bool(pattern.search(body_text))
+
+def retry_captcha_login(page:Page) -> str:
+    """
+    Retries the captcha login process until successful or max attempts reached.
+    
+    Args:
+        page: Playwright Page object
+    """
+    captcha_solution = ""
+    svg_element = page.query_selector("//div[@class='img-part']//*[name()='svg']")
+    if svg_element:
+        svg_element.click()
+        print("[INFO] Clicked SVG element to refresh captcha")
+        captcha_solution = capture_and_solve_captcha(page)
+    else:
+        print("[ERROR] SVG element not found")
+        raise Exception("Failed to locate SVG element for captcha refresh")
+    
+    return captcha_solution
+    
 
 def maximize_page(page: Page) -> None:
     """
@@ -265,6 +181,20 @@ def select_first_float_option_by_index(page) -> bool:
         print(f"[ERROR] Float option selection failed: {exc}")
         return False
 
+def scroll_to_top(page: Page) -> None:
+    """
+    Scrolls to the top of the page.
+    
+    Args:
+        page: Playwright Page object
+    """
+    try:
+        page.evaluate("window.scrollTo(0, 0);")
+        print("[SUCCESS] Scrolled to top of page")
+        time.sleep(0.5)  
+    except Exception as e:
+        print(f"[ERROR] Failed to scroll to top: {e}")
+
 def scroll_to_bottom(page: Page) -> None:
     """
     Scrolls to the bottom of the page.
@@ -272,14 +202,14 @@ def scroll_to_bottom(page: Page) -> None:
     Args:
         page: Playwright Page object
     """
-    time.sleep(1.5)  # Wait for page to settle before scrolling
     try:
         page.evaluate("window.scrollTo(0, document.body.scrollHeight);")
         print("[SUCCESS] Scrolled to bottom of page")
+        time.sleep(1.5)  
     except Exception as e:
         print(f"[ERROR] Failed to scroll to bottom: {e}")
 
-def save_table_to_dataframe_(page: Page, row_index: int) -> tuple:
+def save_table_to_dataframe_(page: Page, row_index: int,category:str) -> tuple:
     """Extract all rows from paginated table and save to CSV."""
     try:
         print("[INFO] Starting table extraction...")
@@ -297,11 +227,11 @@ def save_table_to_dataframe_(page: Page, row_index: int) -> tuple:
         
         if dropdown.is_visible():
             dropdown.click()
-            time.sleep(0.5)
             
             for _ in range(3):
                 page.keyboard.press("ArrowDown")
                 # time.sleep(0.3)
+                time.sleep(0.5)                
             
             page.keyboard.press("Enter")
         else:
@@ -327,18 +257,26 @@ def save_table_to_dataframe_(page: Page, row_index: int) -> tuple:
             time.sleep(1)  
             print(f"\n[INFO] Extracting page {page_no}...")
             
-            page.wait_for_load_state("networkidle", timeout=10000)
-            body_tbl = page.wait_for_selector(
-                "//table[@class='el-table__body']",
-                timeout=10000
-            )
+            try:                
+                page.wait_for_load_state("networkidle", timeout=10000)
+                body_tbl = page.wait_for_selector(
+                    "//table[@class='el-table__body']",
+                    timeout=10000
+                )
             
-            if not body_tbl.is_visible():
+                if not body_tbl.is_visible():
+                    return None, None
+            except Exception as e:
+                print("[WARN] Table body not visible, ending extraction.")
                 break
             
             soup = BeautifulSoup(body_tbl.inner_html(), "html.parser")
             tbody = soup.find("tbody")
             
+            # with open(f"page_{page_no}_content.html", "w", encoding="utf-8") as f:
+            #     f.write(tbody.prettify())
+            
+            # exit(0)
             if tbody:
                 for tr in tbody.find_all("tr"):
                     cells = [td.get_text(strip=True) for td in tr.find_all("td")]
@@ -346,11 +284,12 @@ def save_table_to_dataframe_(page: Page, row_index: int) -> tuple:
                         all_data_rows.append([row_index] + cells)
             
             # Check for next page
+            time.sleep(1)
             next_btn = page.locator("//button[@aria-label='Go to next page']//i[@class='el-icon']").first
             
             try:
                 if next_btn.is_visible() and next_btn.is_enabled():
-                    close_irritative_dialog_box(page)
+                    # close_irritative_dialog_box(page)
                     next_btn.click()
                     page.wait_for_load_state("networkidle", timeout=15000)
                     page_no += 1
@@ -369,7 +308,7 @@ def save_table_to_dataframe_(page: Page, row_index: int) -> tuple:
             print(f"[SUCCESS] Extracted {len(df)} total rows")
 
         # Save to CSV
-        csv_path = f"row_{row_index}_float_data.csv"
+        csv_path = f"row_{row_index}_{category}_data.csv"
         df.to_csv(csv_path, index=False)
         print(f"[SUCCESS] Saved to {csv_path}")
 
@@ -427,62 +366,6 @@ def click_random_spot(page, padding: int = 50) -> None:
     page.mouse.click(rand_x, rand_y)
     print(f"[Success] Clicked random spot at ({rand_x}, {rand_y})")
 
-def get_organizational_rows(page: Page, row_count: int, re_iterate: bool) -> int:
-    """
-    Extracts all organizational rows from the current page by selecting 'All' in dropdown 
-    and counting across pages if needed.
-    
-    Returns:
-        int: Updated total row count
-    """
-    try:
-        elem = page.locator("(//i[@class='el-icon el-select__caret el-select__icon'])").first
-        if not elem.is_visible():
-            print("[ERROR] Dropdown icon not visible, cannot proceed.")
-            return row_count
-
-        print("[INFO] Clicking dropdown icon to expand options...")
-        elem.click()
-
-        # Select "All" option (assuming it's the 3rd or 4th ArrowDown + Enter works)
-        for _ in range(3):
-            page.keyboard.press("ArrowDown")
-        page.keyboard.press("Enter")
-
-        # Now count rows with optional pagination traversal
-        row_count, re_iterate = count_rows_organization(page, row_count, re_iterate)
-
-        if not re_iterate:
-            print(f"[INFO] No re-iteration needed, final row count: {row_count}")
-        
-        return row_count  # ← ALWAYS return the count
-
-    except Exception as e:
-        print(f"[ERROR] in get_organizational_rows: {e}")
-        return row_count  # ← Even on exception, return current count
-
-
-def count_rows_organization(page: Page, row_count: int, re_iterate: bool) -> tuple[int, bool]:
-    try:
-        total_items = get_total_from_pagination(page)
-        if total_items is not None:
-            print(f"Total = {total_items}")
-
-        print("Table HTML saved to table_debug.html")
-        current_page_rows = page.locator("//tbody//tr[@class='el-table__row childTableRow']").count()
-        row_count += current_page_rows
-        print(f"[INFO] Found {current_page_rows} organizational rows on this page. Total so far: {row_count}")
-
-        if re_iterate:
-            print("[INFO] Re-iterating to check for more pages...")
-            return go_forth_and_back(page, row_count, re_iterate)
-        else:
-            return row_count, False
-
-    except Exception as e:
-        print(f"[ERROR] Failed to count organizational rows: {e}")
-        return row_count, False
-
 def get_total_from_pagination(page) -> int | None:
     locator = page.locator("//div[@id='pagination']/span[contains(text(), 'Total')]").first
     
@@ -499,42 +382,6 @@ def get_total_from_pagination(page) -> int | None:
         print(f"[ERROR] Could not parse total: {e}")
         return None
 
-def go_forth_and_back(page: Page, row_count: int, re_iterate: bool) -> tuple[int, bool]:
-    next_page_btn = page.locator("//button[@aria-label='Go to next page']").first
-    back_page_btn = page.locator("//button[@aria-label='Go to previous page']").first
-
-    try:
-        if re_iterate and next_page_btn.is_visible(timeout=5000) and next_page_btn.is_enabled(timeout=5000):
-            print("[INFO] Navigating to next page...")
-            next_page_btn.click()
-            page.wait_for_load_state("networkidle", timeout=15000)
-            time.sleep(2)  # Small buffer
-
-            # Recursively count on next page
-            new_count, should_continue = count_rows_organization(page, row_count, re_iterate=True)
-            return new_count, should_continue
-        else:
-            # No more pages forward → go back to original
-            while back_page_btn.is_visible(timeout=5000) and back_page_btn.is_enabled(timeout=5000):
-                print("[INFO] Navigating back to previous page...")
-                back_page_btn.click()
-                page.wait_for_load_state("networkidle", timeout=10000)
-                time.sleep(1)
-
-            print(f"[INFO] Finished scanning all pages. Final row count: {row_count}")
-            return row_count, False
-
-    except Exception as e:
-        print(f"[WARNING] Exception in pagination handling: {e}")
-        # Even if something fails, try to return to first page
-        try:
-            while back_page_btn.is_visible(timeout=5000) and back_page_btn.is_enabled(timeout=5000):
-                back_page_btn.click()
-                page.wait_for_load_state("networkidle", timeout=10000)
-        except:
-            pass
-        return row_count, False
-
 def go_forth_on_organization(page: Page, row_count: int):
     next_page_btn = page.locator("//button[@aria-label='Go to next page']").first
     back_page_btn = page.locator("//button[@aria-label='Go to previous page']").first
@@ -544,7 +391,7 @@ def go_forth_on_organization(page: Page, row_count: int):
             print("[INFO] Navigating to next page...")
             next_page_btn.click()
             page.wait_for_load_state("networkidle", timeout=15000)
-            time.sleep(2)  # Small buffer
+            time.sleep(1)  # Small buffer
             
         else:
             print(f"[INFO] No more pages forward. Final row count: {row_count}")
@@ -577,6 +424,25 @@ def process_float_account_details(page: Page,business_short_code: int):
     """
     try:
         print("[INFO] Processing float account details...")
+        
+        # Click dropdown
+        dropdown_icon = page.locator(
+            "//div[@class='el-form-item is-required asterisk-left el-form-item--label-top none-margin-bottom']//div[@class='el-select__selection']"
+        ).first
+        # dropdown_icon.click()
+        
+        if dropdown_icon.is_visible():
+            dropdown_icon.click()
+            print("[INFO] Dropdown clicked, waiting for options...")
+        
+            # time.sleep(1)
+            
+            for _ in range(2):
+                page.keyboard.press("ArrowDown")
+                time.sleep(0.3)
+            
+            page.keyboard.press("Enter")
+
         
         # Step 1 & 2: Find date picker inputs using more stable selectors
         try:
@@ -668,9 +534,10 @@ def process_float_account_details(page: Page,business_short_code: int):
             # Press Enter to submit
             page.keyboard.press("Enter")
             print("[✓] Pressed Enter to submit form")
-            page.wait_for_timeout(3000)  # Wait for page to load results
+            # page.wait_for_timeout(3000)  # Wait for page to load results
+            time.sleep(2)  # Wait for page to load results
             
-            df,headers = save_table_to_dataframe_(page, row_index=business_short_code)
+            df,headers = save_table_to_dataframe_(page, row_index=business_short_code,category="float")
             
             if df is not None:
                 print("[INFO] Table extracted after submission.")
@@ -690,6 +557,38 @@ def process_float_account_details(page: Page,business_short_code: int):
         import traceback
         traceback.print_exc()
         return False
+
+def process_commission_account_details(page: Page, business_short_code: int) -> bool:
+    print("[INFO] Processing commission account details...")
+    scroll_to_top(page)
+    time.sleep(2)
+    # Click dropdown
+    dropdown_icon = page.locator(
+        "//div[@class='el-form-item is-required asterisk-left el-form-item--label-top none-margin-bottom']//div[@class='el-select__selection']"
+    ).first
+    # dropdown_icon.click()
+    
+    if dropdown_icon.is_visible():
+        dropdown_icon.click()
+        print("[INFO] Dropdown clicked, waiting for options...")
+    
+        # time.sleep(1)
+        
+        for _ in range(5):
+            page.keyboard.press("ArrowDown")
+            time.sleep(0.3)
+        
+        page.keyboard.press("Enter")
+    else:
+        print("[WARN] Dropdown icon not visible for commission account")
+        
+    page.locator("//div[@class='section-content']//button[1]").first.click()
+    
+    df,headers = save_table_to_dataframe_(page, row_index=business_short_code, category="commission")
+    if df is None:
+        print("[ERROR] Commission table extraction failed.")
+        return False
+    return True
 
 def solveCaptchaXai(image_path):
     # Initialize client with your xAI key
@@ -769,33 +668,16 @@ def navigate_to_review_transaction(page) -> bool:
         print(f"[ERROR] Navigation failed: {e}")
         return False
 
-def process_float_selection(page, business_short_code: int) -> bool:
+def process_float_commission(page, business_short_code: int) -> bool:
     """Handle float account selection and data extraction."""
     try:
-        # Click dropdown
-        # //div[@class='el-form-item is-required asterisk-left el-form-item--label-top none-margin-bottom']//i[@class='el-icon el-select__caret el-select__icon']
-        # //div[@class='el-form-item is-required asterisk-left el-form-item--label-top none-margin-bottom']//div[@class='el-select__selection']
-        # //div[@class='el-form-item is-required asterisk-left el-form-item--label-top none-margin-bottom']//div[@class='el-select__selection']
-        dropdown_icon = page.locator(
-            "//div[@class='el-form-item is-required asterisk-left el-form-item--label-top none-margin-bottom']//div[@class='el-select__selection']"
-        ).first
-        # dropdown_icon.click()
         
-        if dropdown_icon.is_visible():
-            dropdown_icon.click()
-            print("[INFO] Dropdown clicked, waiting for options...")
-        
-            time.sleep(1)
-            
-            for _ in range(2):
-                page.keyboard.press("ArrowDown")
-                time.sleep(0.3)
-            
-            page.keyboard.press("Enter")
-
         # Process float account details
         if not process_float_account_details(page, business_short_code):
             print("[WARN] Failed to process float account details")
+            # return False
+        if not process_commission_account_details(page, business_short_code):
+            print("[WARN] Failed to process commission account details")
             return False
             
         return True
@@ -818,14 +700,17 @@ def close_irritative_dialog_box(page):
     
 def close_detail_panel(page):
     """Attempt to close any open detail panels and return to list."""
+    print("[INFO] Attempting to close detail panel...")
     try:
         # Try clicking "Organization Detail" tab to go back
-        org_detail = page.locator("//div[@title='Organization Detail']").first
-        if org_detail.is_visible(timeout=2000):
+        # org_detail = page.locator("//div[@title='Organization Detail']").first
+        org_detail = page.locator("(//i[@class='el-icon'])[3]")
+        if org_detail.is_visible():
             org_detail.click()
             page.wait_for_timeout(1000)
             return True
     except:
+        print("[WARN] 'Organization Detail' tab not found.")
         pass
     
     # Try ESC key
@@ -839,6 +724,8 @@ def close_detail_panel(page):
     return False
 def return_to_organization_list(page) -> bool:
     """Return to organization list view."""
+    print("[INFO] Returning to organization list...")
+    close_detail_panel(page)
     try:
         org_detail = page.wait_for_selector(
             "//div[@title='Organization Detail']",
@@ -867,8 +754,8 @@ def process_organization_rows(page):
         print("[INFO] Processing rows on current page...")
         
         # Wait for page to stabilize
-        page.wait_for_load_state("networkidle", timeout=10000)
-        time.sleep(1)
+        # page.wait_for_load_state("networkidle", timeout=10000)
+        # time.sleep(1)
         
         # Count total rows (don't store handles)
         # row_count = page.locator("//tbody//tr[@class='el-table__row childTableRow']").count()
@@ -895,7 +782,7 @@ def process_organization_rows(page):
                     go_forth_on_organization(page, row_count)
                 
                 print(f"[INFO] Preparing to process row {index + 1}...")
-                time.sleep(1)
+                time.sleep(2)
                     
                 # Re-query rows to get fresh element handles
                 page.wait_for_load_state("networkidle", timeout=10000)
@@ -932,13 +819,13 @@ def process_organization_rows(page):
                 # Navigate through the detail page
                 if not navigate_to_review_transaction(page):
                     print(f"[ERROR] Failed to navigate to review transaction for row {index + 1}")
-                    close_detail_panel(page)
+                    return_to_organization_list(page)
                     continue
 
                 # Process float account
-                if not process_float_selection(page, business_short_code):
+                if not process_float_commission(page, business_short_code):
                     print(f"[ERROR] Failed to process float account for row {index + 1}")
-                    close_detail_panel(page)
+                    return_to_organization_list(page)
                     continue
 
                 # Return to organization list
@@ -958,22 +845,6 @@ def process_organization_rows(page):
                 # Try to recover and continue
                 close_detail_panel(page)
                 continue
-
-        # Check for next page
-        next_page_btn = page.locator("//button[@aria-label='Go to next page']").first
-        
-        try:
-            if next_page_btn.is_visible() and next_page_btn.is_enabled():
-                print("[INFO] Navigating to next page...")
-                next_page_btn.click()
-                page.wait_for_load_state("networkidle", timeout=10000)
-                time.sleep(2)
-            else:
-                print("[INFO] No more pages to process. Exiting.")
-                break
-        except Exception as e:
-            print(f"[INFO] No next page available: {e}")
-            break
 
     print("[INFO] Finished processing all rows and pages.")
        
