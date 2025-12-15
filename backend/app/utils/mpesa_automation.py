@@ -1,4 +1,4 @@
-from playwright.sync_api import sync_playwright,Page, TimeoutError as PlaywrightTimeoutError
+from playwright.sync_api import sync_playwright,Page,Locator,Download, TimeoutError as PlaywrightTimeoutError
 # from app.utils.script import fill_login_form, capture_and_solve_captcha
 from script import fill_login_form, capture_and_solve_captcha
 from PIL import Image, ImageFilter, ImageOps
@@ -39,7 +39,7 @@ def login_to_mpesa():
         # Fill login fields once
         fill_login_form(page, short_code, username, password)
         print("[INFO] Login form filled")
-
+        
         # Solve captcha initially
         captcha_solution = capture_and_solve_captcha(page)
         print(f"[DEBUG] Initial captcha solution: {captcha_solution}")
@@ -53,6 +53,12 @@ def login_to_mpesa():
         page.fill("//input[@id='verifyCode']", captcha_solution)
         page.click("//button[@id='loginBtn']")
         print("[INFO] Login button clicked; waiting for response...")
+        
+        # Wait for navigation or error indication
+        search = page.wait_for_selector("(//i[@class='el-icon el-sub-menu__icon-arrow'])[1]", timeout=60000)
+        search.click()
+        print("[SUCCESS] Logged in successfully!")
+        
         
         print("[INFO] Navigating to child organization page...")
         navigate_to_child_organization(page)
@@ -138,7 +144,6 @@ def navigate_to_child_organization(page):
     print("[INFO] 'Child Organization' clicked. Waiting for page to load...")
 
     # Wait for page load
-    page.wait_for_timeout(1500)
 
 
     print("[INFO] Browser will remain open for inspection. Press ENTER to continue.")
@@ -220,18 +225,18 @@ def save_table_to_dataframe_(page: Page, row_index: int,category:str) -> tuple:
         # Set pagination to maximum
         print("[INFO] Setting pagination size...")
         page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
-        page.wait_for_load_state("networkidle", timeout=10000)
+        # page.wait_for_load_state("networkidle", timeout=10000)
         
         pagination_dropdown = "//span[@class='el-pagination__sizes']//i[@class='el-icon el-select__caret el-select__icon']"
         dropdown = page.locator(pagination_dropdown).first
+        time.sleep(2)
         
         if dropdown.is_visible():
             dropdown.click()
             
             for _ in range(3):
                 page.keyboard.press("ArrowDown")
-                # time.sleep(0.3)
-                time.sleep(0.5)                
+                time.sleep(0.2)
             
             page.keyboard.press("Enter")
         else:
@@ -318,7 +323,200 @@ def save_table_to_dataframe_(page: Page, row_index: int,category:str) -> tuple:
         print(f"[ERROR] Table extraction failed: {exc}")
         traceback.print_exc()
         return None, None
-       
+
+# def save_table_to_dataframe_download(page: Page, max_wait: int = 30_000):
+#     print("[EXPORT] Starting Excel export...")
+
+#     # 1. Find the export button (more resilient selector)
+#     export_trigger = page.locator("div.el-dropdown.padding-export >> span").first
+#     export_trigger.wait_for(state="visible", timeout=max_wait)
+#     export_trigger.scroll_into_view_if_needed()
+
+#     # 2. Force hover + small delay to let Vue react
+#     export_trigger.hover(force=True, timeout=10_000)
+#     print("[EXPORT] Hovered successfully")
+
+#     # THIS IS THE KEY FIX:
+#     # Instead of waiting for the <ul> to be "visible", wait for it to have a client rectangle (i.e. positioned)
+#     # page.wait_for_function("() => !!document.querySelector('ul.el-dropdown-menu[style*=\"display: block\"]') || !!document.querySelector('ul.el-dropdown-menu[x-placement]')", timeout=10000)
+
+#     print("[EXPORT] Dropdown menu is actually open and positioned")
+#     time.sleep(5)
+
+#     # 3. Now safely find the 3rd Excel item
+#     excel_items = page.get_by_role("menuitem", name="Excel", exact=True)
+#     excel_count = excel_items.count()
+#     print(f"[EXPORT] Found {excel_count} Excel options")
+    
+#     if(int(excel_count)>0):
+#         try:
+#             excel_items[-1].click()
+#         except Exception as e:
+#             print(f"We hit a snag {str(e)}")
+#             exit(0)
+
+#     if excel_count < 3:
+#         # Fallback: list all menu items with text
+#         items = page.locator("ul.el-dropdown-menu >> li.el-dropdown-menu__item").all()
+#         excel_items = [item for item in items if item.inner_text().strip() == "Excel"]
+#         if len(excel_items) < 3:
+#             raise Exception(f"Only found {len(excel_items)} Excel items, expected at least 3")
+
+#     target_excel = excel_items.nth(2) if excel_count >= 3 else excel_items[2]
+#     target_excel.scroll_into_view_if_needed()
+
+#     # 4. Click with expect_download
+#     with page.expect_download(timeout=60_000) as download_info:
+#         # Try normal click first
+#         try:
+#             target_excel.click(timeout=15_000)
+#         except:
+#             # Final fallback: click via JavaScript (bypasses visibility checks)
+#             print("[EXPORT] Using JS click as last resort...")
+#             target_excel.evaluate("node => node.click()")
+
+#     download = download_info.value
+#     filename = f"float_export_{int(time.time())}.xlsx"
+#     download_path = f"./downloads/{filename}"
+#     download.save_as(download_path)
+#     print(f"[SUCCESS] Excel saved: {download_path}")
+
+#     df = pd.read_excel(download_path)
+#     return df, df.columns
+
+def save_table_to_dataframe_download(page: Page,business_shortcode:int,additional_category:str="") -> tuple:
+    print("[EXPORT] Starting Excel export...")
+
+    export_trigger = page.locator("div.el-dropdown.padding-export >> span").first
+    export_trigger.wait_for(state="visible", timeout=30000)
+    export_trigger.scroll_into_view_if_needed()
+
+    export_trigger.hover(force=True, timeout=10_000)
+    print("[EXPORT] Hovered successfully")
+
+    # 2. Wait for ANY dropdown menu to actually appear in the viewport (not just DOM)
+    page.wait_for_function(
+        """() => {
+            const menus = document.querySelectorAll('ul.el-dropdown-menu');
+            for (const menu of menus) {
+                const rect = menu.getBoundingClientRect();
+                if (rect.width > 0 && rect.height > 0 && rect.top >= 0) {
+                    return true;
+                }
+            }
+            return false;
+        }""",
+        timeout=20_000
+    )
+    print("[EXPORT] Export dropdown menu is visually open")
+
+    # 3. Get ALL menu items from ALL dropdown menus
+    all_items = page.locator("ul.el-dropdown-menu li.el-dropdown-menu__item")
+
+    # Find all items that contain "Excel" (case-sensitive match as in your UI)
+    excel_items = all_items.filter(has_text="Excel")
+
+    excel_count = excel_items.count()
+    print(f"[EXPORT] Found {excel_count} visible 'Excel' options across all dropdowns")
+
+    if excel_count < 3:
+        raise Exception(f"Expected at least 3 Excel export options, found only {excel_count}")
+
+    # THE WINNER: The 3rd Excel = index 2 → this is the "Excel (All Data)" option
+    target_excel = excel_items.nth(2)
+
+    print(f"[EXPORT] Targeting the 3rd 'Excel' option (index 2 in filtered list)")
+
+    # 4. Click + download
+    with page.expect_download(timeout=60_000) as download_info:
+        # First try normal click
+        try:
+            target_excel.click(force=True, timeout=15_000)
+            print("[EXPORT] Clicked 'Excel' (All Data) successfully")
+        except Exception as e:
+            print("[EXPORT] Normal click failed, falling back to JS click...")
+            target_excel.evaluate("el => el.click()")
+
+    download: Download = download_info.value
+
+    # THIS IS THE MAGIC: Read bytes directly into pandas
+    print(f"[EXPORT] Reading {download.suggested_filename} directly into pandas...")
+    temp_path = download.path()  # Playwright saves it temporarily
+    df = pd.read_excel(temp_path,skiprows=6)
+    # df= df.iloc[6:]
+    # df = df.reset_index(drop=True)
+    print(df.tail())
+    
+    df.to_excel(f"{business_shortcode}_{additional_category}.xlsx")
+
+    print(f"[SUCCESS] Loaded DataFrame in-memory: {df.shape[0]} rows × {df.shape[1]} columns")
+    print(f"   Columns: {list(df.columns)}")
+    # exit(0)
+
+    return df, df.columns
+
+def is_till_frozen(page:Page)-> bool:
+    
+    try:
+        div_frozen = page.wait_for_selector("//div[normalize-space()='Frozen']",timeout=1000)
+        return div_frozen.is_visible()
+    except Exception as e:
+        print(f"The till is not frozen {str(e)}")
+        return False
+        
+        
+    
+    
+def save_table_to_dataframe_download_debug(page: Page, max_wait: int = 30_000):
+    print("[EXPORT] Starting Excel export...")
+
+    export_trigger = page.locator("div.el-dropdown.padding-export >> span").first
+    export_trigger.wait_for(state="visible", timeout=max_wait)
+    export_trigger.scroll_into_view_if_needed()
+
+    export_trigger.hover(force=True, timeout=10_000)
+    print("[EXPORT] Hovered successfully")
+
+    # Give Vue time to open the dropdown
+    time.sleep(2)  # or use wait_for_function as before
+
+    print("\n" + "="*60)
+    print("DROPDOWN MENU DEBUG INFO")
+    print("="*60)
+
+    # Method 1: Try get_by_role (what you were using)
+    excel_by_role = page.get_by_role("menuitem", name="Excel", exact=True)
+    print(f"get_by_role('menuitem', name='Excel') → Found: {excel_by_role.count()} items")
+
+    # Method 2: Raw locator for all menu items
+    all_menu_items = page.locator("ul.el-dropdown-menu >> li.el-dropdown-menu__item")
+    count = all_menu_items.count()
+    print(f"Total <li class='el-dropdown-menu__item'> found: {count}")
+
+    # Print EVERY item with index + text + visibility
+    for i in range(count):
+        item = all_menu_items.nth(i)
+        text = item.inner_text(timeout=5000).strip()
+        is_visible = item.is_visible()
+        is_enabled = item.is_enabled()
+        
+        print(f"  [{i:2d}] '{text}' → visible={is_visible}, enabled={is_enabled}")
+
+        # Highlight Excel ones
+        if "excel" in text.lower():
+            print(f"     →→→ THIS IS AN EXCEL OPTION (index {i})")
+
+    # Bonus: Show which one has the actual download behavior (usually the 3rd)
+    excel_candidates = [i for i in range(count) if "excel" in all_menu_items.nth(i).inner_text().lower()]
+    print(f"\nExcel option indices: {excel_candidates}")
+    print(f"Recommended to click index: {excel_candidates[2] if len(excel_candidates) > 2 else 'Not enough!'}")
+
+    print("="*60 + "\n")
+
+    # Stop here for debugging
+    print("Stopping for inspection. Comment out exit() when ready.")
+    # exit(0) 
+    
 def first_day_of_quarter() -> str:
     """
     Returns the first calendar day of the current fiscal quarter
@@ -381,70 +579,188 @@ def get_total_from_pagination(page) -> int | None:
     except Exception as e:
         print(f"[ERROR] Could not parse total: {e}")
         return None
-
+    
 def go_forth_on_organization(page: Page, row_count: int):
+    """
+    Clicks 'Next Page' if available. Returns True/False indicating if more pages exist.
+    """
     next_page_btn = page.locator("//button[@aria-label='Go to next page']").first
-    back_page_btn = page.locator("//button[@aria-label='Go to previous page']").first
 
     try:
-        if next_page_btn.is_visible() and next_page_btn.is_enabled():
-            print("[INFO] Navigating to next page...")
+        if next_page_btn.is_enabled():
+            print("[INFO] Clicking 'Next Page' button...")
             next_page_btn.click()
-            page.wait_for_load_state("networkidle", timeout=15000)
-            time.sleep(1)  # Small buffer
-            
+            page.wait_for_load_state("networkidle", timeout=20000)
+            time.sleep(2)
+            return None  # Continue processing
         else:
-            print(f"[INFO] No more pages forward. Final row count: {row_count}")
-           
-    except Exception as e:
-        print(f"[WARNING] Exception in pagination handling: {e}")
-        # Even if something fails, try to return to first page
-        try:
-            while back_page_btn.is_visible() and back_page_btn.is_enabled():
-                back_page_btn.click()
-                page.wait_for_load_state("networkidle", timeout=10000)
-        except:
-            pass
-        return row_count, False
+            print(f"[INFO] Next page disabled. Finished all {row_count} rows on last page.")
+            return row_count, False
 
-def process_float_account_details(page: Page,business_short_code: int):
+    except Exception as e:
+        print(f"[WARNING] Error clicking next page: {e}")
+        page.screenshot(path="pagination_error.png")
+        return row_count, False
+    
+def select_account_dropdown(page: Page, account_name: str, arrow_down_count: int) -> bool:
     """
-    Processes the float account details page:
-    1. Finds the Start Time date picker input (first date picker)
-    2. Finds the End Time date picker input (second date picker)
-    3. Fills Start Time with first day of current month
-    4. Presses Tab three times and Enter to submit
-    5. Saves page content to output/float_details.html
-    
-    Args:
-        page: Playwright page object
-    
-    Returns:
-        bool: True if successful, False otherwise
+    Generic function to select any account dropdown (Float or Commission)
     """
     try:
-        print("[INFO] Processing float account details...")
-        
-        # Click dropdown
-        dropdown_icon = page.locator(
-            "//div[@class='el-form-item is-required asterisk-left el-form-item--label-top none-margin-bottom']//div[@class='el-select__selection']"
-        ).first
-        # dropdown_icon.click()
-        
-        if dropdown_icon.is_visible():
-            dropdown_icon.click()
-            print("[INFO] Dropdown clicked, waiting for options...")
-        
-            # time.sleep(1)
-            
-            for _ in range(2):
-                page.keyboard.press("ArrowDown")
-                time.sleep(0.3)
-            
-            page.keyboard.press("Enter")
+        print(f"[INFO] Selecting account: {account_name}")
 
+        # Best possible locator chain for Element UI dropdowns
+        dropdown: Locator = (
+            page.get_by_role("combobox")                           # All <input> that act as combobox
+                # .nth(0 if "Float" in account_name else 1)          # 0 = Float, 1 = Commission
+                .nth(2 )          # 0 = Float, 1 = Commission
+                .locator("..")                                      # Go up to the .el-select container
+                .locator(".el-select__caret")                       # The little arrow icon
+        )
+
+        # Alternative rock-solid fallback if above fails
+        if dropdown.count() == 0:
+            print("[INFO] Falling back to CSS-based dropdown locator...")
+            dropdown = page.locator(".el-select").nth(0) \
+                           .locator("i.el-select__caret")
+
+        # Wait for it to be visible and clickable
+        dropdown.wait_for(state="visible", timeout=15000)
+        dropdown.click(force=True)  # force=True helps with overlay issues
+        print(f"[INFO] {account_name} dropdown opened")
+
+        # Navigate with ArrowDown + Enter
+        for _ in range(arrow_down_count):
+            page.keyboard.press("ArrowDown")
+            time.sleep(0.2)
+        page.keyboard.press("Enter")
+        print(f"[INFO] Selected option #{arrow_down_count + 1} in {account_name}")
+        time.sleep(1)  # Let selection settle
+
+        return True
+
+    except Exception as e:
+        print(f"[ERROR] Failed to select {account_name} dropdown: {e}")
+        page.screenshot(path=f"dropdown_error_{account_name.lower()}.png")
+        return False
+
+
+def process_float_account_details(page: Page, business_short_code: int) -> tuple:
+    # try:
+        print("[INFO] Processing Float Account Details")
+
+        # Step 1: Select Float Account (usually 2nd or 3rd option)
+        if not select_account_dropdown(page, "Float Account", arrow_down_count=2):
+            return "dropdown",False
         
-        # Step 1 & 2: Find date picker inputs using more stable selectors
+        print("We are checking whether a till is frozen or not")        
+        if is_till_frozen(page):
+            return "frozen",False
+
+        print(f"This is the date and time selection")
+        # Step 2: Set Start Time = 1st day of current month
+        select_dates_and_submit_(page)
+
+        time.sleep(4)  # Wait for table to load
+
+        print("We are trying to save to the dataframe")
+        # df, headers = save_table_to_dataframe_download(page, row_index=business_short_code, category="float")
+        df, headers = save_table_to_dataframe_download(page,business_shortcode=business_short_code,additional_category="float")
+        if df is not None:
+            print("[SUCCESS] Float table extracted")
+            return "dataframe",True
+        else:
+            print("[ERROR] Failed to extract float table")
+            return "dataframe",False
+
+    # except Exception as e:
+    #     print(f"[ERROR] process_float_account_details failed: {e}")
+    #     page.screenshot(path="float_error.png")
+    #     return False
+
+
+def process_commission_account_details(page: Page, business_short_code: int) -> bool:
+    try:
+        print("[INFO] Processing Commission Account Details")
+        scroll_to_top(page)
+        time.sleep(1)
+
+        # Step 1: Select Commission Account (usually 5th+ option)
+        if not select_account_dropdown(page, "Commission Account", arrow_down_count=3):
+            return False
+
+        # Step 2: Click the Query/Search button
+        query_button = page.locator("//div[@class='section-content']//button").first
+        query_button.wait_for(state="visible", timeout=10000)
+        query_button.click(force=True)
+        print("[INFO] Query button clicked")
+
+        time.sleep(4)
+
+        # df, headers = save_table_to_dataframe_download(page, row_index=business_short_code, category="commission")
+        df, headers = save_table_to_dataframe_download(page,business_shortcode=business_short_code,additional_category="commission")
+        if df is not None:
+            print("[SUCCESS] Commission table extracted")
+            return True
+        else:
+            print("[ERROR] Failed to extract commission table")
+            return False
+
+    except Exception as e:
+        print(f"[ERROR] process_commission_account_details failed: {e}")
+        page.screenshot(path="commission_error.png")
+        return False
+
+
+def process_float_commission(page: Page, business_short_code: int) -> bool:
+    """Main function – processes both float and commission sequentially"""
+    
+    trials = 3
+    
+    proc_type, success = process_float_account_details(page, business_short_code)
+    print(f"[DEBUG] Float Account processing result: {proc_type}, success: {success}")
+    if not success and proc_type != "frozen":
+        close_irritative_dialog_box(page)
+        print(f"[ERROR] Failed at Float Account step {business_short_code} - Retrying...")
+        while trials > 0:
+            trials -= 1
+            print(f"[INFO] Retrying Float Account step {business_short_code} ({3 - trials} attempts left)...")
+            proc_type_inner, success_inner = process_float_account_details(page, business_short_code)
+            if success_inner:
+                print("[SUCCESS] Float Account step completed")
+                break
+            time.sleep(2)  # Wait before retrying
+        else:
+            print("[ERROR] All retries failed for Float Account step")
+            return False
+        return False
+    elif not success and proc_type == "frozen":
+        print(f"[INFO] Till is frozen for business {business_short_code}, skipping further processing.")
+        return False
+        
+
+    # Small pause to let page stabilize
+    time.sleep(2)
+
+    if not process_commission_account_details(page, business_short_code):
+        print(f"[ERROR] Failed at Commission Account step {business_short_code} - Retrying...")
+        close_irritative_dialog_box(page)
+        while trials > 0:
+            trials -= 1
+            print(f"[INFO] Retrying Commission Account step {business_short_code} ({3 - trials} attempts left)...")
+            if process_commission_account_details(page, business_short_code):
+                print("[SUCCESS] Commission Account step completed")
+                break
+            time.sleep(2)  # Wait before retrying
+        else:
+            print("[ERROR] All retries failed for Commission Account step") 
+            
+        return False
+
+    print(f"[SUCCESS] Completed processing business {business_short_code}")
+    return True
+
+def select_dates_and_submit_(page: Page) -> bool:
         try:
             # Find the Start Time input (first date picker with placeholder "Start Time")
             start_time_input = page.wait_for_selector(
@@ -536,59 +852,161 @@ def process_float_account_details(page: Page,business_short_code: int):
             print("[✓] Pressed Enter to submit form")
             # page.wait_for_timeout(3000)  # Wait for page to load results
             time.sleep(2)  # Wait for page to load results
-            
-            df,headers = save_table_to_dataframe_(page, row_index=business_short_code,category="float")
-            
-            if df is not None:
-                print("[INFO] Table extracted after submission.")
-                return True
-            else:
-                print("[ERROR] Table extraction failed after submission.")
-                return False
-            
         except Exception as e:
             print(f"[ERROR] Could not complete Tab/Enter submission: {e}")
-            import traceback
             traceback.print_exc()
             return False
-        
-    except Exception as exc:
-        print(f"[ERROR] process_float_account_details failed: {exc}")
-        import traceback
-        traceback.print_exc()
-        return False
 
-def process_commission_account_details(page: Page, business_short_code: int) -> bool:
-    print("[INFO] Processing commission account details...")
-    scroll_to_top(page)
-    time.sleep(2)
-    # Click dropdown
-    dropdown_icon = page.locator(
-        "//div[@class='el-form-item is-required asterisk-left el-form-item--label-top none-margin-bottom']//div[@class='el-select__selection']"
-    ).first
-    # dropdown_icon.click()
+# def process_float_account_details(page: Page,business_short_code: int):
+#     """
+#     Processes the float account details page:
+#     1. Finds the Start Time date picker input (first date picker)
+#     2. Finds the End Time date picker input (second date picker)
+#     3. Fills Start Time with first day of current month
+#     4. Presses Tab three times and Enter to submit
+#     5. Saves page content to output/float_details.html
     
-    if dropdown_icon.is_visible():
-        dropdown_icon.click()
-        print("[INFO] Dropdown clicked, waiting for options...")
+#     Args:
+#         page: Playwright page object
     
-        # time.sleep(1)
+#     Returns:
+#         bool: True if successful, False otherwise
+#     """
+#     try:
+#         print("[INFO] Processing float account details...")
         
-        for _ in range(5):
-            page.keyboard.press("ArrowDown")
-            time.sleep(0.3)
+#         # Click dropdown
+#         dropdown_icon = page.locator(
+#             "//div[@class='el-form-item is-required asterisk-left el-form-item--label-top none-margin-bottom']//div[@class='el-select__selection']"
+#         ).first
+#         # dropdown_icon.click()
         
-        page.keyboard.press("Enter")
-    else:
-        print("[WARN] Dropdown icon not visible for commission account")
+#         if dropdown_icon.is_visible():
+#             dropdown_icon.click()
+#             print("[INFO] Dropdown clicked, waiting for options...")
         
-    page.locator("//div[@class='section-content']//button[1]").first.click()
-    
-    df,headers = save_table_to_dataframe_(page, row_index=business_short_code, category="commission")
-    if df is None:
-        print("[ERROR] Commission table extraction failed.")
-        return False
-    return True
+#             # time.sleep(1)
+            
+#             for _ in range(2):
+#                 page.keyboard.press("ArrowDown")
+#                 time.sleep(0.3)
+            
+#             page.keyboard.press("Enter")
+
+        
+#         # Step 1 & 2: Find date picker inputs using more stable selectors
+#         try:
+#             # Find the Start Time input (first date picker with placeholder "Start Time")
+#             start_time_input = page.wait_for_selector(
+#                 "//input[@placeholder='Start Time']", 
+#                 timeout=10000
+#             )
+#             print("[✓] Found Start Time date picker input")
+            
+#             # Find the End Time input (first date picker with placeholder "End Time")
+#             end_time_input = page.wait_for_selector(
+#                 "//input[@placeholder='End Time']", 
+#                 timeout=10000
+#             )
+#             print("[✓] Found End Time date picker input")
+            
+#         except Exception as e:
+#             print(f"[ERROR] Could not find date picker inputs: {e}")
+            
+#             # Fallback: Try finding by class and position
+#             try:
+#                 print("[INFO] Trying fallback selector for date pickers...")
+#                 date_inputs = page.query_selector_all(
+#                     "//div[@class='el-date-editor']//input[@class='el-input__inner']"
+#                 )
+#                 if len(date_inputs) >= 2:
+#                     start_time_input = date_inputs[0]
+#                     end_time_input = date_inputs[1]
+#                     print(f"[✓] Found {len(date_inputs)} date picker inputs using fallback")
+#                 else:
+#                     print(f"[ERROR] Expected at least 2 date inputs, found {len(date_inputs)}")
+#                     return False
+#             except Exception as fallback_error:
+#                 print(f"[ERROR] Fallback selector also failed: {fallback_error}")
+#                 return False
+        
+#         # Step 3: Fill Start Time with first day of current month in dd/MM/yyyy format
+#         try:
+#             #first_day = datetime.now().replace(day=1).strftime("%d/%m/%Y")            
+#             # Click the Start Time input to focus
+#             start_time_input.click()
+            
+#             print(f"We have just clicked the start time")
+#             previous_month_icon = page.wait_for_selector(
+#                 "//div[@actualvisible='true']//button[@aria-label='Previous Month']", 
+#                 timeout=5000
+#             )
+            
+#             for i in range(3):
+#                 previous_month_icon.click() 
+            
+#             print("The previous button has been clicked thrice .......")
+            
+#             for i in range(5):
+#                 page.keyboard.press("Tab")
+#                 print("Tab pressed")
+            
+#             page.keyboard.press("Enter")
+            
+#         except Exception as e:
+#             print(f"[ERROR] Could not fill Start Time input: {e}")
+#             return False
+        
+#         # Step 4: Press Tab three times and Enter to submit
+#         try:
+#             print("[INFO] Pressing Tab three times and Enter to submit...")
+            
+#             # Ensure Start Time input has focus
+#             start_time_input.focus()
+#             page.wait_for_timeout(500)
+            
+#             # Debug: Check current focused element
+#             focused_element = page.evaluate_handle("() => document.activeElement")
+#             focused_tag = page.evaluate("(elem) => elem.tagName", focused_element)
+#             focused_id = page.evaluate("(elem) => elem.id || elem.placeholder || 'no-id'", focused_element)
+#             print(f"[DEBUG] Current focused element: {focused_tag} (ID/Placeholder: {focused_id})")
+            
+#             # Press Tab three times
+#             for i in range(4):
+#                 page.keyboard.press("Tab")
+#                 page.wait_for_timeout(500)
+#                 # Debug: Check focused element after each Tab
+#                 focused_element = page.evaluate_handle("() => document.activeElement")
+#                 focused_tag = page.evaluate("(elem) => elem.tagName", focused_element)
+#                 focused_id = page.evaluate("(elem) => elem.id || elem.placeholder || 'no-id'", focused_element)
+#                 print(f"[DEBUG] After Tab {i+1}, focused element: {focused_tag} (ID/Placeholder: {focused_id})")
+            
+#             # Press Enter to submit
+#             page.keyboard.press("Enter")
+#             print("[✓] Pressed Enter to submit form")
+#             # page.wait_for_timeout(3000)  # Wait for page to load results
+#             time.sleep(2)  # Wait for page to load results
+            
+#             df,headers = save_table_to_dataframe_download(page,business_short_code)
+            
+#             if df is not None:
+#                 print("[INFO] Table extracted after submission.")
+#                 return True
+#             else:
+#                 print("[ERROR] Table extraction failed after submission.")
+#                 return False
+            
+#         except Exception as e:
+#             print(f"[ERROR] Could not complete Tab/Enter submission: {e}")
+#             import traceback
+#             traceback.print_exc()
+#             return False
+        
+#     except Exception as exc:
+#         print(f"[ERROR] process_float_account_details failed: {exc}")
+#         import traceback
+#         traceback.print_exc()
+#         return False
 
 def solveCaptchaXai(image_path):
     # Initialize client with your xAI key
@@ -668,23 +1086,6 @@ def navigate_to_review_transaction(page) -> bool:
         print(f"[ERROR] Navigation failed: {e}")
         return False
 
-def process_float_commission(page, business_short_code: int) -> bool:
-    """Handle float account selection and data extraction."""
-    try:
-        
-        # Process float account details
-        if not process_float_account_details(page, business_short_code):
-            print("[WARN] Failed to process float account details")
-            # return False
-        if not process_commission_account_details(page, business_short_code):
-            print("[WARN] Failed to process commission account details")
-            return False
-            
-        return True
-        
-    except Exception as e:
-        print(f"[ERROR] Float selection failed: {e}")
-        return False
     
 def close_irritative_dialog_box(page):
     """Close any irritative dialog boxes that may block interactions."""
@@ -737,117 +1138,131 @@ def return_to_organization_list(page) -> bool:
     except Exception as e:
         print(f"[ERROR] Failed to return to organization list: {e}")
         return False
-    
-def process_organization_rows(page):
+
+def process_organization_rows(page: Page):
     """
-    Processes each row in the organization table, performing actions for 'float' and 'commission' options,
-    and navigates to the next page until no more pages are available.
-    
-    Key improvements:
-    - Re-queries rows on each iteration to avoid stale element references
-    - Uses index-based selection instead of storing element handles
-    - Better error handling and state management
+    Robustly processes all organization rows across pagination + virtual scroll.
+    Uses visible-only row processing + proper pagination via your go_forth function.
     """
-    
-    # adjust the page size
+    total_processed = 0
+
     while True:
-        print("[INFO] Processing rows on current page...")
+        print("\n[INFO] Starting new pagination page...")
+
+        # Wait for table to fully load
+        page.wait_for_load_state("networkidle", timeout=10000)
+        time.sleep(2)  # Allow any lazy loading to complete
+
+        # Get total rows from your existing function
+        total_in_list = get_total_from_pagination(page)
+        if total_in_list == 0:
+            print("[INFO] No organizations found.")
+            break
+
+        print(f"[INFO] This page shows {total_in_list} organizations")
+
+        processed_on_this_page = 0
         
-        # Wait for page to stabilize
-        # page.wait_for_load_state("networkidle", timeout=10000)
-        # time.sleep(1)
-        
-        # Count total rows (don't store handles)
-        # row_count = page.locator("//tbody//tr[@class='el-table__row childTableRow']").count()
-        row_count = 0
-        re_iterate = True
+        """ in the event that we have to rerun some organizations
+         this will be used to store the business short codes that need to be rerun
+         this is useful in case of errors or if we need to reprocess some rows
+         or if we need to reprocess some rows
+        """
+        to_be_rerun= []
+        if(total_processed >= total_in_list):
+            print("[INFO] All organizations processed.")
+            break
 
-        row_count = get_total_from_pagination(page)
-
-        if row_count == 0:
-            print("[INFO] No rows found across pages.")
-        else:
-            print(f"[SUCCESS] Total organizational rows: {row_count}")
-            
-        print(f"[INFO] Found {row_count} rows to process.")
-
-        # Process each row by index (re-query each time)
-        for index in range(row_count):
+        # Process only visible rows on current screen
+        if processed_on_this_page < total_in_list and total_processed < total_in_list:
+            if(total_processed !=0 and total_processed %10 ==0):
+                go_forth_on_organization(page, total_in_list)
+                processed_on_this_page = 0
             try:
-                if(index > 1):
-                    print(f"[INFO] Refreshing page to avoid stale element references...")
-                    page.keyboard.press("Control+R")    
-                
-                if index % 10 == 1 and index > 1:
-                    go_forth_on_organization(page, row_count)
-                
-                print(f"[INFO] Preparing to process row {index + 1}...")
-                time.sleep(2)
-                    
-                # Re-query rows to get fresh element handles
-                page.wait_for_load_state("networkidle", timeout=10000)
+                # Re-query visible rows only
                 rows = page.locator("//tbody//tr[@class='el-table__row childTableRow']")
-                
-                # Verify row still exists at this index
-                if index >= rows.count():
-                    print(f"[WARN] Row {index + 1} no longer exists, skipping...")
-                    continue
-                
-                row = rows.nth(index)
-                
-                # Extract row text and business code
-                row_text = row.text_content()
-                print(f"\n[INFO] === Processing Row {index + 1}/{row_count} ===")
-                print(f"[INFO] Row text: {row_text}")
+                visible_rows = [rows.nth(i) for i in range(rows.count()) 
+                              if rows.nth(i).is_visible()]
 
-                # Extract the first number (business short code)
-                first_number = row_text.split()[0] if row_text else None
-                match = re.match(r'^(\d+)', first_number) if first_number else None
-                
-                if not match:
-                    print(f"[WARN] Could not extract business code from row {index + 1}, skipping...")
-                    continue
-                    
-                business_short_code = int(match.group(1))
-                print(f"[INFO] Business Code: {business_short_code}")
-                
-                # Click the row (use force=True to handle potential overlay issues)
-                print(f"[INFO] Clicking row {index + 1}...")
-                row.click(timeout=5000)
-                page.wait_for_timeout(500)
-
-                # Navigate through the detail page
-                if not navigate_to_review_transaction(page):
-                    print(f"[ERROR] Failed to navigate to review transaction for row {index + 1}")
-                    return_to_organization_list(page)
+                if not visible_rows:
+                    print("[INFO] No visible rows — scrolling down...")
+                    page.mouse.wheel(0, 1000)
+                    time.sleep(2)
                     continue
 
-                # Process float account
-                if not process_float_commission(page, business_short_code):
-                    print(f"[ERROR] Failed to process float account for row {index + 1}")
-                    return_to_organization_list(page)
-                    continue
+                print(f"[INFO] Found {len(visible_rows)} visible rows to process")
 
-                # Return to organization list
-                if not return_to_organization_list(page):
-                    print(f"[WARN] Failed to return to organization list, attempting recovery...")
-                    # Try to recover by refreshing
-                    page.reload()
-                    page.wait_for_load_state("networkidle", timeout=10000)
-                    break  # Exit inner loop to re-query rows
-                
-                print(f"[SUCCESS] Completed processing row {index + 1}")
-                time.sleep(1)  # Brief pause between rows
+                for row in visible_rows:
+                    if processed_on_this_page >= total_in_list:
+                        break
 
-            except Exception as exc:
-                print(f"[ERROR] Failed to process row {index + 1}: {exc}")
-                traceback.print_exc()
-                # Try to recover and continue
-                close_detail_panel(page)
-                continue
+                    try:
+                        # Ensure row is fully in view (critical for el-table fixed headers)
+                        row.scroll_into_view_if_needed(timeout=10000)
+                        page.wait_for_timeout(800)
 
-    print("[INFO] Finished processing all rows and pages.")
-       
+                        # Extract business short code
+                        row_text = row.text_content(timeout=5000) or ""
+                        match = re.search(r'^(\d+)', row_text.strip())
+                        if not match:
+                            print(f"[WARN] Could not extract business code, skipping row")
+                            processed_on_this_page += 1
+                            continue
+
+                        business_short_code = int(match.group(1))
+                        total_processed += 1
+                        processed_on_this_page += 1
+
+                        print(f"\n[SUCCESS] Processing Row {total_processed} | "
+                              f"Business Code: {business_short_code}")
+
+                        # Click the row
+                        row.click(timeout=15000)
+                        page.wait_for_timeout(1000)
+
+                        if not navigate_to_review_transaction(page):
+                            print("[ERROR] Failed to navigate to review transaction")
+                            return_to_organization_list(page)
+                            continue
+
+                        if not process_float_commission(page, business_short_code):
+                            print("[ERROR] Failed to process float/commission")
+                            return_to_organization_list(page)
+                            continue
+
+                        if not return_to_organization_list(page):
+                            print("[WARN] Failed to return — reloading page")
+                            page.reload()
+                            page.wait_for_load_state("networkidle")
+                            break  # Restart this page
+
+                        print(f"[SUCCESS] Completed row {total_processed}")
+                        time.sleep(1)
+
+                    except Exception as e:
+                        print(f"[ERROR] Exception in row loop: {e}")
+                        traceback.print_exc()
+                        close_irritative_dialog_box(page)
+                        page.screenshot(path=f"error_row_{total_processed}.png")
+                        close_detail_panel(page)
+                        processed_on_this_page += 1
+                        continue
+
+                # After processing all visible rows → scroll to load more
+                page.mouse.wheel(0, 1200)
+                time.sleep(2)
+
+            except Exception as e:
+                print(f"[ERROR] Error in visible row loop: {e}")
+                time.sleep(2)
+        else:
+            print("[INFO] All visible rows processed on this page.")
+
+        # === ALL ROWS ON THIS PAGE DONE → GO TO NEXT PAGE ===
+        print(f"[INFO] Finished {processed_on_this_page} rows on this page. Moving to next...")
+
+    print(f"\n[SUCCESS] ALL DONE! Processed {total_processed} organizations successfully!")
+    
 if __name__ == "__main__":
     # solveCaptchaXai()
     login_to_mpesa()

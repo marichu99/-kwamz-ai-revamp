@@ -23,3 +23,4 @@ openai
 bs4
 pandas
 google-cloud-storage
+xlrd
