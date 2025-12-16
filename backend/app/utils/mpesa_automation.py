@@ -6,6 +6,7 @@ from dotenv import load_dotenv
 from openai import OpenAI
 from bs4 import BeautifulSoup
 from datetime import datetime
+from typing import List, Dict, Any, Optional, Tuple
 import pandas as pd
 import re
 import base64
@@ -214,7 +215,7 @@ def scroll_to_bottom(page: Page) -> None:
     except Exception as e:
         print(f"[ERROR] Failed to scroll to bottom: {e}")
 
-def save_table_to_dataframe_(page: Page, row_index: int,category:str) -> tuple:
+def save_table_to_dataframe_(page: Page, business_shortcode: int,category:str) -> tuple:
     """Extract all rows from paginated table and save to CSV."""
     try:
         print("[INFO] Starting table extraction...")
@@ -278,10 +279,10 @@ def save_table_to_dataframe_(page: Page, row_index: int,category:str) -> tuple:
             soup = BeautifulSoup(body_tbl.inner_html(), "html.parser")
             tbody = soup.find("tbody")
             
-            # with open(f"page_{page_no}_content.html", "w", encoding="utf-8") as f:
-            #     f.write(tbody.prettify())
+            with open(f"page_{page_no}_content.html", "w", encoding="utf-8") as f:
+                f.write(tbody.prettify())
             
-            # exit(0)
+            exit(0)
             if tbody:
                 for tr in tbody.find_all("tr"):
                     cells = [td.get_text(strip=True) for td in tr.find_all("td")]
@@ -313,7 +314,7 @@ def save_table_to_dataframe_(page: Page, row_index: int,category:str) -> tuple:
             print(f"[SUCCESS] Extracted {len(df)} total rows")
 
         # Save to CSV
-        csv_path = f"row_{row_index}_{category}_data.csv"
+        csv_path = f"row_{business_shortcode}_{category}_data.csv"
         df.to_csv(csv_path, index=False)
         print(f"[SUCCESS] Saved to {csv_path}")
 
@@ -393,6 +394,7 @@ def save_table_to_dataframe_download(page: Page,business_shortcode:int,additiona
 
     export_trigger.hover(force=True, timeout=10_000)
     print("[EXPORT] Hovered successfully")
+    time.sleep(2)  
 
     # 2. Wait for ANY dropdown menu to actually appear in the viewport (not just DOM)
     page.wait_for_function(
@@ -443,8 +445,6 @@ def save_table_to_dataframe_download(page: Page,business_shortcode:int,additiona
     print(f"[EXPORT] Reading {download.suggested_filename} directly into pandas...")
     temp_path = download.path()  # Playwright saves it temporarily
     df = pd.read_excel(temp_path,skiprows=6)
-    # df= df.iloc[6:]
-    # df = df.reset_index(drop=True)
     print(df.tail())
     
     df.to_excel(f"{business_shortcode}_{additional_category}.xlsx")
@@ -464,8 +464,50 @@ def is_till_frozen(page:Page)-> bool:
         print(f"The till is not frozen {str(e)}")
         return False
         
+def scrape_till_details(page:Page, business_short_code:int)  -> None:
+    try:
+        css_selector = ".portal-collapse .portal-collapse-content"
+
+        page.wait_for_selector(css_selector, state="attached")
+
+        # First one
+        inner_html = page.eval_on_selector(
+            css_selector,
+            "el => el.innerHTML"
+        )
         
+        print(f"[DEBUG] Inner HTML of portal-collapse-content:\n{extract_till_info(inner_html)}\n")
+    except Exception as e:
+        print(f"Could not get inner HTML {str(e)}")
+
+def extract_till_info(inner_html: str) -> dict:
+    """
+    Extracts till/organization information from the inner HTML of the portal-collapse-content div.
+    Returns a dictionary with label → value pairs.
+    """
+    soup = BeautifulSoup(inner_html, "html.parser")
     
+    till_info = {}
+    
+    # Each piece of information is in a .list-item
+    for item in soup.find_all("div", class_="list-item"):
+        # Label is in .content-item-label
+        label_div = item.find("div", class_="content-item-label")
+        if not label_div:
+            continue
+        label = label_div.get_text(strip=True)
+        
+        # Value is in .list-item__content-text inside .content-item
+        value_div = item.find("div", class_="list-item__content-text")
+        value = value_div.get_text(strip=True) if value_div else ""
+        
+        # Handle the "-" case as None or empty string if preferred
+        if value == "-":
+            value = None
+            
+        till_info[label] = value
+    
+    return till_info
     
 def save_table_to_dataframe_download_debug(page: Page, max_wait: int = 30_000):
     print("[EXPORT] Starting Excel export...")
@@ -601,7 +643,122 @@ def go_forth_on_organization(page: Page, row_count: int):
         print(f"[WARNING] Error clicking next page: {e}")
         page.screenshot(path="pagination_error.png")
         return row_count, False
+        
+def go_previous_on_organisation(page: Page, row_count: int):
+    """
+    Clicks 'Next Page' if available. Returns True/False indicating if more pages exist.
+    """
+    prev_page_btn = page.locator("//button[@aria-label='Go to previous page']").first
+
+    try:
+        if prev_page_btn.is_enabled():
+            print("[INFO] Clicking 'Previous Page' button...")
+            prev_page_btn.click()
+            page.wait_for_load_state("networkidle", timeout=20000)
+            time.sleep(2)
+            return None  # Continue processing
+        else:
+            print(f"[INFO] Previous page disabled. Finished all {row_count} rows on last page.")
+            return row_count, False
+
+    except Exception as e:
+        print(f"[WARNING] Error clicking previous page: {e}")
+        page.screenshot(path="pagination_error.png")
+        return row_count, False
     
+def rerun_failed_codes(page: Page, failed_codes: List[int], max_retries: int = 2) -> bool:
+    """
+    Reprocess only the business_short_codes that previously failed.
+    Navigates through all pages if needed to find and click the row.
+    """
+    from collections import defaultdict
+    retry_count = defaultdict(int)  # Track retries per code
+    original_failed = failed_codes.copy()
+
+    for business_short_code in original_failed:
+        retry_count[business_short_code] = 0
+
+    remaining = original_failed.copy()
+
+    while remaining and max(retry_count.values()) < max_retries:
+        print(f"\n[RETRY] Retry attempt #{max(retry_count.values()) + 1} for {len(remaining)} items...")
+
+        # Restart from first page for each retry pass
+        go_previous_on_organisation(page)
+
+        current_page = 1
+        total_in_list = get_total_from_pagination(page)
+
+        while True:
+            wait_for_table_load(page)
+            time.sleep(1)
+
+            # Look for any remaining failed code on this page
+            found_any = False
+            rows_locator = page.locator("//tbody//tr[@class='el-table__row childTableRow']")
+
+            for i in range(rows_locator.count()):
+                row = rows_locator.nth(i)
+                if not row.is_visible(timeout=2000):
+                    continue
+
+                try:
+                    row_text = row.text_content(timeout=3000) or ""
+                    match = re.search(r'^(\d+)', row_text.strip())
+                    if not match:
+                        continue
+                    code = int(match.group(1))
+
+                    if code in remaining:
+                        print(f"[RETRY] Found failed row: {code} — reprocessing...")
+                        found_any = True
+                        
+                        row.click(timeout=15000)
+                        page.wait_for_timeout(1000)
+
+                        success = process_single_row(page, code, row_number=f"RETRY-{code}")
+
+                        if success:
+                            remaining.remove(code)
+                            print(f"[SUCCESS] Retry succeeded for {code}")
+                        else:
+                            retry_count[code] += 1
+                            if retry_count[code] >= max_retries:
+                                print(f"[FAILED] Max retries reached for {code}")
+                                remaining.remove(code)
+                            else:
+                                print(f"[RETRY] Will retry {code} later (attempt {retry_count[code] + 1})")
+
+                        time.sleep(1.5)
+
+                except Exception as e:
+                    print(f"[ERROR] Error during retry scan of row: {e}")
+                    continue
+
+            if not remaining:
+                print("[SUCCESS] All failed items successfully retried!")
+                break
+
+            # Go to next page if we didn't find everything
+            if go_forth_on_organization(page, total_in_list):
+                current_page += 1
+                print(f"[INFO] Moving to page {current_page} for retry...")
+                time.sleep(2)
+            else:
+                print("[INFO] Reached last page during retry pass.")
+                break
+
+        if not remaining:
+            break
+
+    # Final summary
+    if remaining:
+        print(f"[WARNING] These codes failed even after {max_retries} retries: {remaining}")
+    else:
+        print("[SUCCESS] All previously failed organizations were successfully recovered!")
+        failed_codes.clear()
+        return True
+        
 def select_account_dropdown(page: Page, account_name: str, arrow_down_count: int) -> bool:
     """
     Generic function to select any account dropdown (Float or Commission)
@@ -645,7 +802,7 @@ def select_account_dropdown(page: Page, account_name: str, arrow_down_count: int
         return False
 
 
-def process_float_account_details(page: Page, business_short_code: int) -> tuple:
+def process_float_account_details(page: Page, business_short_code: int, pass_value: str) -> tuple:
     # try:
         print("[INFO] Processing Float Account Details")
 
@@ -665,7 +822,10 @@ def process_float_account_details(page: Page, business_short_code: int) -> tuple
 
         print("We are trying to save to the dataframe")
         # df, headers = save_table_to_dataframe_download(page, row_index=business_short_code, category="float")
-        df, headers = save_table_to_dataframe_download(page,business_shortcode=business_short_code,additional_category="float")
+        if(pass_value=="first"):
+            df, headers = save_table_to_dataframe_download(page,business_shortcode=business_short_code,additional_category="float")
+        else:
+            df, headers = save_table_to_dataframe_(page,business_shortcode=business_short_code,category=pass_value)
         if df is not None:
             print("[SUCCESS] Float table extracted")
             return "dataframe",True
@@ -679,7 +839,7 @@ def process_float_account_details(page: Page, business_short_code: int) -> tuple
     #     return False
 
 
-def process_commission_account_details(page: Page, business_short_code: int) -> bool:
+def process_commission_account_details(page: Page, business_short_code: int, pass_value: str) -> bool:
     try:
         print("[INFO] Processing Commission Account Details")
         scroll_to_top(page)
@@ -698,7 +858,10 @@ def process_commission_account_details(page: Page, business_short_code: int) -> 
         time.sleep(4)
 
         # df, headers = save_table_to_dataframe_download(page, row_index=business_short_code, category="commission")
-        df, headers = save_table_to_dataframe_download(page,business_shortcode=business_short_code,additional_category="commission")
+        if(pass_value=="first"):
+            df, headers = save_table_to_dataframe_download(page,business_shortcode=business_short_code,additional_category="commission")
+        else:
+            df, headers = save_table_to_dataframe_(page,business_shortcode=business_short_code,additional_category=pass_value)
         if df is not None:
             print("[SUCCESS] Commission table extracted")
             return True
@@ -712,12 +875,12 @@ def process_commission_account_details(page: Page, business_short_code: int) -> 
         return False
 
 
-def process_float_commission(page: Page, business_short_code: int) -> bool:
+def process_float_commission(page: Page, business_short_code: int, pass_value: str) -> bool:
     """Main function – processes both float and commission sequentially"""
     
     trials = 3
     
-    proc_type, success = process_float_account_details(page, business_short_code)
+    proc_type, success = process_float_account_details(page, business_short_code,pass_value)
     print(f"[DEBUG] Float Account processing result: {proc_type}, success: {success}")
     if not success and proc_type != "frozen":
         close_irritative_dialog_box(page)
@@ -725,7 +888,7 @@ def process_float_commission(page: Page, business_short_code: int) -> bool:
         while trials > 0:
             trials -= 1
             print(f"[INFO] Retrying Float Account step {business_short_code} ({3 - trials} attempts left)...")
-            proc_type_inner, success_inner = process_float_account_details(page, business_short_code)
+            proc_type_inner, success_inner = process_float_account_details(page, business_short_code,pass_value)
             if success_inner:
                 print("[SUCCESS] Float Account step completed")
                 break
@@ -742,13 +905,13 @@ def process_float_commission(page: Page, business_short_code: int) -> bool:
     # Small pause to let page stabilize
     time.sleep(2)
 
-    if not process_commission_account_details(page, business_short_code):
+    if not process_commission_account_details(page, business_short_code,pass_value):
         print(f"[ERROR] Failed at Commission Account step {business_short_code} - Retrying...")
         close_irritative_dialog_box(page)
         while trials > 0:
             trials -= 1
             print(f"[INFO] Retrying Commission Account step {business_short_code} ({3 - trials} attempts left)...")
-            if process_commission_account_details(page, business_short_code):
+            if process_commission_account_details(page, business_short_code,pass_value):
                 print("[SUCCESS] Commission Account step completed")
                 break
             time.sleep(2)  # Wait before retrying
@@ -808,7 +971,7 @@ def select_dates_and_submit_(page: Page) -> bool:
                 timeout=5000
             )
             
-            for i in range(3):
+            for i in range(4):
                 previous_month_icon.click() 
             
             print("The previous button has been clicked thrice .......")
@@ -1139,21 +1302,24 @@ def return_to_organization_list(page) -> bool:
         print(f"[ERROR] Failed to return to organization list: {e}")
         return False
 
-def process_organization_rows(page: Page):
+import re
+import time
+import traceback
+from playwright.sync_api import Page, Locator
+
+
+def process_organization_rows(page: Page) -> None:
     """
-    Robustly processes all organization rows across pagination + virtual scroll.
-    Uses visible-only row processing + proper pagination via your go_forth function.
+    Main orchestrator: Processes all organization rows across pagination and virtual scrolling.
     """
     total_processed = 0
+    to_be_rerun: list[int] = []
 
     while True:
         print("\n[INFO] Starting new pagination page...")
 
-        # Wait for table to fully load
-        page.wait_for_load_state("networkidle", timeout=10000)
-        time.sleep(2)  # Allow any lazy loading to complete
+        wait_for_table_load(page)
 
-        # Get total rows from your existing function
         total_in_list = get_total_from_pagination(page)
         if total_in_list == 0:
             print("[INFO] No organizations found.")
@@ -1161,108 +1327,160 @@ def process_organization_rows(page: Page):
 
         print(f"[INFO] This page shows {total_in_list} organizations")
 
-        processed_on_this_page = 0
-        
-        """ in the event that we have to rerun some organizations
-         this will be used to store the business short codes that need to be rerun
-         this is useful in case of errors or if we need to reprocess some rows
-         or if we need to reprocess some rows
-        """
-        to_be_rerun= []
-        if(total_processed >= total_in_list):
-            print("[INFO] All organizations processed.")
+        processed_on_this_page = process_page_rows(
+            page=page,
+            total_in_list=total_in_list,
+            total_processed_so_far=total_processed,
+            to_be_rerun=to_be_rerun
+        )
+
+        total_processed += processed_on_this_page
+
+        if total_processed >= total_in_list and not to_be_rerun:
+            print(f"[SUCCESS] All {total_processed} organizations processed successfully!")
             break
 
-        # Process only visible rows on current screen
-        if processed_on_this_page < total_in_list and total_processed < total_in_list:
-            if(total_processed !=0 and total_processed %10 ==0):
-                go_forth_on_organization(page, total_in_list)
-                processed_on_this_page = 0
-            try:
-                # Re-query visible rows only
-                rows = page.locator("//tbody//tr[@class='el-table__row childTableRow']")
-                visible_rows = [rows.nth(i) for i in range(rows.count()) 
-                              if rows.nth(i).is_visible()]
+        # Move to next pagination page
+        if not go_forth_on_organization(page, total_in_list):
+            print("[INFO] No more pages or navigation failed.")
+            break
 
-                if not visible_rows:
-                    print("[INFO] No visible rows — scrolling down...")
-                    page.mouse.wheel(0, 1000)
-                    time.sleep(2)
-                    continue
+        time.sleep(2)  # Gentle pause between pages
 
-                print(f"[INFO] Found {len(visible_rows)} visible rows to process")
-
-                for row in visible_rows:
-                    if processed_on_this_page >= total_in_list:
-                        break
-
-                    try:
-                        # Ensure row is fully in view (critical for el-table fixed headers)
-                        row.scroll_into_view_if_needed(timeout=10000)
-                        page.wait_for_timeout(800)
-
-                        # Extract business short code
-                        row_text = row.text_content(timeout=5000) or ""
-                        match = re.search(r'^(\d+)', row_text.strip())
-                        if not match:
-                            print(f"[WARN] Could not extract business code, skipping row")
-                            processed_on_this_page += 1
-                            continue
-
-                        business_short_code = int(match.group(1))
-                        total_processed += 1
-                        processed_on_this_page += 1
-
-                        print(f"\n[SUCCESS] Processing Row {total_processed} | "
-                              f"Business Code: {business_short_code}")
-
-                        # Click the row
-                        row.click(timeout=15000)
-                        page.wait_for_timeout(1000)
-
-                        if not navigate_to_review_transaction(page):
-                            print("[ERROR] Failed to navigate to review transaction")
-                            return_to_organization_list(page)
-                            continue
-
-                        if not process_float_commission(page, business_short_code):
-                            print("[ERROR] Failed to process float/commission")
-                            return_to_organization_list(page)
-                            continue
-
-                        if not return_to_organization_list(page):
-                            print("[WARN] Failed to return — reloading page")
-                            page.reload()
-                            page.wait_for_load_state("networkidle")
-                            break  # Restart this page
-
-                        print(f"[SUCCESS] Completed row {total_processed}")
-                        time.sleep(1)
-
-                    except Exception as e:
-                        print(f"[ERROR] Exception in row loop: {e}")
-                        traceback.print_exc()
-                        close_irritative_dialog_box(page)
-                        page.screenshot(path=f"error_row_{total_processed}.png")
-                        close_detail_panel(page)
-                        processed_on_this_page += 1
-                        continue
-
-                # After processing all visible rows → scroll to load more
-                page.mouse.wheel(0, 1200)
-                time.sleep(2)
-
-            except Exception as e:
-                print(f"[ERROR] Error in visible row loop: {e}")
-                time.sleep(2)
+    if to_be_rerun:
+        print(f"[WARN] {len(to_be_rerun)} organizations failed and need reprocessing: {to_be_rerun}")
+        if rerun_failed_codes(page, to_be_rerun):
+            print("[SUCCESS] All failed organizations reprocessed successfully!")
+            # get into the second pass
         else:
-            print("[INFO] All visible rows processed on this page.")
+            print("[ERROR] Some organizations still failed after retries.")
 
-        # === ALL ROWS ON THIS PAGE DONE → GO TO NEXT PAGE ===
-        print(f"[INFO] Finished {processed_on_this_page} rows on this page. Moving to next...")
 
-    print(f"\n[SUCCESS] ALL DONE! Processed {total_processed} organizations successfully!")
-    
+def wait_for_table_load(page: Page, timeout: int = 15000) -> None:
+    """Wait for network idle and allow lazy loading."""
+    page.wait_for_load_state("networkidle", timeout=timeout)
+    time.sleep(2)
+
+
+def process_page_rows(
+    page: Page,
+    total_in_list: int,
+    total_processed_so_far: int,
+    to_be_rerun: list[int]
+) -> int:
+    """Process all visible rows on the current page with virtual scrolling support."""
+    processed_on_page = 0
+    rows_locator = page.locator("//tbody//tr[@class='el-table__row childTableRow']")
+
+    while processed_on_page < total_in_list:
+        visible_rows = get_visible_rows(rows_locator)
+        
+        if not visible_rows:
+            print("[INFO] No visible rows — scrolling to load more...")
+            page.mouse.wheel(0, 1200)
+            time.sleep(2)
+            continue
+
+        print(f"[INFO] Found {len(visible_rows)} visible rows to process")
+
+        for row in visible_rows:
+            if processed_on_page >= total_in_list:
+                break
+
+            business_short_code = extract_business_short_code(row)
+            if not business_short_code:
+                processed_on_page += 1
+                continue
+
+            row.click(timeout=15000)
+            page.wait_for_timeout(1000)
+
+            success = process_single_row(page, business_short_code, total_processed_so_far + processed_on_page + 1)
+
+            if success:
+                print(f"[SUCCESS] Completed row {total_processed_so_far + processed_on_page + 1}")
+                return_to_organization_list(page)
+                
+            else:
+                to_be_rerun.append(business_short_code)
+                return_to_organization_list(page)
+                print(f"[WARN] Row {business_short_code} failed, added to rerun list")
+
+            processed_on_page += 1
+            time.sleep(1)
+
+        # Scroll to load more rows if needed
+        if processed_on_page < total_in_list:
+            page.mouse.wheel(0, 1200)
+            time.sleep(2)
+
+    return processed_on_page
+
+
+def get_visible_rows(rows_locator: Locator) -> list[Locator]:
+    """Return only currently visible rows."""
+    count = rows_locator.count()
+    return [
+        rows_locator.nth(i)
+        for i in range(count)
+        if rows_locator.nth(i).is_visible()
+    ]
+
+
+def extract_business_short_code(row: Locator) -> int | None:
+    """Extract the leading numeric business short code from the row text."""
+    try:
+        row.scroll_into_view_if_needed(timeout=10000)
+        # page.wait_for_timeout(800)
+
+        row_text = row.text_content(timeout=5000) or ""
+        match = re.search(r'^(\d+)', row_text.strip())
+        if not match:
+            print(f"[WARN] Could not extract business short code from row: {row_text[:100]}...")
+            return None
+
+        return int(match.group(1))
+    except Exception as e:
+        print(f"[ERROR] Failed to extract short code: {e}")
+        return None
+
+
+def process_single_row(page: Page, business_short_code: int, row_number: int) -> bool:
+    """Process one organization row end-to-end."""
+    try:
+        print(f"\n[SUCCESS] Processing Row {row_number} | Business Code: {business_short_code}")
+
+        # Scrape basic till details
+        scrape_till_details(page, business_short_code)
+
+        # Navigate and process float/commission
+        if not navigate_to_review_transaction(page):
+            print("[ERROR] Failed to navigate to review transaction")
+            return_to_organization_list(page)
+            return False
+
+        if not process_float_commission(page, business_short_code, pass_value="second"):
+            print("[ERROR] Failed to process float/commission")
+            return_to_organization_list(page)
+            return False
+
+        # Return safely
+        if not return_to_organization_list(page):
+            print("[WARN] Failed to return to list — attempting recovery")
+            page.reload()
+            wait_for_table_load(page)
+            return False
+
+        return True
+
+    except Exception as e:
+        print(f"[ERROR] Exception processing row {business_short_code}: {e}")
+        traceback.print_exc()
+        close_irritative_dialog_box(page)
+        page.screenshot(path=f"error_row_{business_short_code}_{row_number}.png")
+        close_detail_panel(page)
+        return False
+
 if __name__ == "__main__":
     # solveCaptchaXai()
     login_to_mpesa()
