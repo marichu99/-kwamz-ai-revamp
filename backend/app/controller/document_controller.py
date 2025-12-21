@@ -533,19 +533,6 @@ def download_all_agent_documents(agent_id):
         traceback.print_exc()
         return jsonify({"error": "An error occurred while creating the ZIP file"}), 500
 
-@document_bp.route('/login_company', methods=['POST'])
-def login_company():
-    form_data = request.get_json()
-    print(f"the data is {form_data}")
-    
-    short_code = form_data.get('shortCode')
-    user_name = form_data.get('userName')
-    password = form_data.get('password')
-    
-    is_successful = login_to_mpesa(short_code=short_code, username=user_name, password=password)
-    if not is_successful:
-        return jsonify({"success": False, "message": "Login failed. Please check your credentials and try again."})
-    return jsonify({"success": True})
 
 @document_bp.route('/get-kyc', methods=['GET'])
 def get_kyc():

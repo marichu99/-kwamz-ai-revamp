@@ -101,7 +101,7 @@ function MpesaAccountLogin({ isOpen, onClose, onSubmit, isLoading, company }) {
             <button
               onClick={onClose}
               className="text-white/80 hover:text-white hover:bg-white/20 p-2 rounded-lg transition-all"
-              disabled={isLoading}
+              // disabled={isLoading}
             >
               <X className="w-5 h-5" />
             </button>

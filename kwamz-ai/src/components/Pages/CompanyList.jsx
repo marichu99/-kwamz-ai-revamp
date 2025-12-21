@@ -335,7 +335,7 @@ function CompanyList() {
     setIsLoading(true);
     try {
       const token = localStorage.getItem('token');
-      const url = `${config.API_URL}/document/login_company`;
+      const url = `${config.API_URL}/company/login-company`;
 
       const res = await fetch(url, {
         method: 'POST',

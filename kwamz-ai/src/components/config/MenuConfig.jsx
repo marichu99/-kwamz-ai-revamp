@@ -94,7 +94,7 @@ const userMenuItems = [
         submenu: [
             { id: "catalog", label: "Product Catalog" },
             { id: "inventory", label: "Inventory" },
-            { id: "categories", label: "Categories" },
+            { id: "transactions-list", label: "Transactions" },
             { id: "checkout", label: "Pricing" },
             { id: "pesapal", label: "PesaPal" }
         ]

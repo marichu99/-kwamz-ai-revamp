@@ -47,10 +47,12 @@ def create_app():
     from app.model.pesapalrefund import PesapalRefund
     from app.model.bank_config import BankConfig
     from app.model.bank_models import Bank
+    from app.model.transaction import Transaction, TransactionStats
     
     # Initialize Pesapal Client and Payment Service
     from app.utils.pesapalclient import PesapalClient, PesapalConfig, FlaskIPNStorage
     from app.utils.pesapalutils import PesapalPaymentService
+    from app.service.transaction_service import TransactionService
     
     flaskipn_storage = FlaskIPNStorage()
     pesapal_config = PesapalConfig()
@@ -64,6 +66,7 @@ def create_app():
                     )
     bucket_name = os.getenv('GCP_BUCKET', 'trovana-docs')
     document_service = DocumentProcessingService(storage_client=storage_client, bucket_name=bucket_name)        
+    transaction_service = TransactionService()
     
     with app.app_context():
         db.create_all()
@@ -73,6 +76,7 @@ def create_app():
     app.payment_service = payment_service
     app.pesapal_client = pesapal_client
     app.document_service = document_service        
+    app.transaction_service = transaction_service
 
     # Register blueprints
     from app.controller.user_controller import user_bp
@@ -83,6 +87,7 @@ def create_app():
     from app.controller.useragent_controller import user_agent_bp
     from app.controller.agentcompany_controller import agent_company_bp
     from app.controller.company_controller import company_bp
+    from app.controller.transaction_controller import transaction_bp
 
     app.register_blueprint(user_bp, url_prefix='/users')
     app.register_blueprint(bank_bp, url_prefix='/banks')
@@ -92,6 +97,7 @@ def create_app():
     app.register_blueprint(user_agent_bp, url_prefix='/useragent')
     app.register_blueprint(agent_company_bp, url_prefix='/agentcompany')
     app.register_blueprint(company_bp, url_prefix='/company')
+    app.register_blueprint(transaction_bp, url_prefix='/transactions')
 
     return app
 

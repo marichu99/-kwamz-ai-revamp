@@ -103,6 +103,10 @@ class CompanyService:
         """Retrieve a company by ID."""
         return self.db.session.query(Company).filter_by(id=company_id).first()
 
+    def get_company_by_shortcode(self, company_shortcode):
+        """Retrieve a company by shortcode."""
+        return self.db.session.query(Company).filter_by(shortcode=company_shortcode).first()
+
     def create_company(self, company_data):
         """Create a new company."""
         company = Company(**company_data)

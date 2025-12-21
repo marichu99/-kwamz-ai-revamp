@@ -7,9 +7,11 @@ from app.model.pesalpalpayment import PesapalPayment
 from app.model.company import Company
 from app.model.agent_documents import AgentDocuments
 from flask_jwt_extended import jwt_required,get_jwt_identity
+from app.utils.mpesa_automation import login_to_mpesa
 from decimal import Decimal, InvalidOperation
 from datetime import datetime
 import json
+
 
 company_bp = Blueprint('company', __name__, url_prefix='/company')
 
@@ -229,6 +231,19 @@ def get_agent_payments():
     #         'error': str(e),
     #         'data': []
     #     }), 500
+
+@company_bp.route('/login-company', methods=['POST'])
+def login_company():
+    form_data = request.get_json()
+    print(f"the data is {form_data}")
+    short_code = form_data.get('shortCode')
+    user_name = form_data.get('userName')
+    password = form_data.get('password')
+    
+    is_successful = login_to_mpesa(short_code=short_code, username=user_name, password=password)
+    if not is_successful:
+        return jsonify({"success": False, "message": "Login failed. Please check your credentials and try again."})
+    return jsonify({"success": True})
 
 # Alternative route if you want to add company_id to PesapalPayment model
 @company_bp.route('/agent-payments-direct', methods=['GET'])

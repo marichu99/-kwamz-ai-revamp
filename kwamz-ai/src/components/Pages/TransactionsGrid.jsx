@@ -1,0 +1,842 @@
+import { useState, useEffect, useRef, useMemo } from 'react';
+import {
+    Search,
+    MoreVertical,
+    Eye,
+    Download,
+    RefreshCw,
+    Filter,
+    Calendar,
+    FileText,
+    BarChart3,
+    Coins,
+    TrendingUp,
+    TrendingDown,
+    DollarSign
+} from 'lucide-react';
+import axios from 'axios';
+import config from '../../Config';
+import { useToast } from './ToastProvider';
+import TransactionDetailsModal from './TransactionDetailsModal.jsx';
+import TransactionStatsModal from './TransactionStatsModal.jsx';
+
+function TransactionsGrid() {
+    const [transactionsResponse, setTransactionsResponse] = useState({
+        data: [],
+        pagination: { page: 1, per_page: 10, total: 0, pages: 0, has_next: false, has_prev: false },
+        summary: {},
+        filters_applied: {}
+    });
+    const [searchTerm, setSearchTerm] = useState('');
+    const [selectedTransactionIds, setSelectedTransactionIds] = useState([]);
+    const [isTransactionModalOpen, setIsTransactionModalOpen] = useState(false);
+    const [isStatsModalOpen, setIsStatsModalOpen] = useState(false);
+    const [isLoading, setIsLoading] = useState(false);
+    const [currentPage, setCurrentPage] = useState(1);
+    const [pageSize, setPageSize] = useState(10);
+    const [isDropdownOpen, setIsDropdownOpen] = useState(false);
+    const [stats, setStats] = useState(null);
+    const [filters, setFilters] = useState({
+        startDate: '',
+        endDate: '',
+        reasonType: '',
+        transactionStatus: ''
+    });
+
+    // Transaction type toggle: 'float' or 'commission'
+    const [transactionType, setTransactionType] = useState('float');
+
+    const { showToast } = useToast();
+    const dropdownRef = useRef(null);
+
+    // Extract data from response
+    const transactions = transactionsResponse.data || [];
+    const pagination = transactionsResponse.pagination || {};
+    const summary = transactionsResponse.summary || {};
+    const filters_applied = transactionsResponse.filters_applied || {};
+
+    // Fetch transactions from API
+    const fetchTransactions = async () => {
+        setIsLoading(true);
+        try {
+            const token = localStorage.getItem('token');
+            const params = {
+                page: currentPage,
+                per_page: pageSize,
+                transaction_type: transactionType,
+                search: searchTerm, // Add this
+                ...filters
+            };
+
+            // Remove empty filters
+            Object.keys(params).forEach(key => {
+                if (!params[key]) delete params[key];
+            });
+
+            const response = await axios.get(`${config.API_URL}/transactions`, {
+                headers: { Authorization: `Bearer ${token}` },
+                params
+            });
+
+            console.log('Fetched transactions response:', response.data);
+
+            if (response.data.success) {
+                // Store the entire response object
+                setTransactionsResponse({
+                    data: response.data.data || [],
+                    pagination: response.data.pagination || { page: 1, per_page: 10, total: 0, pages: 0 },
+                    summary: response.data.summary || {},
+                    filters_applied: response.data.filters_applied || {}
+                });
+                setSelectedTransactionIds([]);
+                showToast(`${transactionType === 'float' ? 'Float' : 'Commission'} transactions loaded`, 'success');
+            } else {
+                // Handle unsuccessful response
+                setTransactionsResponse({
+                    data: [],
+                    pagination: { page: 1, per_page: 10, total: 0, pages: 0 },
+                    summary: {},
+                    filters_applied: {}
+                });
+                showToast(response.data.error || 'Failed to fetch transactions', 'error');
+            }
+        } catch (error) {
+            console.error('Error fetching transactions:', error.response?.data || error.message);
+            showToast('Failed to fetch transactions', 'error');
+            setTransactionsResponse({
+                data: [],
+                pagination: { page: 1, per_page: 10, total: 0, pages: 0 },
+                summary: {},
+                filters_applied: {}
+            });
+        } finally {
+            setIsLoading(false);
+        }
+    };
+
+    // Fetch statistics
+    const fetchStats = async () => {
+        try {
+            const token = localStorage.getItem('token');
+            const params = {
+                transaction_type: transactionType,
+                ...filters
+            };
+
+            // Remove empty filters
+            Object.keys(params).forEach(key => {
+                if (!params[key]) delete params[key];
+            });
+
+            const response = await axios.get(`${config.API_URL}/transactions/stats`, {
+                headers: { Authorization: `Bearer ${token}` },
+                params
+            });
+
+            if (response.data.success) {
+                setStats(response.data.stats);
+            }
+        } catch (error) {
+            console.error('Error fetching stats:', error.response?.data || error.message);
+        }
+    };
+
+    useEffect(() => {
+        fetchTransactions();
+        fetchStats();
+    }, [currentPage, pageSize, filters, transactionType]);
+
+    useEffect(() => {
+        if (searchTerm !== '') {
+            setCurrentPage(1);
+            // Optional: debounce the search
+            const timer = setTimeout(() => {
+                fetchTransactions();
+            }, 500); // 500ms debounce
+
+            return () => clearTimeout(timer);
+        }
+    }, [searchTerm]);
+
+    // Close dropdown when clicking outside
+    useEffect(() => {
+        const handleClickOutside = (event) => {
+            if (dropdownRef.current && !dropdownRef.current.contains(event.target)) {
+                setIsDropdownOpen(false);
+            }
+        };
+        document.addEventListener('mousedown', handleClickOutside);
+        return () => document.removeEventListener('mousedown', handleClickOutside);
+    }, []);
+
+    // Calculate pagination for client-side filtered results
+    const totalItems = pagination.total || 0;
+    const totalPages = pagination.pages || 0;
+    const paginatedTransactions = transactions;
+
+    // Handle page change for client-side filtering
+    const handlePageChange = (page) => {
+        if (page >= 1 && page <= totalPages) {
+            setCurrentPage(page);
+            setSelectedTransactionIds([]);
+            // fetchTransactions();
+            console.log('Page changed to:', page);
+        }
+    };
+
+    // Handle page size change
+    const handlePageSizeChange = (e) => {
+        const newSize = Number(e.target.value);
+        setPageSize(newSize);
+        setCurrentPage(1);
+        setSelectedTransactionIds([]);
+
+        // If using server-side pagination, fetch with new page size
+        if (searchTerm.trim()) {
+            // Client-side filtering, no need to fetch
+        } else {
+            // Server-side pagination, fetch new data
+            fetchTransactions();
+        }
+    };
+
+    // Handle checkbox selection
+    const handleSelectTransaction = (transactionId) => {
+        setSelectedTransactionIds((prev) =>
+            prev.includes(transactionId)
+                ? prev.filter((id) => id !== transactionId)
+                : [...prev, transactionId]
+        );
+    };
+
+    // Handle select all checkboxes
+    const handleSelectAll = () => {
+        if (selectedTransactionIds.length === paginatedTransactions.length) {
+            setSelectedTransactionIds([]);
+        } else {
+            setSelectedTransactionIds(paginatedTransactions.map((t) => t.id));
+        }
+    };
+
+    // Handle view transaction details
+    const handleViewDetails = () => {
+        if (selectedTransactionIds.length === 0) {
+            showToast('Please select a transaction to view', 'error');
+            return;
+        }
+        if (selectedTransactionIds.length > 1) {
+            showToast('Please select only one transaction to view', 'error');
+            return;
+        }
+        setIsTransactionModalOpen(true);
+        setIsDropdownOpen(false);
+    };
+
+    // Handle export transactions
+    const handleExportTransactions = async () => {
+        try {
+            const token = localStorage.getItem('token');
+            const params = {
+                transaction_type: transactionType,
+                ...filters
+            };
+
+            // Remove empty filters
+            Object.keys(params).forEach(key => {
+                if (!params[key]) delete params[key];
+            });
+
+            const response = await axios.get(`${config.API_URL}/transactions/export`, {
+                headers: { Authorization: `Bearer ${token}` },
+                params,
+                responseType: 'blob'
+            });
+
+            const url = window.URL.createObjectURL(new Blob([response.data]));
+            const link = document.createElement('a');
+            link.href = url;
+            link.setAttribute('download', `${transactionType}_transactions_export.csv`);
+            document.body.appendChild(link);
+            link.click();
+            link.remove();
+
+            showToast(`${transactionType === 'float' ? 'Float' : 'Commission'} transactions exported successfully`, 'success');
+        } catch (error) {
+            console.error('Error exporting transactions:', error.response?.data || error.message);
+            showToast('Failed to export transactions', 'error');
+        }
+    };
+
+    // Handle filter change
+    const handleFilterChange = (field, value) => {
+        setFilters(prev => ({ ...prev, [field]: value }));
+        setCurrentPage(1);
+        setSelectedTransactionIds([]);
+    };
+
+    // Handle reset filters
+    const handleResetFilters = () => {
+        setFilters({
+            startDate: '',
+            endDate: '',
+            reasonType: '',
+            transactionStatus: ''
+        });
+        setSearchTerm('');
+        setCurrentPage(1);
+        setSelectedTransactionIds([]);
+        fetchTransactions(); // Fetch fresh data with reset filters
+    };
+
+    // Toggle transaction type
+    const toggleTransactionType = () => {
+        const newType = transactionType === 'float' ? 'commission' : 'float';
+        setTransactionType(newType);
+        setCurrentPage(1);
+        setSelectedTransactionIds([]);
+        setFilters({
+            startDate: '',
+            endDate: '',
+            reasonType: '',
+            transactionStatus: ''
+        });
+        setSearchTerm('');
+    };
+
+    // Format currency
+    const formatCurrency = (amount) => {
+        if (!amount) return 'KES 0.00';
+        const num = parseFloat(amount);
+        return `KES ${num.toLocaleString('en-KE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+    };
+
+    // Format date
+    const formatDate = (dateString) => {
+        if (!dateString) return '';
+        const date = new Date(dateString);
+        return date.toLocaleString('en-KE', {
+            year: 'numeric',
+            month: 'short',
+            day: 'numeric',
+            hour: '2-digit',
+            minute: '2-digit'
+        });
+    };
+
+    // Format percentage
+    const formatPercentage = (rate) => {
+        if (!rate) return '0%';
+        const num = parseFloat(rate);
+        return `${num.toFixed(2)}%`;
+    };
+
+    // Get transaction type label
+    const getTransactionTypeLabel = () => {
+        return transactionType === 'float' ? 'Float Transactions' : 'Commission Transactions';
+    };
+
+    return (
+        <div className="bg-white dark:bg-slate-800 rounded-xl shadow-lg p-6">
+            {/* Header with toggle */}
+            <div className="flex justify-between items-center mb-6">
+                <div>
+                    <h1 className="text-2xl font-bold text-slate-800 dark:text-white">
+                        {getTransactionTypeLabel()}
+                    </h1>
+                    <p className="text-slate-600 dark:text-slate-400 mt-1">
+                        View and manage {transactionType === 'float' ? 'float' : 'commission'} transactions
+                    </p>
+                </div>
+
+                <button
+                    onClick={toggleTransactionType}
+                    className={`flex items-center space-x-2 py-2 px-4 rounded-xl transition-colors ${transactionType === 'float'
+                        ? 'bg-blue-500 hover:bg-blue-600 text-white'
+                        : 'bg-amber-500 hover:bg-amber-600 text-white'
+                        }`}
+                >
+                    {transactionType === 'float' ? (
+                        <>
+                            <Coins className="w-4 h-4" />
+                            <span>Switch to Commissions</span>
+                        </>
+                    ) : (
+                        <>
+                            <DollarSign className="w-4 h-4" />
+                            <span>Switch to Float</span>
+                        </>
+                    )}
+                </button>
+            </div>
+
+            {/* Stats Summary - using summary from response */}
+            <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
+                <div className={`rounded-xl p-4 ${transactionType === 'float' ? 'bg-blue-50 dark:bg-slate-700' : 'bg-amber-50 dark:bg-slate-700'
+                    }`}>
+                    <div className={`text-sm font-medium ${transactionType === 'float' ? 'text-blue-600 dark:text-blue-400' : 'text-amber-600 dark:text-amber-400'
+                        }`}>
+                        Total Items
+                    </div>
+                    <div className="text-2xl font-bold text-slate-800 dark:text-white">
+                        {pagination.total || 0}
+                    </div>
+                </div>
+
+                {transactionType === 'float' ? (
+                    <>
+                        <div className="bg-green-50 dark:bg-slate-700 rounded-xl p-4">
+                            <div className="text-sm text-green-600 dark:text-green-400 font-medium">Total Deposits</div>
+                            <div className="text-2xl font-bold text-slate-800 dark:text-white">
+                                {formatCurrency(summary.total_paid_in || '0.00')}
+                            </div>
+                        </div>
+                        <div className="bg-red-50 dark:bg-slate-700 rounded-xl p-4">
+                            <div className="text-sm text-red-600 dark:text-red-400 font-medium">Total Withdrawals</div>
+                            <div className="text-2xl font-bold text-slate-800 dark:text-white">
+                                {formatCurrency(summary.total_withdrawn || '0.00')}
+                            </div>
+                        </div>
+                        <div className={`rounded-xl p-4 ${parseFloat(summary.net_flow || '0') >= 0
+                            ? 'bg-green-50 dark:bg-slate-700'
+                            : 'bg-red-50 dark:bg-slate-700'
+                            }`}>
+                            <div className="flex items-center text-sm font-medium">
+                                {parseFloat(summary.net_flow || '0') >= 0 ? (
+                                    <TrendingUp className="w-4 h-4 mr-1 text-green-600 dark:text-green-400" />
+                                ) : (
+                                    <TrendingDown className="w-4 h-4 mr-1 text-red-600 dark:text-red-400" />
+                                )}
+                                <span className={
+                                    parseFloat(summary.net_flow || '0') >= 0
+                                        ? 'text-green-600 dark:text-green-400'
+                                        : 'text-red-600 dark:text-red-400'
+                                }>
+                                    Net Flow
+                                </span>
+                            </div>
+                            <div className="text-2xl font-bold text-slate-800 dark:text-white">
+                                {formatCurrency(summary.net_flow || '0.00')}
+                            </div>
+                        </div>
+                    </>
+                ) : (
+                    <>
+                        <div className="bg-green-50 dark:bg-slate-700 rounded-xl p-4">
+                            <div className="text-sm text-green-600 dark:text-green-400 font-medium">Total Commission</div>
+                            <div className="text-2xl font-bold text-slate-800 dark:text-white">
+                                {formatCurrency(summary.total_commission_amount || '0.00')}
+                            </div>
+                        </div>
+                        <div className="bg-blue-50 dark:bg-slate-700 rounded-xl p-4">
+                            <div className="text-sm text-blue-600 dark:text-blue-400 font-medium">Total Deposits</div>
+                            <div className="text-2xl font-bold text-slate-800 dark:text-white">
+                                {formatCurrency(summary.total_paid_in || '0.00')}
+                            </div>
+                        </div>
+                        <div className="bg-red-50 dark:bg-slate-700 rounded-xl p-4">
+                            <div className="text-sm text-red-600 dark:text-red-400 font-medium">Total Withdrawals</div>
+                            <div className="text-2xl font-bold text-slate-800 dark:text-white">
+                                {formatCurrency(summary.total_withdrawn || '0.00')}
+                            </div>
+                        </div>
+                    </>
+                )}
+            </div>
+
+            {/* Action Buttons */}
+            <div className="flex justify-between mb-4">
+                {/* Filter Buttons */}
+                <div className="flex space-x-2">
+                    <button
+                        onClick={() => setIsStatsModalOpen(true)}
+                        className="flex items-center space-x-2 py-2 px-4 bg-purple-500 text-white rounded-xl hover:bg-purple-600 transition-colors"
+                    >
+                        <BarChart3 className="w-4 h-4" />
+                        <span>Statistics</span>
+                    </button>
+                </div>
+
+                {/* Action Buttons */}
+                <div className="flex space-x-4">
+                    <button
+                        onClick={fetchTransactions}
+                        disabled={isLoading}
+                        className="flex items-center space-x-2 py-2 px-4 bg-green-500 text-white rounded-xl hover:bg-green-600 transition-colors disabled:bg-green-300 disabled:cursor-not-allowed"
+                    >
+                        <RefreshCw className={`w-4 h-4 ${isLoading ? 'animate-spin' : ''}`} />
+                        <span>Reload</span>
+                    </button>
+                    <div className="relative" ref={dropdownRef}>
+                        <button
+                            onClick={() => setIsDropdownOpen(!isDropdownOpen)}
+                            className={`flex items-center space-x-2 py-2 px-4 rounded-xl transition-colors focus:outline-none focus:ring-2 focus:ring-offset-2 dark:focus:ring-offset-slate-800 ${transactionType === 'float'
+                                ? 'bg-blue-500 hover:bg-blue-600 text-white focus:ring-blue-500'
+                                : 'bg-amber-500 hover:bg-amber-600 text-white focus:ring-amber-500'
+                                }`}
+                            aria-haspopup="true"
+                            aria-expanded={isDropdownOpen}
+                        >
+                            <MoreVertical className="w-4 h-4" />
+                            <span>Actions</span>
+                        </button>
+                        {isDropdownOpen && (
+                            <div
+                                className="absolute right-0 mt-2 w-56 bg-white dark:bg-slate-700 rounded-xl shadow-lg z-10 border border-slate-200 dark:border-slate-600"
+                                role="menu"
+                            >
+                                <div className="py-2">
+                                    <button
+                                        onClick={handleViewDetails}
+                                        disabled={selectedTransactionIds.length !== 1}
+                                        className="w-full flex items-center px-4 py-2 text-sm text-slate-800 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-600 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                                        role="menuitem"
+                                    >
+                                        <Eye className="w-4 h-4 mr-3" />
+                                        View Details
+                                    </button>
+                                    <button
+                                        onClick={handleExportTransactions}
+                                        className="w-full flex items-center px-4 py-2 text-sm text-slate-800 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-600 transition-colors"
+                                        role="menuitem"
+                                    >
+                                        <Download className="w-4 h-4 mr-3" />
+                                        Export to CSV
+                                    </button>
+                                </div>
+                            </div>
+                        )}
+                    </div>
+                </div>
+            </div>
+
+            {/* Filters */}
+            <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
+                <div>
+                    <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">
+                        Start Date
+                    </label>
+                    <input
+                        type="date"
+                        value={filters.startDate}
+                        onChange={(e) => handleFilterChange('startDate', e.target.value)}
+                        className="w-full px-3 py-2 bg-slate-100 dark:bg-slate-700 border border-slate-200 dark:border-slate-600 rounded-xl text-slate-800 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    />
+                </div>
+                <div>
+                    <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">
+                        End Date
+                    </label>
+                    <input
+                        type="date"
+                        value={filters.endDate}
+                        onChange={(e) => handleFilterChange('endDate', e.target.value)}
+                        className="w-full px-3 py-2 bg-slate-100 dark:bg-slate-700 border border-slate-200 dark:border-slate-600 rounded-xl text-slate-800 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    />
+                </div>
+                <div>
+                    <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">
+                        {transactionType === 'float' ? 'Transaction Category' : 'Commission Category'}
+                    </label>
+                    <select
+                        value={filters.reasonType}
+                        onChange={(e) => handleFilterChange('reasonType', e.target.value)}
+                        className="w-full px-3 py-2 bg-slate-100 dark:bg-slate-700 border border-slate-200 dark:border-slate-600 rounded-xl text-slate-800 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    >
+                        <option value="">All Types</option>
+                        {transactionType === 'float' ? (
+                            <>
+                                <option value="Deposit at Agent Till">Deposits</option>
+                                <option value="Customer Withdrawal at Agent Till">Withdrawals</option>
+                                <option value="Customer Withdrawal at Agent Till with OD">Withdrawal with OD</option>
+                            </>
+                        ) : (
+                            <>
+                                <option value="Deposit at Agent Till">Deposit Commissions</option>
+                                <option value="Customer Withdrawal at Agent Till">Withdrawal Commissions</option>
+                            </>
+                        )}
+                    </select>
+                </div>
+                <div>
+                    <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">
+                        Status
+                    </label>
+                    <select
+                        value={filters.transactionStatus}
+                        onChange={(e) => handleFilterChange('transactionStatus', e.target.value)}
+                        className="w-full px-3 py-2 bg-slate-100 dark:bg-slate-700 border border-slate-200 dark:border-slate-600 rounded-xl text-slate-800 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    >
+                        <option value="">All Status</option>
+                        <option value="Completed">Completed</option>
+                        <option value="Pending">Pending</option>
+                        <option value="Failed">Failed</option>
+                    </select>
+                </div>
+            </div>
+
+            {/* Search and Filter Controls */}
+            <div className="flex flex-col md:flex-row justify-between items-center mb-6 space-y-4 md:space-y-0">
+                <div className="relative w-full md:w-auto">
+                    <Search className="w-4 h-4 absolute left-3 top-1/2 transform -translate-y-1/2 text-slate-400" />
+                    <input
+                        type="text"
+                        placeholder={
+                            transactionType === 'float'
+                                ? "Search receipts, details, account numbers..."
+                                : "Search commission receipts, original receipts..."
+                        }
+                        value={searchTerm}
+                        onChange={(e) => setSearchTerm(e.target.value)}
+                        className="w-full md:w-96 pl-10 pr-4 py-2.5 bg-slate-100 dark:bg-slate-700 border border-slate-200 dark:border-slate-600 rounded-xl text-slate-800 dark:text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all"
+                    />
+                </div>
+                <div className="flex space-x-2">
+                    <button
+                        onClick={handleResetFilters}
+                        className="flex items-center space-x-2 py-2 px-4 bg-slate-200 dark:bg-slate-700 text-slate-700 dark:text-slate-300 rounded-xl hover:bg-slate-300 dark:hover:bg-slate-600 transition-colors"
+                    >
+                        <Filter className="w-4 h-4" />
+                        <span>Reset Filters</span>
+                    </button>
+                </div>
+            </div>
+
+            {/* Transactions Grid */}
+            <div className="overflow-x-auto">
+                <table className="w-full table-auto">
+                    <thead>
+                        <tr className="bg-slate-100 dark:bg-slate-700 text-left text-slate-600 dark:text-slate-300">
+                            <th className="px-4 py-3 font-semibold rounded-l-xl">
+                                <input
+                                    type="checkbox"
+                                    checked={selectedTransactionIds.length === paginatedTransactions.length && paginatedTransactions.length > 0}
+                                    onChange={handleSelectAll}
+                                    className={`w-4 h-4 border-slate-300 rounded focus:ring-2 ${transactionType === 'float'
+                                        ? 'text-blue-600 focus:ring-blue-500'
+                                        : 'text-amber-600 focus:ring-amber-500'
+                                        } dark:bg-slate-700 dark:border-slate-600`}
+                                />
+                            </th>
+                            <th className="px-4 py-3 font-semibold">
+                                {transactionType === 'float' ? 'Receipt No' : 'Commission Receipt No'}
+                            </th>
+                            <th className="px-4 py-3 font-semibold">Completion Time</th>
+                            <th className="px-4 py-3 font-semibold">Details</th>
+                            <th className="px-4 py-3 font-semibold">
+                                {transactionType === 'float' ? 'Transaction Type' : 'Commission Type'}
+                            </th>
+                            {transactionType === 'float' ? (
+                                <>
+                                    <th className="px-4 py-3 font-semibold">Amount</th>
+                                    <th className="px-4 py-3 font-semibold">Balance</th>
+                                </>
+                            ) : (
+                                <>
+                                    <th className="px-4 py-3 font-semibold">Commission Amount</th>
+                                    <th className="px-4 py-3 font-semibold">Rate</th>
+                                </>
+                            )}
+                            <th className="px-4 py-3 font-semibold">Status</th>
+                            <th className="px-4 py-3 font-semibold rounded-r-xl">
+                                {transactionType === 'float' ? 'Other Party' : 'Original Receipt'}
+                            </th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {paginatedTransactions.map((t, index) => (
+                            <tr
+                                key={t.id}
+                                className={`border-b border-slate-200 dark:border-slate-600 ${index % 2 === 0 ? 'bg-white dark:bg-slate-800' : 'bg-slate-50 dark:bg-slate-700/50'
+                                    } hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors`}
+                            >
+                                <td className="px-4 py-3">
+                                    <input
+                                        type="checkbox"
+                                        checked={selectedTransactionIds.includes(t.id)}
+                                        onChange={() => handleSelectTransaction(t.id)}
+                                        className={`w-4 h-4 border-slate-300 rounded focus:ring-2 ${transactionType === 'float'
+                                            ? 'text-blue-600 focus:ring-blue-500'
+                                            : 'text-amber-600 focus:ring-amber-500'
+                                            } dark:bg-slate-700 dark:border-slate-600`}
+                                    />
+                                </td>
+                                <td className="px-4 py-3 font-mono text-sm font-medium">
+                                    <span className={
+                                        transactionType === 'float'
+                                            ? 'text-blue-600 dark:text-blue-400'
+                                            : 'text-amber-600 dark:text-amber-400'
+                                    }>
+                                        {t.receipt_no}
+                                    </span>
+                                </td>
+                                <td className="px-4 py-3 text-sm">
+                                    {formatDate(t.completion_time)}
+                                </td>
+                                <td className="px-4 py-3 max-w-xs">
+                                    <div className="truncate" title={t.details}>
+                                        {t.details}
+                                    </div>
+                                </td>
+                                <td className="px-4 py-3">
+                                    <span className={`px-2 py-1 text-xs rounded-full ${t.reason_type?.includes('Deposit')
+                                        ? 'bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200'
+                                        : t.reason_type?.includes('Withdrawal')
+                                            ? 'bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-200'
+                                            : 'bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200'
+                                        }`}>
+                                        {transactionType === 'float'
+                                            ? (t.reason_type ? t.reason_type.split(' ')[0] : '-')
+                                            : (t.details ? t.details.split(' ')[0] : '-')
+                                        }
+                                    </span>
+                                </td>
+                                {transactionType === 'float' ? (
+                                    <>
+                                        <td className="px-4 py-3 font-medium">
+                                            {t.paid_in && parseFloat(t.paid_in) > 0 ? (
+                                                <span className="text-green-600 dark:text-green-400">
+                                                    +{formatCurrency(t.paid_in)}
+                                                </span>
+                                            ) : (
+                                                <span className="text-red-600 dark:text-red-400">
+                                                    -{formatCurrency(t.withdrawn)}
+                                                </span>
+                                            )}
+                                        </td>
+                                        <td className="px-4 py-3 font-bold">
+                                            {formatCurrency(t.balance)}
+                                        </td>
+                                    </>
+                                ) : (
+                                    <>
+                                        <td className="px-4 py-3 font-bold text-amber-600 dark:text-amber-400">
+                                            {formatCurrency(t.commission_amount || t.paid_in)}
+                                        </td>
+                                        <td className="px-4 py-3">
+                                            <div className="text-sm text-slate-600 dark:text-slate-400">
+                                                {formatPercentage(t.commission_rate)}
+                                            </div>
+                                        </td>
+                                    </>
+                                )}
+                                <td className="px-4 py-3">
+                                    <span className={`px-2 py-1 text-xs rounded-full ${t.transaction_status === 'Completed'
+                                        ? 'bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200'
+                                        : 'bg-yellow-100 text-yellow-800 dark:bg-yellow-900 dark:text-yellow-200'
+                                        }`}>
+                                        {t.transaction_status || 'Unknown'}
+                                    </span>
+                                </td>
+                                <td className="px-4 py-3 max-w-xs">
+                                    <div className="truncate" title={
+                                        transactionType === 'float'
+                                            ? t.other_party_info
+                                            : t.linked_transaction_id
+                                    }>
+                                        {transactionType === 'float'
+                                            ? (t.other_party_info || '-')
+                                            : (t.linked_transaction_id || '-')
+                                        }
+                                    </div>
+                                </td>
+                            </tr>
+                        ))}
+                    </tbody>
+                </table>
+
+                {paginatedTransactions.length === 0 && !isLoading && (
+                    <div className="text-center py-8 text-slate-500 dark:text-slate-400">
+                        {searchTerm.trim()
+                            ? `No ${transactionType === 'float' ? 'float' : 'commission'} transactions found matching "${searchTerm}"`
+                            : `No ${transactionType === 'float' ? 'float' : 'commission'} transactions found`
+                        }
+                    </div>
+                )}
+
+                {isLoading && (
+                    <div className="text-center py-8">
+                        <div className={`inline-block animate-spin rounded-full h-8 w-8 border-b-2 ${transactionType === 'float' ? 'border-blue-600' : 'border-amber-600'
+                            }`}></div>
+                        <div className="mt-2 text-slate-500 dark:text-slate-400">
+                            Loading {transactionType === 'float' ? 'float' : 'commission'} transactions...
+                        </div>
+                    </div>
+                )}
+            </div>
+
+            {/* Pagination Controls */}
+            <div className="flex flex-col sm:flex-row justify-between items-center mt-4 space-y-4 sm:space-y-0">
+                <div className="flex items-center space-x-2">
+                    <span className="text-sm text-slate-600 dark:text-slate-300">
+                        Showing {(currentPage - 1) * pageSize + 1} - {Math.min(currentPage * pageSize, totalItems)} of {totalItems} transactions
+                    </span>
+                    <select
+                        value={pageSize}
+                        onChange={handlePageSizeChange}
+                        className="py-1 px-2 bg-slate-100 dark:bg-slate-700 border border-slate-200 dark:border-slate-600 rounded-xl text-slate-800 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    >
+                        <option value="5">5 per page</option>
+                        <option value="10">10 per page</option>
+                        <option value="20">20 per page</option>
+                        <option value="50">50 per page</option>
+                    </select>
+                </div>
+                <div className="flex items-center space-x-2">
+                    <button
+                        onClick={() => handlePageChange(1)}
+                        disabled={currentPage === 1}
+                        className="py-1 px-3 bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300 rounded-xl hover:bg-slate-200 dark:hover:bg-slate-600 disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                        First
+                    </button>
+                    <button
+                        onClick={() => handlePageChange(currentPage - 1)}
+                        disabled={currentPage === 1}
+                        className="py-1 px-3 bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300 rounded-xl hover:bg-slate-200 dark:hover:bg-slate-600 disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                        Previous
+                    </button>
+                    <span className="text-sm text-slate-600 dark:text-slate-300">
+                        Page {currentPage} of {totalPages}
+                    </span>
+                    <button
+                        onClick={() => handlePageChange(currentPage + 1)}
+                        disabled={currentPage === totalPages}
+                        className="py-1 px-3 bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300 rounded-xl hover:bg-slate-200 dark:hover:bg-slate-600 disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                        Next
+                    </button>
+                    <button
+                        onClick={() => handlePageChange(totalPages)}
+                        disabled={currentPage === totalPages}
+                        className="py-1 px-3 bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300 rounded-xl hover:bg-slate-200 dark:hover:bg-slate-600 disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                        Last
+                    </button>
+                </div>
+            </div>
+
+            {/* Modals */}
+            <TransactionDetailsModal
+                isOpen={isTransactionModalOpen}
+                onClose={() => {
+                    setIsTransactionModalOpen(false);
+                    setSelectedTransactionIds([]);
+                }}
+                transaction={selectedTransactionIds.length === 1
+                    ? transactions.find((t) => t.id === selectedTransactionIds[0])
+                    : null}
+                transactionType={transactionType}
+            />
+
+            <TransactionStatsModal
+                isOpen={isStatsModalOpen}
+                onClose={() => setIsStatsModalOpen(false)}
+                stats={stats}
+                transactionType={transactionType}
+            />
+        </div>
+    );
+}
+
+export default TransactionsGrid;

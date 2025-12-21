@@ -3,6 +3,7 @@ from app.model.agentcompany import AgentCompany
 from app.model.company import Company
 from datetime import datetime
 import pandas as pd
+from decimal import Decimal
 import uuid
 from flask import current_app
 
@@ -327,3 +328,329 @@ class AgentCompanyService:
             db.session.rollback()
             current_app.logger.error(f"Error in batch create agent companies: {str(e)}")
             return None, 1, f"Batch upload failed: {str(e)}"
+        
+    def get_latest_company_code(self):
+        """Get the latest agent company code"""
+        try:
+            last_agent_company = AgentCompany.query.order_by(AgentCompany.id.desc()).first()
+            if last_agent_company and last_agent_company.agentcompany_code:
+                # Extract numeric part and increment
+                import re
+                match = re.search(r'(\d+)$', last_agent_company.agentcompany_code)
+                if match:
+                    next_num = int(match.group(1)) + 1
+                    return f"AGC{next_num:06d}", None
+            return "AGC000001", None
+        except Exception as e:
+            return None, str(e)
+    
+    def find_company_by_shortcode(self, short_code: str):
+        """Find company by shortcode"""
+        try:
+            company = Company.query.filter_by(shortcode=short_code).first()
+            return company
+        except Exception as e:
+            current_app.logger.error(f"Error finding company by shortcode {short_code}: {str(e)}")
+            return None
+    
+    def create_agent_company_from_scraped_data(self, scraped_data: dict, user_id: int = None) -> dict:
+        """
+        Create or update agent company from scraped data
+        """
+        try:
+            # Check if agent company already exists by short_code
+            short_code = scraped_data.get('short_code')
+            if short_code:
+                existing_agent = AgentCompany.query.filter_by(short_code=short_code).first()
+                if existing_agent:
+                    # Update existing record
+                    return self.update_agent_company_from_scraped_data(existing_agent.id, scraped_data, user_id)
+            
+            # Generate agent company code
+            agent_company_code, error = self.get_latest_company_code()
+            if error:
+                return {
+                    'success': False,
+                    'error': f"Failed to generate company code: {error}"
+                }
+            
+            # Find parent company by shortcode
+            parent_short_code = scraped_data.get('parent_short_code')
+            company_id = None
+            if parent_short_code:
+                parent_company = self.find_company_by_shortcode(parent_short_code)
+                if parent_company:
+                    company_id = parent_company.id
+                else:
+                    current_app.logger.warning(f"Parent company with shortcode {parent_short_code} not found")
+            
+            # Parse registration date
+            registration_date = None
+            reg_date_str = scraped_data.get('registration_date')
+            if reg_date_str:
+                try:
+                    registration_date = datetime.strptime(reg_date_str, '%d-%m-%Y').date()
+                except ValueError:
+                    # Try alternative format
+                    try:
+                        registration_date = datetime.strptime(reg_date_str, '%Y-%m-%d').date()
+                    except ValueError:
+                        pass
+            
+            # Set default values
+            company_name = scraped_data.get('organization_name', 'Unknown Organization')
+            location = scraped_data.get('location', 'Unknown')
+            
+            # Create agent company
+            agent_company = AgentCompany(
+                company_name=company_name,
+                registration_number=f"REG-{uuid.uuid4().hex[:8]}",
+                location=location,
+                agentcompany_code=agent_company_code,
+                
+                # Scraped fields
+                parent_short_code=scraped_data.get('parent_short_code'),
+                identity_model=scraped_data.get('identity_model'),
+                hierarchy_level=scraped_data.get('hierarchy_level'),
+                top_organization=scraped_data.get('top_organization'),
+                organization_name=scraped_data.get('organization_name'),
+                short_code=scraped_data.get('short_code'),
+                identity_status=scraped_data.get('identity_status'),
+                segment=scraped_data.get('segment'),
+                charge_profile=scraped_data.get('charge_profile'),
+                rule_profile=scraped_data.get('rule_profile'),
+                trust_level=scraped_data.get('trust_level'),
+                registration_date=registration_date,
+                established_date=registration_date,
+                
+                # Default values
+                float_balance=Decimal('0.00'),
+                fraud_risk_level='low',
+                status='active',
+                daily_transaction_limit=Decimal('0.00'),
+                commission_rate=Decimal('0.00'),
+                data_source='portal',
+                is_verified=False,
+                company_id=company_id,
+                user_id=user_id
+            )
+            
+            db.session.add(agent_company)
+            db.session.commit()
+            
+            return {
+                'success': True,
+                'message': 'Agent company created successfully',
+                'agent_company': agent_company.to_dict(),
+                'action': 'created'
+            }
+            
+        except Exception as e:
+            db.session.rollback()
+            current_app.logger.error(f"Error creating agent company from scraped data: {str(e)}")
+            return {
+                'success': False,
+                'error': f"Failed to create agent company: {str(e)}"
+            }
+    
+    def update_agent_company_from_scraped_data(self, agent_company_id: int, scraped_data: dict, user_id: int = None) -> dict:
+        """
+        Update existing agent company with scraped data
+        """
+        try:
+            agent_company = AgentCompany.query.get(agent_company_id)
+            if not agent_company:
+                return {
+                    'success': False,
+                    'error': f"Agent company with ID {agent_company_id} not found"
+                }
+            
+            # Update fields from scraped data
+            update_fields = [
+                'organization_name', 'identity_model', 'hierarchy_level',
+                'top_organization', 'identity_status', 'segment',
+                'charge_profile', 'rule_profile', 'trust_level',
+                'parent_short_code'
+            ]
+            
+            for field in update_fields:
+                if field in scraped_data and scraped_data[field] is not None:
+                    setattr(agent_company, field, scraped_data[field])
+            
+            # Update registration date if provided
+            reg_date_str = scraped_data.get('registration_date')
+            if reg_date_str:
+                try:
+                    registration_date = datetime.strptime(reg_date_str, '%d-%m-%Y').date()
+                    agent_company.registration_date = registration_date
+                except ValueError:
+                    pass
+            
+            # Update parent company if parent_short_code changed
+            parent_short_code = scraped_data.get('parent_short_code')
+            if parent_short_code and parent_short_code != agent_company.parent_short_code:
+                parent_company = self.find_company_by_shortcode(parent_short_code)
+                if parent_company:
+                    agent_company.company_id = parent_company.id
+                agent_company.parent_short_code = parent_short_code
+            
+            # Update scraped_at timestamp
+            agent_company.scraped_at = datetime.utcnow()
+            
+            db.session.commit()
+            
+            return {
+                'success': True,
+                'message': 'Agent company updated successfully',
+                'agent_company': agent_company.to_dict(),
+                'action': 'updated'
+            }
+            
+        except Exception as e:
+            db.session.rollback()
+            current_app.logger.error(f"Error updating agent company {agent_company_id}: {str(e)}")
+            return {
+                'success': False,
+                'error': f"Failed to update agent company: {str(e)}"
+            }
+    
+    def create_agent_company(self, data: dict, user_id: int = None) -> dict:
+        """
+        Create a new agent company (manual creation)
+        """
+        try:
+            agent_company_code, error = self.get_latest_company_code()
+            if error:
+                return {
+                    'success': False,
+                    'error': f"Failed to generate company code: {error}"
+                }
+            
+            company_id = data.get('company_id')
+            if company_id and not Company.query.get(company_id):
+                return {
+                    'success': False,
+                    'error': 'Invalid company_id'
+                }
+            
+            # Parse dates
+            established_date = None
+            if data.get('established_date'):
+                try:
+                    established_date = datetime.strptime(data['established_date'], '%Y-%m-%d').date()
+                except ValueError:
+                    pass
+            
+            last_audit_date = None
+            if data.get('last_audit_date'):
+                try:
+                    last_audit_date = datetime.strptime(data['last_audit_date'], '%Y-%m-%d').date()
+                except ValueError:
+                    pass
+            
+            # Parse decimal values
+            float_balance = Decimal(str(data.get('float_balance', '0.0')))
+            daily_transaction_limit = Decimal(str(data.get('daily_transaction_limit', '0.0')))
+            commission_rate = Decimal(str(data.get('commission_rate', '0.0')))
+            
+            # Create agent company
+            agent_company = AgentCompany(
+                company_name=data.get('company_name'),
+                registration_number=f"REG-{uuid.uuid4().hex[:8]}",
+                location=data.get('location'),
+                contact_phone=data.get('contact_phone'),
+                email=data.get('email'),
+                agentcompany_code=agent_company_code,
+                till_number=data.get('till_number'),
+                location_details=data.get('location_details'),
+                store_number=data.get('store_number'),
+                agent_number=data.get('agent_number'),
+                company_id=company_id,
+                established_date=established_date,
+                float_balance=float_balance,
+                status=data.get('status', 'active'),
+                fraud_risk_level=data.get('fraud_risk_level', 'low'),
+                fraud_risk_description=data.get('fraud_risk_description'),
+                daily_transaction_limit=daily_transaction_limit,
+                commission_rate=commission_rate,
+                last_audit_date=last_audit_date,
+                user_id=user_id,
+                data_source='manual',
+                is_verified=True  # Manual entries are verified by default
+            )
+            
+            db.session.add(agent_company)
+            db.session.commit()
+            
+            return {
+                'success': True,
+                'message': 'Agent company created successfully',
+                'agent_company': agent_company.to_dict(),
+                'action': 'created'
+            }
+            
+        except Exception as e:
+            db.session.rollback()
+            current_app.logger.error(f"Error creating agent company: {str(e)}")
+            return {
+                'success': False,
+                'error': f"Failed to create agent company: {str(e)}"
+            }
+    
+    def get_agent_company_by_shortcode(self, short_code: str) -> dict:
+        """Get agent company by shortcode"""
+        try:
+            agent_company = AgentCompany.query.filter_by(short_code=short_code).first()
+            if agent_company:
+                return {
+                    'success': True,
+                    'agent_company': agent_company.to_dict()
+                }
+            return {
+                'success': False,
+                'error': f"Agent company with shortcode {short_code} not found"
+            }
+        except Exception as e:
+            current_app.logger.error(f"Error getting agent company by shortcode: {str(e)}")
+            return {
+                'success': False,
+                'error': str(e)
+            }
+    
+    def get_all_agent_companies(self, filters: dict = None) -> dict:
+        """Get all agent companies with optional filtering"""
+        try:
+            query = AgentCompany.query
+            
+            if filters:
+                if filters.get('company_id'):
+                    query = query.filter_by(company_id=filters['company_id'])
+                if filters.get('status'):
+                    query = query.filter_by(status=filters['status'])
+                if filters.get('data_source'):
+                    query = query.filter_by(data_source=filters['data_source'])
+                if filters.get('search'):
+                    search_term = f"%{filters['search']}%"
+                    query = query.filter(
+                        db.or_(
+                            AgentCompany.company_name.ilike(search_term),
+                            AgentCompany.short_code.ilike(search_term),
+                            AgentCompany.organization_name.ilike(search_term)
+                        )
+                    )
+            
+            agent_companies = query.order_by(AgentCompany.created_at.desc()).all()
+            
+            return {
+                'success': True,
+                'agent_companies': [ac.to_dict() for ac in agent_companies],
+                'count': len(agent_companies)
+            }
+            
+        except Exception as e:
+            current_app.logger.error(f"Error getting agent companies: {str(e)}")
+            return {
+                'success': False,
+                'error': str(e)
+            }
+

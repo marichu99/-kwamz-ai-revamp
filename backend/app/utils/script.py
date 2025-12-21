@@ -1,8 +1,8 @@
 from playwright.sync_api import sync_playwright
 from PIL import Image
-# from app import db
-# from app.model.document import Document
-# from app.model.useragent import UserAgent
+from app import db
+from app.model.document import Document
+from app.model.useragent import UserAgent
 import pytesseract
 from openai import OpenAI
 import re
@@ -188,14 +188,43 @@ def solve_arithmetic_captcha(captcha_image_path: str) -> int:
     else:
         raise ValueError(f"Unsupported operator: {operator}")
 
+def wait_for_login_page_ready(page, timeout: float = 30000):
+    """
+    Wait for the login page to be fully loaded and the form fields to be ready.
+    """
+    try:
+        # Option 1: Wait for all three critical input fields to be visible and editable
+        page.wait_for_selector("//input[@id='shortCode']", state="visible", timeout=timeout)
+        page.wait_for_selector("//input[@id='userAccount']", state="visible", timeout=timeout)
+        page.wait_for_selector("//input[@id='password']", state="visible", timeout=timeout)
+
+        # Optional: Also ensure they are enabled (not disabled)
+        page.wait_for_function(
+            """() => {
+                const shortCode = document.querySelector('#shortCode');
+                const userAccount = document.querySelector('#userAccount');
+                const password = document.querySelector('#password');
+                return shortCode && !shortCode.disabled &&
+                       userAccount && !userAccount.disabled &&
+                       password && !password.disabled;
+            }""",
+            timeout=timeout
+        )
+
+        print("[INFO] Login page is fully loaded and form fields are ready.")
+    except Exception as e:
+        raise Exception("[ERROR] Timeout waiting for login page to load or form fields to become ready.")
 
 def fill_login_form(page, short_code: str, username: str, password: str):
     """
-    Fill in the login form fields.
+    Wait for login page to be ready, then fill in the form fields.
     """
+    wait_for_login_page_ready(page)
+
     page.fill("//input[@id='shortCode']", short_code)
     page.fill("//input[@id='userAccount']", username)
     page.fill("//input[@id='password']", password)
+
     print("[INFO] Login form fields filled successfully.")
     
         

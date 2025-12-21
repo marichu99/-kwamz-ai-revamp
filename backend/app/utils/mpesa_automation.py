@@ -1,6 +1,8 @@
 from playwright.sync_api import sync_playwright,Page,Locator,Download, TimeoutError as PlaywrightTimeoutError
-# from app.utils.script import fill_login_form, capture_and_solve_captcha
-from script import fill_login_form, capture_and_solve_captcha
+from flask import current_app
+from app.utils.script import fill_login_form, capture_and_solve_captcha
+from app.service.transaction_service import TransactionService
+# from script import fill_login_form, capture_and_solve_captcha
 from PIL import Image, ImageFilter, ImageOps
 from dotenv import load_dotenv
 from openai import OpenAI
@@ -16,14 +18,19 @@ import random
 import traceback
 
 
+transaction_service = TransactionService()
+company_shortcode = None
+
 # Load environment variables
 load_dotenv()
 
-def login_to_mpesa():
-    password = os.getenv("AGENT_COMPANY_PASSWORD")
-    username = os.getenv("AGENT_COMPANY_USERNAME")
-    short_code = os.getenv("AGENT_COMPANY_SHORTCODE")
-    url = "https://org.ke.m-pesa.com/#/login?service=https%3A%2F%2Forg.ke.m-pesa.com%2Forgportal%2Fv1%2Fsso%2Fhome"
+def login_to_mpesa(password: str = None, username: str = None, short_code: str = None) -> None:
+    global company_shortcode
+    password = password or os.getenv("AGENT_COMPANY_PASSWORD")
+    username = username or os.getenv("AGENT_COMPANY_USERNAME")
+    short_code = short_code or os.getenv("AGENT_COMPANY_SHORTCODE")
+    company_shortcode = short_code
+    url = "https://org.ke.m-pesa.com/#/login?transaction_service=https%3A%2F%2Forg.ke.m-pesa.com%2Forgportal%2Fv1%2Fsso%2Fhome"
 
     with sync_playwright() as p:
         browser = p.chromium.launch(
@@ -36,6 +43,7 @@ def login_to_mpesa():
         page = context.new_page()
         
         page.goto(url, timeout=600000)
+        time.sleep(3)
         wait_after_click = 5  # seconds
         # Fill login fields once
         fill_login_form(page, short_code, username, password)
@@ -220,105 +228,39 @@ def save_table_to_dataframe_(page: Page, business_shortcode: int,category:str) -
     try:
         print("[INFO] Starting table extraction...")
 
-        headers = []
-        all_data_rows = []
-
-        # Set pagination to maximum
-        print("[INFO] Setting pagination size...")
-        page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
-        # page.wait_for_load_state("networkidle", timeout=10000)
-        
-        pagination_dropdown = "//span[@class='el-pagination__sizes']//i[@class='el-icon el-select__caret el-select__icon']"
-        dropdown = page.locator(pagination_dropdown).first
-        time.sleep(2)
-        
-        if dropdown.is_visible():
-            dropdown.click()
-            
-            for _ in range(3):
-                page.keyboard.press("ArrowDown")
-                time.sleep(0.2)
-            
-            page.keyboard.press("Enter")
-        else:
-            print("[WARN] Pagination size dropdown not visible")
-
-        # Extract headers
-        header_tbl = page.wait_for_selector(
-            "//table[@class='el-table__header']",
-            timeout=10000
-        )
-        
-        soup = BeautifulSoup(header_tbl.inner_html(), "html.parser")
-        tr = soup.find("thead").find("tr")
-        headers = [th.get_text(strip=True) for th in tr.find_all("th")]
-        print(f"[SUCCESS] Headers: {headers}")
-        
-        #
-        scroll_to_bottom(page)
-        
-        # Paginate through all data
         page_no = 1
-        while True:
-            time.sleep(1)  
-            print(f"\n[INFO] Extracting page {page_no}...")
-            
-            try:                
-                page.wait_for_load_state("networkidle", timeout=10000)
-                body_tbl = page.wait_for_selector(
-                    "//table[@class='el-table__body']",
-                    timeout=10000
-                )
-            
-                if not body_tbl.is_visible():
-                    return None, None
-            except Exception as e:
-                print("[WARN] Table body not visible, ending extraction.")
-                break
-            
-            soup = BeautifulSoup(body_tbl.inner_html(), "html.parser")
-            tbody = soup.find("tbody")
-            
-            with open(f"page_{page_no}_content.html", "w", encoding="utf-8") as f:
-                f.write(tbody.prettify())
-            
-            exit(0)
-            if tbody:
-                for tr in tbody.find_all("tr"):
-                    cells = [td.get_text(strip=True) for td in tr.find_all("td")]
-                    if len(cells) == len(headers):
-                        all_data_rows.append([row_index] + cells)
-            
-            # Check for next page
-            time.sleep(1)
-            next_btn = page.locator("//button[@aria-label='Go to next page']//i[@class='el-icon']").first
-            
-            try:
-                if next_btn.is_visible() and next_btn.is_enabled():
-                    # close_irritative_dialog_box(page)
-                    next_btn.click()
-                    page.wait_for_load_state("networkidle", timeout=15000)
-                    page_no += 1
-                    time.sleep(5)  # Small buffer
-                else:
-                    break
-            except:
-                break
-
-        # Create DataFrame
-        if not all_data_rows:
-            print("[WARN] No data rows extracted")
-            df = pd.DataFrame(columns=["OrganizationRowIndex"] + headers)
+        print(f"\n[INFO] Extracting page {page_no}...")
+        
+        try:                
+            page.wait_for_load_state("networkidle", timeout=10000)
+            body_tbl = page.wait_for_selector(
+                "//table[@class='el-table__body']",
+                timeout=10000
+            )
+        
+            if not body_tbl.is_visible():
+                return None, None
+        except Exception as e:
+            print("[WARN] Table body not visible, ending extraction.")
+            return None, None        
+        soup = BeautifulSoup(body_tbl.inner_html(), "html.parser")
+        tbody = soup.find("tbody")
+        
+        trs = tbody.find("tr") if tbody else None
+        # first_tr = trs[0] if trs and len(trs) > 0 else None
+        
+        with open(f"page_{business_shortcode}_content.html", "w", encoding="utf-8") as f:
+            f.write(trs.prettify())
+        span = soup.find("span", class_="receipt-link")
+        if span:
+            transaction_id = span.get_text(strip=True)
+            print("Found transaction ID:", transaction_id)
+            click_receipt_link(page,transaction_id)
+            time.sleep(15)
         else:
-            df = pd.DataFrame(all_data_rows, columns=["OrganizationRowIndex"] + headers)
-            print(f"[SUCCESS] Extracted {len(df)} total rows")
-
-        # Save to CSV
-        csv_path = f"row_{business_shortcode}_{category}_data.csv"
-        df.to_csv(csv_path, index=False)
-        print(f"[SUCCESS] Saved to {csv_path}")
-
-        return df, headers
+            print("Not found")
+        
+        exit(0)
 
     except Exception as exc:
         print(f"[ERROR] Table extraction failed: {exc}")
@@ -424,7 +366,6 @@ def save_table_to_dataframe_download(page: Page,business_shortcode:int,additiona
     if excel_count < 3:
         raise Exception(f"Expected at least 3 Excel export options, found only {excel_count}")
 
-    # THE WINNER: The 3rd Excel = index 2 → this is the "Excel (All Data)" option
     target_excel = excel_items.nth(2)
 
     print(f"[EXPORT] Targeting the 3rd 'Excel' option (index 2 in filtered list)")
@@ -444,15 +385,61 @@ def save_table_to_dataframe_download(page: Page,business_shortcode:int,additiona
     # THIS IS THE MAGIC: Read bytes directly into pandas
     print(f"[EXPORT] Reading {download.suggested_filename} directly into pandas...")
     temp_path = download.path()  # Playwright saves it temporarily
-    df = pd.read_excel(temp_path,skiprows=6)
-    print(df.tail())
     
-    df.to_excel(f"{business_shortcode}_{additional_category}.xlsx")
+    df,columns = update_transactions_from_file(
+        file_path=temp_path,
+        business_shortcode=business_shortcode,
+        transaction_type=additional_category,
+        company_shortcode=company_shortcode,
+        agent_id=None
+    )
 
     print(f"[SUCCESS] Loaded DataFrame in-memory: {df.shape[0]} rows × {df.shape[1]} columns")
     print(f"   Columns: {list(df.columns)}")
     # exit(0)
 
+    return df, columns
+
+# Example of direct usage
+def update_transactions_from_file(file_path, business_shortcode, transaction_type, company_shortcode, agent_id):
+    """
+    Update transactions directly from a file
+    """
+    
+    print(f"Processing file: {file_path}")
+    print(f"Business: {business_shortcode}")
+    print(f"Type: {transaction_type}")
+    
+    # Read the file
+    df = pd.read_excel(file_path, skiprows=6)
+    
+    print(f"Data shape: {df.shape}")
+    print(f"Sample data:")
+    print(df.tail())
+    
+    # Update transactions
+    results = transaction_service.update_transactions_from_dataframe(
+        df=df,
+        transaction_type=transaction_type,
+        company_shortcode=company_shortcode,
+        agent_id=agent_id,
+        business_shortcode=business_shortcode
+    )
+    
+    if results.get('success', False):
+        summary = results.get('summary', {})
+        print(f"\n✅ Success!")
+        print(f"   Updated: {summary.get('updated_count', 0)}")
+        print(f"   Created: {summary.get('created_count', 0)}")
+        print(f"   Total: {summary.get('total_processed', 0)}")
+        print(f"   Success rate: {summary.get('success_rate', 0):.1f}%")
+    else:
+        print(f"\n❌ Failed: {results.get('error', 'Unknown error')}")
+    
+    # Save the processed file
+    df.to_excel(f"{business_shortcode}_{transaction_type}.xlsx", index=False)
+    print(f"💾 Saved to: {business_shortcode}_{transaction_type}.xlsx")
+    
     return df, df.columns
 
 def is_till_frozen(page:Page)-> bool:
@@ -463,22 +450,149 @@ def is_till_frozen(page:Page)-> bool:
     except Exception as e:
         print(f"The till is not frozen {str(e)}")
         return False
-        
-def scrape_till_details(page:Page, business_short_code:int)  -> None:
+
+
+def clean_label_for_db(label: str) -> str:
+    """
+    Clean label string to be used as a database field identifier
+    """
+    # Convert to lowercase and replace spaces with underscores
+    cleaned = label.lower().strip()
+    cleaned = cleaned.replace(" ", "_")
+    cleaned = cleaned.replace("-", "_")
+    cleaned = cleaned.replace(":", "")
+    cleaned = cleaned.replace(".", "")
+    
+    # Specific mappings for common labels
+    label_mapping = {
+        'parent_short_code': 'parent_short_code',
+        'identity_model': 'identity_model',
+        'hierarchy_level': 'hierarchy_level',
+        'top_organization': 'top_organization',
+        'organization_name': 'organization_name',
+        'short_code': 'short_code',
+        'identity_status': 'identity_status',
+        'segment': 'segment',
+        'charge_profile': 'charge_profile',
+        'rule_profile': 'rule_profile',
+        'trust_level': 'trust_level',
+        'registration_date': 'registration_date'
+    }
+    
+    return label_mapping.get(cleaned, cleaned)
+
+def parse_date_string(date_str: str) -> datetime.date:
+    """
+    Parse date string in various formats to datetime.date
+    """
+    if not date_str:
+        return None
+    
+    # Try different date formats
+    date_formats = [
+        '%d-%m-%Y',  # 19-03-2025
+        '%Y-%m-%d',  # 2025-03-19
+        '%d/%m/%Y',  # 19/03/2025
+        '%Y/%m/%d',  # 2025/03/19
+        '%d.%m.%Y',  # 19.03.2025
+    ]
+    
+    for fmt in date_formats:
+        try:
+            return datetime.strptime(date_str, fmt).date()
+        except ValueError:
+            continue
+    
+    return None
+
+def map_scraped_data_to_agent_company(scraped_data: dict, user_id: int = None) -> dict:
+    """
+    Map scraped data to AgentCompany model fields
+    """
+    mapped_data = {
+        'company_name': scraped_data.get('organization_name'),
+        'registration_number': f"SCRAPED-{scraped_data.get('short_code', 'UNKNOWN')}",
+        'location': scraped_data.get('location', 'Unknown'),
+        'identity_model': scraped_data.get('identity_model'),
+        'hierarchy_level': scraped_data.get('hierarchy_level'),
+        'top_organization': scraped_data.get('top_organization'),
+        'organization_name': scraped_data.get('organization_name'),
+        'short_code': scraped_data.get('short_code'),
+        'identity_status': scraped_data.get('identity_status'),
+        'segment': scraped_data.get('segment'),
+        'charge_profile': scraped_data.get('charge_profile'),
+        'rule_profile': scraped_data.get('rule_profile'),
+        'trust_level': scraped_data.get('trust_level'),
+        'data_source': 'portal',
+        'is_verified': False,
+        'user_id': user_id
+    }
+    
+    # Handle registration date
+    reg_date = scraped_data.get('registration_date')
+    if reg_date:
+        mapped_data['registration_date'] = parse_date_string(reg_date)
+        mapped_data['established_date'] = parse_date_string(reg_date)
+    
+    # Handle parent short code (will be linked to company later)
+    parent_short_code = scraped_data.get('parent_short_code')
+    if parent_short_code:
+        mapped_data['parent_short_code'] = parent_short_code
+    
+    return mapped_data
+
+def scrape_till_details(page: Page, business_short_code: int, user_id: int = None) -> dict:
+    """
+    Scrape till details and return processed data
+    """
     try:
         css_selector = ".portal-collapse .portal-collapse-content"
-
-        page.wait_for_selector(css_selector, state="attached")
-
-        # First one
+        
+        # Wait for the selector to be available
+        page.wait_for_selector(css_selector, state="attached", timeout=30000)
+        
+        # Get inner HTML
         inner_html = page.eval_on_selector(
             css_selector,
             "el => el.innerHTML"
         )
         
-        print(f"[DEBUG] Inner HTML of portal-collapse-content:\n{extract_till_info(inner_html)}\n")
+        # Extract till info
+        till_info = extract_till_info(inner_html)
+        
+        print(f"[INFO] Scraped till info for business short code {business_short_code}:")
+        for key, value in till_info.items():
+            print(f"  {key}: {value}")
+        
+        # Map to AgentCompany fields
+        mapped_data = map_scraped_data_to_agent_company(till_info, user_id)
+        
+        return {
+            'success': True,
+            'scraped_data': till_info,
+            'mapped_data': mapped_data,
+            'business_short_code': business_short_code
+        }
+        
     except Exception as e:
-        print(f"Could not get inner HTML {str(e)}")
+        print(f"[ERROR] Could not scrape till details: {str(e)}")
+        return {
+            'success': False,
+            'error': str(e),
+            'business_short_code': business_short_code
+        }
+        
+
+def click_receipt_link(page:Page,transaction_id: str) -> bool:
+    try:
+        print(f"Clicking receipt link for transaction ID: {transaction_id}")
+        selector = f'span.receipt-link:has-text("{transaction_id}")'
+        page.wait_for_selector(selector, state="visible",timeout=5000)
+        page.click(selector)
+        return True
+    except Exception as e:
+        print(f"Error clicking receipt link: {e}")
+        return False
 
 def extract_till_info(inner_html: str) -> dict:
     """
@@ -634,15 +748,15 @@ def go_forth_on_organization(page: Page, row_count: int):
             next_page_btn.click()
             page.wait_for_load_state("networkidle", timeout=20000)
             time.sleep(2)
-            return None  # Continue processing
+            return  False  # Continue processing
         else:
             print(f"[INFO] Next page disabled. Finished all {row_count} rows on last page.")
-            return row_count, False
+            return  False
 
     except Exception as e:
         print(f"[WARNING] Error clicking next page: {e}")
         page.screenshot(path="pagination_error.png")
-        return row_count, False
+        return False
         
 def go_previous_on_organisation(page: Page, row_count: int):
     """
@@ -801,7 +915,6 @@ def select_account_dropdown(page: Page, account_name: str, arrow_down_count: int
         page.screenshot(path=f"dropdown_error_{account_name.lower()}.png")
         return False
 
-
 def process_float_account_details(page: Page, business_short_code: int, pass_value: str) -> tuple:
     # try:
         print("[INFO] Processing Float Account Details")
@@ -838,7 +951,6 @@ def process_float_account_details(page: Page, business_short_code: int, pass_val
     #     page.screenshot(path="float_error.png")
     #     return False
 
-
 def process_commission_account_details(page: Page, business_short_code: int, pass_value: str) -> bool:
     try:
         print("[INFO] Processing Commission Account Details")
@@ -873,7 +985,6 @@ def process_commission_account_details(page: Page, business_short_code: int, pas
         print(f"[ERROR] process_commission_account_details failed: {e}")
         page.screenshot(path="commission_error.png")
         return False
-
 
 def process_float_commission(page: Page, business_short_code: int, pass_value: str) -> bool:
     """Main function – processes both float and commission sequentially"""
@@ -971,7 +1082,7 @@ def select_dates_and_submit_(page: Page) -> bool:
                 timeout=5000
             )
             
-            for i in range(4):
+            for i in range(3):
                 previous_month_icon.click() 
             
             print("The previous button has been clicked thrice .......")
@@ -1302,12 +1413,6 @@ def return_to_organization_list(page) -> bool:
         print(f"[ERROR] Failed to return to organization list: {e}")
         return False
 
-import re
-import time
-import traceback
-from playwright.sync_api import Page, Locator
-
-
 def process_organization_rows(page: Page) -> None:
     """
     Main orchestrator: Processes all organization rows across pagination and virtual scrolling.
@@ -1336,7 +1441,7 @@ def process_organization_rows(page: Page) -> None:
 
         total_processed += processed_on_this_page
 
-        if total_processed >= total_in_list and not to_be_rerun:
+        if total_processed >= total_in_list and len(to_be_rerun) == 0:
             print(f"[SUCCESS] All {total_processed} organizations processed successfully!")
             break
 
@@ -1416,7 +1521,6 @@ def process_page_rows(
 
     return processed_on_page
 
-
 def get_visible_rows(rows_locator: Locator) -> list[Locator]:
     """Return only currently visible rows."""
     count = rows_locator.count()
@@ -1459,9 +1563,9 @@ def process_single_row(page: Page, business_short_code: int, row_number: int) ->
             return_to_organization_list(page)
             return False
 
-        if not process_float_commission(page, business_short_code, pass_value="second"):
+        if not process_float_commission(page, business_short_code, pass_value="first"):
             print("[ERROR] Failed to process float/commission")
-            return_to_organization_list(page)
+            # return_to_organization_list(page)
             return False
 
         # Return safely
@@ -1481,6 +1585,6 @@ def process_single_row(page: Page, business_short_code: int, row_number: int) ->
         close_detail_panel(page)
         return False
 
-if __name__ == "__main__":
-    # solveCaptchaXai()
-    login_to_mpesa()
+# if __name__ == "__main__":
+#     # solveCaptchaXai()
+#     login_to_mpesa()
