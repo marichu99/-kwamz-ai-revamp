@@ -35,6 +35,8 @@ def create_app():
     # Import models here so they are always registered
     from app.model.company import Company
     from app.model.agentcompany import AgentCompany
+    from app.model.agent_accounts import AgentAccount
+    from app.model.agent_account_balances import AgentAccountBalance
     from app.model.useragent import UserAgent
     from app.model.director import Director
     from app.model.shareholder import Shareholder

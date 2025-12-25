@@ -1,14 +1,18 @@
 from playwright.sync_api import sync_playwright,Page,Locator,Download, TimeoutError as PlaywrightTimeoutError
 from flask import current_app
 from app.utils.script import fill_login_form, capture_and_solve_captcha
+from app.utils.email_utils import generate_scraping_report_email, send_scraping_report_email
 from app.service.transaction_service import TransactionService
+from app.service.agentcompany_service import AgentCompanyService
+from app.model.user import User
 # from script import fill_login_form, capture_and_solve_captcha
 from PIL import Image, ImageFilter, ImageOps
 from dotenv import load_dotenv
 from openai import OpenAI
 from bs4 import BeautifulSoup
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import List, Dict, Any, Optional, Tuple
+from decimal import Decimal
 import pandas as pd
 import re
 import base64
@@ -18,17 +22,26 @@ import random
 import traceback
 
 
+
+
+
 transaction_service = TransactionService()
+agent_company_service = AgentCompanyService()
 company_shortcode = None
+user_id = None
 
 # Load environment variables
 load_dotenv()
 
-def login_to_mpesa(password: str = None, username: str = None, short_code: str = None) -> None:
-    global company_shortcode
-    password = password or os.getenv("AGENT_COMPANY_PASSWORD")
-    username = username or os.getenv("AGENT_COMPANY_USERNAME")
-    short_code = short_code or os.getenv("AGENT_COMPANY_SHORTCODE")
+def login_to_mpesa(password: str = None, username: str = None, short_code: str = None, user_id_passed: str = None) -> None:
+    global company_shortcode, user_id
+    password = password 
+    # or os.getenv("AGENT_COMPANY_PASSWORD")
+    username = username 
+    # or os.getenv("AGENT_COMPANY_USERNAME")
+    user_id = user_id_passed
+    short_code = short_code 
+    # or os.getenv("AGENT_COMPANY_SHORTCODE")
     company_shortcode = short_code
     url = "https://org.ke.m-pesa.com/#/login?transaction_service=https%3A%2F%2Forg.ke.m-pesa.com%2Forgportal%2Fv1%2Fsso%2Fhome"
 
@@ -223,6 +236,88 @@ def scroll_to_bottom(page: Page) -> None:
     except Exception as e:
         print(f"[ERROR] Failed to scroll to bottom: {e}")
 
+def extract_extra_till_info(page: Page, extra_info: dict) -> Dict[str, Any]:
+    """Extracts additional till information from the account details section."""
+    try:
+        # Wait for the account information section to load
+        # Adjust the selector based on your actual page structure
+        account_info_section = page.wait_for_selector(".el-col .basic-info-card", timeout=5000)
+        
+        # Get all the basic-info-card elements
+        all_cards = page.query_selector_all(".el-col .basic-info-card")
+        
+        # Debug: Save HTML for inspection
+        # html_content = page.content()
+        # with open("extra_info_debug.html", "w", encoding="utf-8") as f:
+        #     f.write(html_content)
+
+        extracted_data = {}
+        
+        for card in all_cards:
+            try:
+                # Extract label and value from each card
+                label_element = card.query_selector(".basic-info-card__label")
+                value_element = card.query_selector(".basic-info-card__value")
+                
+                if label_element and value_element:
+                    label = label_element.inner_text().strip().replace(':', '').replace('.', '')
+                    value = value_element.inner_text().strip()
+                    
+                    # Convert label to snake_case for easier use as dictionary key
+                    label_key = label.lower().replace(' ', '_').replace('.', '').replace(':', '')
+                    
+                    # Clean up the value (remove commas from numbers)
+                    if label_key in ['current_balance', 'available_balance', 'reserved_balance', 'unclearbalance']:
+                        # Remove commas and convert to Decimal
+                        value = value.replace(',', '')
+                        try:
+                            value = Decimal(value)
+                        except:
+                            # Keep as string if conversion fails
+                            pass
+                    
+                    # Handle special cases
+                    if label_key == 'unclearbalance':
+                        label_key = 'unclear_balance'  # Standardize naming
+                    elif label_key == 'is_hot_account':
+                        value = value.lower() == 'yes'  # Convert to boolean
+                    
+                    extracted_data[label_key] = value
+            except Exception as card_error:
+                print(f"[WARNING] Error processing card: {card_error}")
+                continue
+        
+        # Now merge with the existing extra_info
+        if extracted_data:
+            print(f"[INFO] Extracted {len(extracted_data)} account details:")
+            for key, value in extracted_data.items():
+                print(f"  {key}: {value}")
+            
+            # Add the extracted data to extra_info
+            extra_info.update({
+                'account_details': extracted_data,
+                'account_number': extracted_data.get('account_no'),
+                'account_type': extracted_data.get('account_type'),
+                'account_alias': extracted_data.get('alias'),
+                'account_currency': extracted_data.get('currency'),
+                'account_relationship': extracted_data.get('account_relationship'),
+                'current_balance': extracted_data.get('current_balance'),
+                'available_balance': extracted_data.get('available_balance'),
+                'account_status': extracted_data.get('status'),
+                'is_hot_account': extracted_data.get('is_hot_account'),
+                'account_scraped_at': datetime.now()
+            })
+            
+        save_results = agent_company_service.save_or_update_scraped_agent_company(mapped_data=extra_info,user_id=user_id)
+        
+        print(f"[DEBUG] Saved results: {save_results}")
+        return save_results
+        
+    except Exception as e:
+        print(f"[ERROR] Failed to extract extra till info: {e}")
+        # Return the original extra_info dict without modifications
+        return extra_info
+
 def save_table_to_dataframe_(page: Page, business_shortcode: int,category:str) -> tuple:
     """Extract all rows from paginated table and save to CSV."""
     try:
@@ -260,74 +355,13 @@ def save_table_to_dataframe_(page: Page, business_shortcode: int,category:str) -
         else:
             print("Not found")
         
-        exit(0)
-
     except Exception as exc:
         print(f"[ERROR] Table extraction failed: {exc}")
         traceback.print_exc()
         return None, None
 
-# def save_table_to_dataframe_download(page: Page, max_wait: int = 30_000):
-#     print("[EXPORT] Starting Excel export...")
-
-#     # 1. Find the export button (more resilient selector)
-#     export_trigger = page.locator("div.el-dropdown.padding-export >> span").first
-#     export_trigger.wait_for(state="visible", timeout=max_wait)
-#     export_trigger.scroll_into_view_if_needed()
-
-#     # 2. Force hover + small delay to let Vue react
-#     export_trigger.hover(force=True, timeout=10_000)
-#     print("[EXPORT] Hovered successfully")
-
-#     # THIS IS THE KEY FIX:
-#     # Instead of waiting for the <ul> to be "visible", wait for it to have a client rectangle (i.e. positioned)
-#     # page.wait_for_function("() => !!document.querySelector('ul.el-dropdown-menu[style*=\"display: block\"]') || !!document.querySelector('ul.el-dropdown-menu[x-placement]')", timeout=10000)
-
-#     print("[EXPORT] Dropdown menu is actually open and positioned")
-#     time.sleep(5)
-
-#     # 3. Now safely find the 3rd Excel item
-#     excel_items = page.get_by_role("menuitem", name="Excel", exact=True)
-#     excel_count = excel_items.count()
-#     print(f"[EXPORT] Found {excel_count} Excel options")
-    
-#     if(int(excel_count)>0):
-#         try:
-#             excel_items[-1].click()
-#         except Exception as e:
-#             print(f"We hit a snag {str(e)}")
-#             exit(0)
-
-#     if excel_count < 3:
-#         # Fallback: list all menu items with text
-#         items = page.locator("ul.el-dropdown-menu >> li.el-dropdown-menu__item").all()
-#         excel_items = [item for item in items if item.inner_text().strip() == "Excel"]
-#         if len(excel_items) < 3:
-#             raise Exception(f"Only found {len(excel_items)} Excel items, expected at least 3")
-
-#     target_excel = excel_items.nth(2) if excel_count >= 3 else excel_items[2]
-#     target_excel.scroll_into_view_if_needed()
-
-#     # 4. Click with expect_download
-#     with page.expect_download(timeout=60_000) as download_info:
-#         # Try normal click first
-#         try:
-#             target_excel.click(timeout=15_000)
-#         except:
-#             # Final fallback: click via JavaScript (bypasses visibility checks)
-#             print("[EXPORT] Using JS click as last resort...")
-#             target_excel.evaluate("node => node.click()")
-
-#     download = download_info.value
-#     filename = f"float_export_{int(time.time())}.xlsx"
-#     download_path = f"./downloads/{filename}"
-#     download.save_as(download_path)
-#     print(f"[SUCCESS] Excel saved: {download_path}")
-
-#     df = pd.read_excel(download_path)
-#     return df, df.columns
-
 def save_table_to_dataframe_download(page: Page,business_shortcode:int,additional_category:str="") -> tuple:
+    close_irritative_dialog_box(page)
     print("[EXPORT] Starting Excel export...")
 
     export_trigger = page.locator("div.el-dropdown.padding-export >> span").first
@@ -396,7 +430,6 @@ def save_table_to_dataframe_download(page: Page,business_shortcode:int,additiona
 
     print(f"[SUCCESS] Loaded DataFrame in-memory: {df.shape[0]} rows × {df.shape[1]} columns")
     print(f"   Columns: {list(df.columns)}")
-    # exit(0)
 
     return df, columns
 
@@ -505,47 +538,67 @@ def parse_date_string(date_str: str) -> datetime.date:
     
     return None
 
-def map_scraped_data_to_agent_company(scraped_data: dict, user_id: int = None) -> dict:
+def map_scraped_data_to_agent_company(scraped_data: dict) -> dict:
     """
     Map scraped data to AgentCompany model fields
     """
+    # Based on your console output, the keys might be in Title Case
+    # Let's try to handle both Title Case and lowercase versions
+    def get_value(key):
+        # Try title case first (from your print output)
+        title_key = key.title().replace('_', ' ')
+        if title_key in scraped_data:
+            return scraped_data[title_key]
+        # Try lowercase
+        if key in scraped_data:
+            return scraped_data[key]
+        # Try with underscores
+        underscore_key = key.lower().replace(' ', '_')
+        if underscore_key in scraped_data:
+            return scraped_data[underscore_key]
+        return None
+    
     mapped_data = {
-        'company_name': scraped_data.get('organization_name'),
-        'registration_number': f"SCRAPED-{scraped_data.get('short_code', 'UNKNOWN')}",
-        'location': scraped_data.get('location', 'Unknown'),
-        'identity_model': scraped_data.get('identity_model'),
-        'hierarchy_level': scraped_data.get('hierarchy_level'),
-        'top_organization': scraped_data.get('top_organization'),
-        'organization_name': scraped_data.get('organization_name'),
-        'short_code': scraped_data.get('short_code'),
-        'identity_status': scraped_data.get('identity_status'),
-        'segment': scraped_data.get('segment'),
-        'charge_profile': scraped_data.get('charge_profile'),
-        'rule_profile': scraped_data.get('rule_profile'),
-        'trust_level': scraped_data.get('trust_level'),
+        'company_name': get_value('organization_name') or scraped_data.get('Organization Name'),
+        'business_short_code': scraped_data.get('business_short_code') or scraped_data.get('business_short_code'),
+        'registration_number': f"SCRAPED-{get_value('short_code') or scraped_data.get('Short Code') or 'UNKNOWN'}",
+        'location': get_value('location') or scraped_data.get('Location', 'Unknown'),
+        'identity_model': get_value('identity_model') or scraped_data.get('Identity Model'),
+        'hierarchy_level': get_value('hierarchy_level') or scraped_data.get('Hierarchy Level'),
+        'top_organization': get_value('top_organization') or scraped_data.get('Top Organization'),
+        'organization_name': get_value('organization_name') or scraped_data.get('Organization Name'),
+        'short_code': get_value('short_code') or scraped_data.get('Short Code'),
+        'identity_status': get_value('identity_status') or scraped_data.get('Identity Status'),
+        'segment': get_value('segment') or scraped_data.get('Segment'),
+        'charge_profile': get_value('charge_profile') or scraped_data.get('Charge Profile'),
+        'rule_profile': get_value('rule_profile') or scraped_data.get('Rule Profile'),
+        'trust_level': get_value('trust_level') or scraped_data.get('Trust Level'),
         'data_source': 'portal',
         'is_verified': False,
         'user_id': user_id
     }
     
     # Handle registration date
-    reg_date = scraped_data.get('registration_date')
+    reg_date = get_value('registration_date') or scraped_data.get('Registration Date')
     if reg_date:
-        mapped_data['registration_date'] = parse_date_string(reg_date)
-        mapped_data['established_date'] = parse_date_string(reg_date)
+        parsed_date = parse_date_string(reg_date)
+        if parsed_date:
+            mapped_data['registration_date'] = parsed_date
+            mapped_data['established_date'] = parsed_date
     
-    # Handle parent short code (will be linked to company later)
-    parent_short_code = scraped_data.get('parent_short_code')
+    # Handle parent short code
+    parent_short_code = get_value('parent_short_code') or scraped_data.get('Parent Short Code')
     if parent_short_code:
         mapped_data['parent_short_code'] = parent_short_code
     
     return mapped_data
 
-def scrape_till_details(page: Page, business_short_code: int, user_id: int = None) -> dict:
+def scrape_till_details(page: Page, business_short_code: int) -> dict:
     """
     Scrape till details and return processed data
     """
     try:
+        close_irritative_dialog_box(page)
         css_selector = ".portal-collapse .portal-collapse-content"
         
         # Wait for the selector to be available
@@ -561,18 +614,16 @@ def scrape_till_details(page: Page, business_short_code: int, user_id: int = Non
         till_info = extract_till_info(inner_html)
         
         print(f"[INFO] Scraped till info for business short code {business_short_code}:")
+        till_info['business_short_code'] = business_short_code
         for key, value in till_info.items():
             print(f"  {key}: {value}")
         
         # Map to AgentCompany fields
-        mapped_data = map_scraped_data_to_agent_company(till_info, user_id)
-        
-        return {
-            'success': True,
-            'scraped_data': till_info,
-            'mapped_data': mapped_data,
-            'business_short_code': business_short_code
-        }
+        mapped_data = map_scraped_data_to_agent_company(till_info)
+                        
+        print(f"[INFO] Save result for business short code {business_short_code}: {mapped_data}")
+
+        return mapped_data
         
     except Exception as e:
         print(f"[ERROR] Could not scrape till details: {str(e)}")
@@ -671,7 +722,6 @@ def save_table_to_dataframe_download_debug(page: Page, max_wait: int = 30_000):
 
     # Stop here for debugging
     print("Stopping for inspection. Comment out exit() when ready.")
-    # exit(0) 
     
 def first_day_of_quarter() -> str:
     """
@@ -748,7 +798,7 @@ def go_forth_on_organization(page: Page, row_count: int):
             next_page_btn.click()
             page.wait_for_load_state("networkidle", timeout=20000)
             time.sleep(2)
-            return  False  # Continue processing
+            return  True  # Continue processing
         else:
             print(f"[INFO] Next page disabled. Finished all {row_count} rows on last page.")
             return  False
@@ -758,7 +808,7 @@ def go_forth_on_organization(page: Page, row_count: int):
         page.screenshot(path="pagination_error.png")
         return False
         
-def go_previous_on_organisation(page: Page, row_count: int):
+def go_previous_on_organisation(page: Page):
     """
     Clicks 'Next Page' if available. Returns True/False indicating if more pages exist.
     """
@@ -772,13 +822,13 @@ def go_previous_on_organisation(page: Page, row_count: int):
             time.sleep(2)
             return None  # Continue processing
         else:
-            print(f"[INFO] Previous page disabled. Finished all {row_count} rows on last page.")
-            return row_count, False
+            print(f"[INFO] Previous page disabled.")
+            return None
 
     except Exception as e:
         print(f"[WARNING] Error clicking previous page: {e}")
         page.screenshot(path="pagination_error.png")
-        return row_count, False
+        return None
     
 def rerun_failed_codes(page: Page, failed_codes: List[int], max_retries: int = 2) -> bool:
     """
@@ -813,7 +863,7 @@ def rerun_failed_codes(page: Page, failed_codes: List[int], max_retries: int = 2
 
             for i in range(rows_locator.count()):
                 row = rows_locator.nth(i)
-                if not row.is_visible(timeout=2000):
+                if not row.is_visible():
                     continue
 
                 try:
@@ -915,13 +965,15 @@ def select_account_dropdown(page: Page, account_name: str, arrow_down_count: int
         page.screenshot(path=f"dropdown_error_{account_name.lower()}.png")
         return False
 
-def process_float_account_details(page: Page, business_short_code: int, pass_value: str) -> tuple:
-    # try:
+def process_float_account_details(page: Page, business_short_code: int, mapped_data: Optional[dict], pass_value: str) -> tuple:
+    try:
         print("[INFO] Processing Float Account Details")
 
         # Step 1: Select Float Account (usually 2nd or 3rd option)
         if not select_account_dropdown(page, "Float Account", arrow_down_count=2):
             return "dropdown",False
+        
+        extract_extra_till_info(page, mapped_data)
         
         print("We are checking whether a till is frozen or not")        
         if is_till_frozen(page):
@@ -929,16 +981,18 @@ def process_float_account_details(page: Page, business_short_code: int, pass_val
 
         print(f"This is the date and time selection")
         # Step 2: Set Start Time = 1st day of current month
-        select_dates_and_submit_(page)
-
+        # select_dates_and_submit_(page)
+        
         time.sleep(4)  # Wait for table to load
 
         print("We are trying to save to the dataframe")
         # df, headers = save_table_to_dataframe_download(page, row_index=business_short_code, category="float")
-        if(pass_value=="first"):
-            df, headers = save_table_to_dataframe_download(page,business_shortcode=business_short_code,additional_category="float")
-        else:
-            df, headers = save_table_to_dataframe_(page,business_shortcode=business_short_code,category=pass_value)
+        # if(pass_value=="first"):
+        #     df, headers = save_table_to_dataframe_download(page,business_shortcode=business_short_code,additional_category="float")
+        # else:
+        #     df, headers = save_table_to_dataframe_(page,business_shortcode=business_short_code,category=pass_value)
+        
+        df,headers = scrape_180_days_monthly(page,business_short_code=business_short_code,pass_value=pass_value,additional_category="float")
         if df is not None:
             print("[SUCCESS] Float table extracted")
             return "dataframe",True
@@ -946,12 +1000,24 @@ def process_float_account_details(page: Page, business_short_code: int, pass_val
             print("[ERROR] Failed to extract float table")
             return "dataframe",False
 
-    # except Exception as e:
-    #     print(f"[ERROR] process_float_account_details failed: {e}")
-    #     page.screenshot(path="float_error.png")
-    #     return False
+    except Exception as e:
+        print(f"[ERROR] process_float_account_details failed: {e}")
+        page.screenshot(path="float_error.png")
+        return False
 
-def process_commission_account_details(page: Page, business_short_code: int, pass_value: str) -> bool:
+def click_search_button(page: Page) -> bool:
+    try:
+        print("[INFO] Clicking Search button")
+        search_button = page.locator("//div[@class='section-content']//button").first
+        search_button.wait_for(state="visible", timeout=10000)
+        search_button.click(force=True)
+        print("[INFO] Search button clicked")
+        return True
+    except Exception as e:
+        print(f"[ERROR] Failed to click Search button: {e}")
+        return False
+
+def process_commission_account_details(page: Page, business_short_code: int, mapped_data: Optional[dict], pass_value: str) -> bool:
     try:
         print("[INFO] Processing Commission Account Details")
         scroll_to_top(page)
@@ -961,19 +1027,18 @@ def process_commission_account_details(page: Page, business_short_code: int, pas
         if not select_account_dropdown(page, "Commission Account", arrow_down_count=3):
             return False
 
+        extract_extra_till_info(page, mapped_data)
+        
         # Step 2: Click the Query/Search button
-        query_button = page.locator("//div[@class='section-content']//button").first
-        query_button.wait_for(state="visible", timeout=10000)
-        query_button.click(force=True)
-        print("[INFO] Query button clicked")
-
-        time.sleep(4)
+        # click_search_button(page)
 
         # df, headers = save_table_to_dataframe_download(page, row_index=business_short_code, category="commission")
-        if(pass_value=="first"):
-            df, headers = save_table_to_dataframe_download(page,business_shortcode=business_short_code,additional_category="commission")
-        else:
-            df, headers = save_table_to_dataframe_(page,business_shortcode=business_short_code,additional_category=pass_value)
+        # if(pass_value=="first"):
+        #     df, headers = save_table_to_dataframe_download(page,business_shortcode=business_short_code,additional_category="commission")
+        # else:
+        #     df, headers = save_table_to_dataframe_(page,business_shortcode=business_short_code,additional_category=pass_value)
+        
+        df,headers = scrape_180_days_monthly(page,business_short_code=business_short_code,pass_value=pass_value,additional_category="commission")
         if df is not None:
             print("[SUCCESS] Commission table extracted")
             return True
@@ -986,12 +1051,12 @@ def process_commission_account_details(page: Page, business_short_code: int, pas
         page.screenshot(path="commission_error.png")
         return False
 
-def process_float_commission(page: Page, business_short_code: int, pass_value: str) -> bool:
+def process_float_commission(page: Page, business_short_code: int , mapped_data:Optional[dict], pass_value: str) -> bool:
     """Main function – processes both float and commission sequentially"""
     
     trials = 3
-    
-    proc_type, success = process_float_account_details(page, business_short_code,pass_value)
+
+    proc_type, success = process_float_account_details(page, business_short_code,mapped_data=mapped_data, pass_value=pass_value)
     print(f"[DEBUG] Float Account processing result: {proc_type}, success: {success}")
     if not success and proc_type != "frozen":
         close_irritative_dialog_box(page)
@@ -999,7 +1064,7 @@ def process_float_commission(page: Page, business_short_code: int, pass_value: s
         while trials > 0:
             trials -= 1
             print(f"[INFO] Retrying Float Account step {business_short_code} ({3 - trials} attempts left)...")
-            proc_type_inner, success_inner = process_float_account_details(page, business_short_code,pass_value)
+            proc_type_inner, success_inner = process_float_account_details(page, business_short_code,mapped_data=mapped_data, pass_value=pass_value)
             if success_inner:
                 print("[SUCCESS] Float Account step completed")
                 break
@@ -1016,13 +1081,13 @@ def process_float_commission(page: Page, business_short_code: int, pass_value: s
     # Small pause to let page stabilize
     time.sleep(2)
 
-    if not process_commission_account_details(page, business_short_code,pass_value):
+    if not process_commission_account_details(page, business_short_code,mapped_data=mapped_data, pass_value=pass_value):
         print(f"[ERROR] Failed at Commission Account step {business_short_code} - Retrying...")
         close_irritative_dialog_box(page)
         while trials > 0:
             trials -= 1
             print(f"[INFO] Retrying Commission Account step {business_short_code} ({3 - trials} attempts left)...")
-            if process_commission_account_details(page, business_short_code,pass_value):
+            if process_commission_account_details(page, business_short_code,mapped_data=mapped_data, pass_value=pass_value):
                 print("[SUCCESS] Commission Account step completed")
                 break
             time.sleep(2)  # Wait before retrying
@@ -1033,6 +1098,204 @@ def process_float_commission(page: Page, business_short_code: int, pass_value: s
 
     print(f"[SUCCESS] Completed processing business {business_short_code}")
     return True
+
+def select_dates_and_submit_monthly(page: Page, month_offset: int = 0) -> bool:
+    """
+    Select a specific month (month by month scraping)
+    month_offset: 0 = current month, 1 = 30-60 days ago, 2 = 60-90 days ago, etc.
+    Each offset represents approximately 30 days
+    """
+    try:
+        # Find date picker inputs
+        start_time_input = page.wait_for_selector(
+            "//input[@placeholder='Start Time']", 
+            timeout=30000
+        )
+        print("[✓] Found Start Time date picker input")
+        
+        end_time_input = page.wait_for_selector(
+            "//input[@placeholder='End Time']", 
+            timeout=30000
+        )
+        print("[✓] Found End Time date picker input")
+        
+    except Exception as e:
+        print(f"[ERROR] Could not find date picker inputs: {e}")
+        return False
+    
+    try:
+        # Calculate dates for 180 days back, month by month
+        today = datetime.now()
+        
+        # Each month_offset represents 30 days back
+        # month_offset=0: 0-30 days ago
+        # month_offset=1: 30-60 days ago
+        # month_offset=2: 60-90 days ago
+        # month_offset=3: 90-120 days ago
+        # month_offset=4: 120-150 days ago
+        # month_offset=5: 150-180 days ago
+        
+        # Calculate start date (days_ago_end of the range)
+        days_to_go_back_end = month_offset * 30
+        days_to_go_back_start = days_to_go_back_end + 30
+        
+        # Calculate the date range
+        end_date = today - timedelta(days=days_to_go_back_end)
+        start_date = today - timedelta(days=days_to_go_back_start)
+        
+        # Ensure we're within 180 days limit
+        if days_to_go_back_start > 180:
+            print(f"[INFO] Month offset {month_offset} exceeds 180 days limit")
+            return False
+        
+        # Format dates with time appended
+        start_date_str = f"{start_date.strftime('%d/%m/%Y')} 00:00:00"
+        end_date_str = f"{end_date.strftime('%d/%m/%Y')} 23:59:59"  # Changed to end of day
+        
+        print(f"[INFO] Selecting date range {month_offset+1}/6:")
+        print(f"[INFO] From: {start_date_str}")
+        print(f"[INFO] To: {end_date_str}")
+        
+        # Close any open calendars first
+        page.click("body", position={"x": 10, "y": 10})
+        time.sleep(1)
+        
+        # --- SET START DATE WITH TIME ---
+        print("[STEP 1] Setting Start Date with time...")
+        
+        # Click to open calendar if needed
+        start_time_input.click()
+        
+        # Clear input field
+        start_time_input.fill("")
+        time.sleep(0.5)
+        
+        # Type start date with time
+        start_time_input.type(start_date_str)
+        
+        # Press Enter to confirm
+        start_time_input.press("Enter")
+        time.sleep(1)
+        
+        # --- SET END DATE WITH TIME ---
+        print("[STEP 2] Setting End Date with time...")
+        
+        # Click End Time input
+        end_time_input.click()
+        
+        # Clear input field
+        end_time_input.fill("")
+        time.sleep(0.5)
+        
+        # Type end date with time
+        end_time_input.type(end_date_str)
+        
+        # Press Enter to confirm
+        end_time_input.press("Enter")
+        time.sleep(1)
+        
+        # --- SUBMIT THE FORM ---
+        print("[STEP 3] Submitting form...")
+        
+        # Try to find and click submit button if exists
+        click_search_button(page)
+                
+        # Wait for results to load
+        time.sleep(4)
+        print("[✓] Form submitted successfully")
+        return True
+        
+    except Exception as e:
+        print(f"[ERROR] Could not set dates: {e}")
+        import traceback
+        traceback.print_exc()
+        return False
+
+# Main function to scrape 180 days month by month
+def scrape_180_days_monthly(page:Page, business_short_code:int=0, pass_value:str="",additional_category=None) -> tuple:
+    """
+    Scrape data for the last 180 days, divided into 6 monthly chunks
+    """
+    all_data = []
+    
+    # 180 days divided into 6 chunks of 30 days each
+    total_months = 6
+    
+    for month_offset in range(total_months):
+        close_irritative_dialog_box(page)
+        print(f"\n{'='*60}")
+        print(f"Scraping month chunk {month_offset+1}/{total_months}")
+        print('='*60)
+        
+        # Method 1: 30-day chunks
+        success = select_dates_and_submit_monthly(page, month_offset=month_offset)
+        
+        # Method 2: Exact month boundaries (uncomment if preferred)
+        # success = select_exact_month_back(page, months_back=month_offset)
+        
+        if not success:
+            close_irritative_dialog_box(page)
+            time.sleep(2)
+            print(f"[INFO] Retrying date selection for month offset {month_offset}...")
+            success = select_dates_and_submit_monthly(page, month_offset=month_offset)
+            if not success:
+                close_irritative_dialog_box(page)
+                print(f"[ERROR] Failed to select dates for month offset {month_offset}")
+                continue
+        
+        # Wait for table to load
+        time.sleep(1)
+        
+        print("Saving data for this period to dataframe...")
+        
+        # Get data for this period
+        try:
+            if pass_value == "first":
+                df, headers = save_table_to_dataframe_download(
+                    page, 
+                    business_shortcode=business_short_code,
+                    additional_category=additional_category
+                )
+            else:
+                df, headers = save_table_to_dataframe_(
+                    page,
+                    business_shortcode=business_short_code,
+                    category=pass_value
+                )
+            
+            if len(df) > 0:
+                # Add period information
+                today = datetime.now()
+                days_ago_start = (month_offset + 1) * 30
+                days_ago_end = month_offset * 30
+                
+                df['period_days_ago'] = f"{days_ago_start}-{days_ago_end} days ago"
+                df['scrape_timestamp'] = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                df['month_offset'] = month_offset
+                
+                all_data.append(df)
+                
+                print(f"[SUCCESS] Scraped {len(df)} rows for period {days_ago_start}-{days_ago_end} days ago")
+            else:
+                print("[INFO] No data found in dataframe")
+                
+        except Exception as e:
+            print(f"[ERROR] Failed to save data for month offset {month_offset}: {e}")
+        
+        # Add delay between requests
+        if month_offset < total_months - 1:
+            print("[INFO] Waiting before next period...")
+            time.sleep(2)
+    
+    # Combine all data
+    if all_data:
+        combined_df = pd.concat(all_data, ignore_index=True)
+        print(f"\n{'='*60}")
+        print(f"TOTAL DATA: {len(combined_df)} rows from {len(all_data)} periods")
+        print('='*60)
+        return combined_df, headers if all_data else []
+    
+    return pd.DataFrame(), []
 
 def select_dates_and_submit_(page: Page) -> bool:
         try:
@@ -1131,157 +1394,6 @@ def select_dates_and_submit_(page: Page) -> bool:
             traceback.print_exc()
             return False
 
-# def process_float_account_details(page: Page,business_short_code: int):
-#     """
-#     Processes the float account details page:
-#     1. Finds the Start Time date picker input (first date picker)
-#     2. Finds the End Time date picker input (second date picker)
-#     3. Fills Start Time with first day of current month
-#     4. Presses Tab three times and Enter to submit
-#     5. Saves page content to output/float_details.html
-    
-#     Args:
-#         page: Playwright page object
-    
-#     Returns:
-#         bool: True if successful, False otherwise
-#     """
-#     try:
-#         print("[INFO] Processing float account details...")
-        
-#         # Click dropdown
-#         dropdown_icon = page.locator(
-#             "//div[@class='el-form-item is-required asterisk-left el-form-item--label-top none-margin-bottom']//div[@class='el-select__selection']"
-#         ).first
-#         # dropdown_icon.click()
-        
-#         if dropdown_icon.is_visible():
-#             dropdown_icon.click()
-#             print("[INFO] Dropdown clicked, waiting for options...")
-        
-#             # time.sleep(1)
-            
-#             for _ in range(2):
-#                 page.keyboard.press("ArrowDown")
-#                 time.sleep(0.3)
-            
-#             page.keyboard.press("Enter")
-
-        
-#         # Step 1 & 2: Find date picker inputs using more stable selectors
-#         try:
-#             # Find the Start Time input (first date picker with placeholder "Start Time")
-#             start_time_input = page.wait_for_selector(
-#                 "//input[@placeholder='Start Time']", 
-#                 timeout=10000
-#             )
-#             print("[✓] Found Start Time date picker input")
-            
-#             # Find the End Time input (first date picker with placeholder "End Time")
-#             end_time_input = page.wait_for_selector(
-#                 "//input[@placeholder='End Time']", 
-#                 timeout=10000
-#             )
-#             print("[✓] Found End Time date picker input")
-            
-#         except Exception as e:
-#             print(f"[ERROR] Could not find date picker inputs: {e}")
-            
-#             # Fallback: Try finding by class and position
-#             try:
-#                 print("[INFO] Trying fallback selector for date pickers...")
-#                 date_inputs = page.query_selector_all(
-#                     "//div[@class='el-date-editor']//input[@class='el-input__inner']"
-#                 )
-#                 if len(date_inputs) >= 2:
-#                     start_time_input = date_inputs[0]
-#                     end_time_input = date_inputs[1]
-#                     print(f"[✓] Found {len(date_inputs)} date picker inputs using fallback")
-#                 else:
-#                     print(f"[ERROR] Expected at least 2 date inputs, found {len(date_inputs)}")
-#                     return False
-#             except Exception as fallback_error:
-#                 print(f"[ERROR] Fallback selector also failed: {fallback_error}")
-#                 return False
-        
-#         # Step 3: Fill Start Time with first day of current month in dd/MM/yyyy format
-#         try:
-#             #first_day = datetime.now().replace(day=1).strftime("%d/%m/%Y")            
-#             # Click the Start Time input to focus
-#             start_time_input.click()
-            
-#             print(f"We have just clicked the start time")
-#             previous_month_icon = page.wait_for_selector(
-#                 "//div[@actualvisible='true']//button[@aria-label='Previous Month']", 
-#                 timeout=5000
-#             )
-            
-#             for i in range(3):
-#                 previous_month_icon.click() 
-            
-#             print("The previous button has been clicked thrice .......")
-            
-#             for i in range(5):
-#                 page.keyboard.press("Tab")
-#                 print("Tab pressed")
-            
-#             page.keyboard.press("Enter")
-            
-#         except Exception as e:
-#             print(f"[ERROR] Could not fill Start Time input: {e}")
-#             return False
-        
-#         # Step 4: Press Tab three times and Enter to submit
-#         try:
-#             print("[INFO] Pressing Tab three times and Enter to submit...")
-            
-#             # Ensure Start Time input has focus
-#             start_time_input.focus()
-#             page.wait_for_timeout(500)
-            
-#             # Debug: Check current focused element
-#             focused_element = page.evaluate_handle("() => document.activeElement")
-#             focused_tag = page.evaluate("(elem) => elem.tagName", focused_element)
-#             focused_id = page.evaluate("(elem) => elem.id || elem.placeholder || 'no-id'", focused_element)
-#             print(f"[DEBUG] Current focused element: {focused_tag} (ID/Placeholder: {focused_id})")
-            
-#             # Press Tab three times
-#             for i in range(4):
-#                 page.keyboard.press("Tab")
-#                 page.wait_for_timeout(500)
-#                 # Debug: Check focused element after each Tab
-#                 focused_element = page.evaluate_handle("() => document.activeElement")
-#                 focused_tag = page.evaluate("(elem) => elem.tagName", focused_element)
-#                 focused_id = page.evaluate("(elem) => elem.id || elem.placeholder || 'no-id'", focused_element)
-#                 print(f"[DEBUG] After Tab {i+1}, focused element: {focused_tag} (ID/Placeholder: {focused_id})")
-            
-#             # Press Enter to submit
-#             page.keyboard.press("Enter")
-#             print("[✓] Pressed Enter to submit form")
-#             # page.wait_for_timeout(3000)  # Wait for page to load results
-#             time.sleep(2)  # Wait for page to load results
-            
-#             df,headers = save_table_to_dataframe_download(page,business_short_code)
-            
-#             if df is not None:
-#                 print("[INFO] Table extracted after submission.")
-#                 return True
-#             else:
-#                 print("[ERROR] Table extraction failed after submission.")
-#                 return False
-            
-#         except Exception as e:
-#             print(f"[ERROR] Could not complete Tab/Enter submission: {e}")
-#             import traceback
-#             traceback.print_exc()
-#             return False
-        
-#     except Exception as exc:
-#         print(f"[ERROR] process_float_account_details failed: {exc}")
-#         import traceback
-#         traceback.print_exc()
-#         return False
-
 def solveCaptchaXai(image_path):
     # Initialize client with your xAI key
     xai_key = os.getenv("XAI_API_KEY")
@@ -1331,6 +1443,7 @@ def solveCaptchaXai(image_path):
 def navigate_to_review_transaction(page) -> bool:
     """Navigate through detail panel to Review Transaction button."""
     try:
+        close_irritative_dialog_box(page)
         # Click first div in vertical-page-container
         first_div = page.wait_for_selector(
             "//div[@class='vertical-page-container']/div[1]",
@@ -1360,8 +1473,7 @@ def navigate_to_review_transaction(page) -> bool:
         print(f"[ERROR] Navigation failed: {e}")
         return False
 
-    
-def close_irritative_dialog_box(page):
+def close_irritative_dialog_box(page:Page) -> bool:
     """Close any irritative dialog boxes that may block interactions."""
     try:
         dialog_box = page.locator("//button[@aria-label='Close this dialog']").first
@@ -1397,6 +1509,7 @@ def close_detail_panel(page):
         pass
     
     return False
+
 def return_to_organization_list(page) -> bool:
     """Return to organization list view."""
     print("[INFO] Returning to organization list...")
@@ -1419,6 +1532,7 @@ def process_organization_rows(page: Page) -> None:
     """
     total_processed = 0
     to_be_rerun: list[int] = []
+    close_irritative_dialog_box(page)
 
     while True:
         print("\n[INFO] Starting new pagination page...")
@@ -1443,6 +1557,23 @@ def process_organization_rows(page: Page) -> None:
 
         if total_processed >= total_in_list and len(to_be_rerun) == 0:
             print(f"[SUCCESS] All {total_processed} organizations processed successfully!")
+            stats = transaction_service.gather_scraping_statistics(
+                start_date=datetime.now() - timedelta(days=180),
+                end_date=datetime.now(),
+                company_shortcode=company_shortcode
+            )
+
+            # Generate and preview HTML
+            # html_content = generate_scraping_report_email(stats)
+            # with open("scraping_report_preview.html", "w") as f:
+            #     f.write(html_content)
+            # print("Preview saved: scraping_report_preview.html")
+
+            user = User.query.filter_by(id=user_id).first()
+
+            # Send email
+            # send_scraping_report_email(user.email, stats)
+            send_scraping_report_email("martinmaati31@gmail.com", stats)
             break
 
         # Move to next pagination page
@@ -1460,12 +1591,10 @@ def process_organization_rows(page: Page) -> None:
         else:
             print("[ERROR] Some organizations still failed after retries.")
 
-
 def wait_for_table_load(page: Page, timeout: int = 15000) -> None:
     """Wait for network idle and allow lazy loading."""
     page.wait_for_load_state("networkidle", timeout=timeout)
     time.sleep(2)
-
 
 def process_page_rows(
     page: Page,
@@ -1474,22 +1603,26 @@ def process_page_rows(
     to_be_rerun: list[int]
 ) -> int:
     """Process all visible rows on the current page with virtual scrolling support."""
+    close_irritative_dialog_box(page)
     processed_on_page = 0
     rows_locator = page.locator("//tbody//tr[@class='el-table__row childTableRow']")
 
-    while processed_on_page < total_in_list:
-        visible_rows = get_visible_rows(rows_locator)
+    visible_rows = get_visible_rows(rows_locator)
         
-        if not visible_rows:
-            print("[INFO] No visible rows — scrolling to load more...")
-            page.mouse.wheel(0, 1200)
-            time.sleep(2)
-            continue
+    if not visible_rows:
+        print("[INFO] No visible rows — scrolling to load more...")
+        page.mouse.wheel(0, 1200)
+        time.sleep(2)
+        
+    visible_rows_size = len(visible_rows)
+    print(f"[INFO] Found {len(visible_rows)} visible rows to process on this page")
+            
+    while processed_on_page < visible_rows_size:
 
         print(f"[INFO] Found {len(visible_rows)} visible rows to process")
 
         for row in visible_rows:
-            if processed_on_page >= total_in_list:
+            if processed_on_page >= 10:
                 break
 
             business_short_code = extract_business_short_code(row)
@@ -1530,7 +1663,6 @@ def get_visible_rows(rows_locator: Locator) -> list[Locator]:
         if rows_locator.nth(i).is_visible()
     ]
 
-
 def extract_business_short_code(row: Locator) -> int | None:
     """Extract the leading numeric business short code from the row text."""
     try:
@@ -1548,14 +1680,14 @@ def extract_business_short_code(row: Locator) -> int | None:
         print(f"[ERROR] Failed to extract short code: {e}")
         return None
 
-
 def process_single_row(page: Page, business_short_code: int, row_number: int) -> bool:
     """Process one organization row end-to-end."""
     try:
         print(f"\n[SUCCESS] Processing Row {row_number} | Business Code: {business_short_code}")
+        close_irritative_dialog_box(page)
 
         # Scrape basic till details
-        scrape_till_details(page, business_short_code)
+        mapped_data = scrape_till_details(page, business_short_code)
 
         # Navigate and process float/commission
         if not navigate_to_review_transaction(page):
@@ -1563,7 +1695,7 @@ def process_single_row(page: Page, business_short_code: int, row_number: int) ->
             return_to_organization_list(page)
             return False
 
-        if not process_float_commission(page, business_short_code, pass_value="first"):
+        if not process_float_commission(page, business_short_code, mapped_data=mapped_data, pass_value="first"):
             print("[ERROR] Failed to process float/commission")
             # return_to_organization_list(page)
             return False

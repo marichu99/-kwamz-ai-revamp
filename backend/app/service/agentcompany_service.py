@@ -1,12 +1,20 @@
 from app import db
 from app.model.agentcompany import AgentCompany
+from app.service.company_service import CompanyService
 from app.model.company import Company
 from datetime import datetime
 import pandas as pd
 from decimal import Decimal
+from typing import List, Dict, Any, Optional
 import uuid
 from flask import current_app
 
+from app.model.agent_account_balances import AgentAccountBalance
+from app.model.agent_accounts import AgentAccount
+
+
+
+company_service = CompanyService(db)  
 class AgentCompanyService:
     def __init__(self):
         self.upload_folder = 'Uploads'
@@ -45,34 +53,101 @@ class AgentCompanyService:
             return None, f"Failed to generate company code: {str(e)}"
 
     def get_all_agent_companies_by_userid(self, user_id):
-        """Retrieve all agent companies associated with a user ID."""
+        """Retrieve all agent companies associated with a user ID including account details."""
         try:
             agent_companies = AgentCompany.query.filter_by(user_id=user_id).all()
-            return [{
-                'id': ac.id,
-                'company_name': ac.company_name,
-                'registration_number': ac.registration_number,
-                'location': ac.location,
-                'contact_phone': self.get_user_contact_info(ac.contact_phone),
-                'email': ac.email,
-                'till_number': ac.till_number,
-                'agentcompany_code': ac.agentcompany_code,
-                'store_number': ac.store_number,
-                'location_details': ac.location_details,
-                'agent_number': ac.agent_number,
-                'company_id': ac.company_id,
-                'selected_company': ac.company_id,
-                'established_date': ac.established_date.isoformat() if ac.established_date else None,
-                'float_balance': ac.float_balance,
-                'status': ac.status,
-                'fraud_risk_level': ac.fraud_risk_level,
-                'fraud_risk_description': ac.fraud_risk_description,
-                'daily_transaction_limit': ac.daily_transaction_limit,
-                'commission_rate': ac.commission_rate,
-                'last_audit_date': ac.last_audit_date.isoformat() if ac.last_audit_date else None
-            } for ac in agent_companies], None
+
+            results = []
+
+            for ac in agent_companies:
+                # -------------------------------------------------
+                # Fetch accounts
+                # -------------------------------------------------
+                accounts = AgentAccount.query.filter_by(
+                    agent_company_id=ac.id
+                ).all()
+
+                account_list = []
+
+                for account in accounts:
+                    # Latest balance snapshot
+                    latest_balance = (
+                        AgentAccountBalance.query
+                        .filter_by(agent_account_id=account.id)
+                        .order_by(AgentAccountBalance.snapshot_at.desc())
+                        .first()
+                    )
+                    
+                    account_list.append({
+                        'account_id': account.id,
+                        'account_number': account.account_number,
+                        'account_type': account.account_type,
+                        'account_alias': account.account_alias,
+                        'currency': account.currency,
+                        'relationship': account.relationship,
+                        'status': account.status,
+                        'is_hot_account': account.is_hot_account,
+                        'last_scraped_at': account.last_scraped_at.isoformat()
+                            if account.last_scraped_at else None,
+
+                        # Latest balance snapshot
+                        'balances': {
+                            'current_balance': str(latest_balance.current_balance)
+                                if latest_balance and latest_balance.current_balance is not None else None,
+                            'available_balance': str(latest_balance.available_balance)
+                                if latest_balance and latest_balance.available_balance is not None else None,
+                            'reserved_balance': str(latest_balance.reserved_balance)
+                                if latest_balance and latest_balance.reserved_balance is not None else None,
+                            'unclear_balance': str(latest_balance.unclear_balance)
+                                if latest_balance and latest_balance.unclear_balance is not None else None,
+                            'snapshot_at': latest_balance.snapshot_at.isoformat()
+                                if latest_balance else None
+                        } if latest_balance else None
+                    })
+
+                # -------------------------------------------------
+                # Agent company payload
+                # -------------------------------------------------
+                results.append({
+                    'id': ac.id,
+                    'company_name': ac.company_name,
+                    'registration_number': ac.registration_number,
+                    'location': ac.location,
+                    'contact_phone': self.get_user_contact_info(ac.contact_phone),
+                    'email': ac.email,
+                    'till_number': ac.till_number,
+                    'agentcompany_code': ac.agentcompany_code,
+                    'store_number': ac.store_number,
+                    'location_details': ac.location_details,
+                    'agent_number': ac.agent_number,
+                    'company_id': ac.company_id,
+                    'selected_company': ac.company_id,
+                    'established_date': ac.established_date.isoformat()
+                        if ac.established_date else None,
+
+                    # Financial / risk
+                    'float_balance': str(ac.float_balance)
+                        if ac.float_balance is not None else None,
+                    'status': ac.status,
+                    'fraud_risk_level': ac.fraud_risk_level,
+                    'fraud_risk_description': ac.fraud_risk_description,
+                    'daily_transaction_limit': str(ac.daily_transaction_limit)
+                        if ac.daily_transaction_limit is not None else None,
+                    'commission_rate': str(ac.commission_rate)
+                        if ac.commission_rate is not None else None,
+                    'last_audit_date': ac.last_audit_date.isoformat()
+                        if ac.last_audit_date else None,
+
+                    #  Normalized account data
+                    'accounts': account_list
+                })
+
+            return results, None
+
         except Exception as e:
-            current_app.logger.error(f"Error fetching agent companies for user {user_id}: {str(e)}")
+            current_app.logger.error(
+                f"Error fetching agent companies for user {user_id}: {str(e)}"
+            )
             return [], f"Failed to fetch agent companies: {str(e)}"
 
     def create_agent_company(self, data, user_id):
@@ -653,4 +728,201 @@ class AgentCompanyService:
                 'success': False,
                 'error': str(e)
             }
+
+    def save_or_update_scraped_agent_company(
+        self,
+        mapped_data: Dict[str, Any],
+        user_id: Optional[int] = None
+    ) -> Dict[str, Any]:
+
+        try:
+            now = datetime.utcnow()
+
+            # ---- Resolve business short code ----
+            business_short_code = (
+                mapped_data.get('business_short_code')
+                or mapped_data.get('short_code')
+            )
+
+            if not business_short_code:
+                return {
+                    'success': False,
+                    'error': 'No business short code provided',
+                    'mapped_data': mapped_data
+                }
+
+            business_short_code = str(business_short_code)
+
+            # ---- Resolve parent company ----
+            parent_shortcode = mapped_data.get('top_organization')
+            parent_company = (
+                company_service.get_company_by_shortcode(parent_shortcode)
+                if parent_shortcode else None
+            )
+
+            # ---- Prepare AgentCompany fields ----
+            mapped_data.update({
+                'agentcompany_code': business_short_code,
+                'company_id': parent_company.id if parent_company else None,
+                'user_id': user_id,
+                'last_scraped_at': now
+            })
+
+            # ---- Fetch or create AgentCompany ----
+            agent_company = AgentCompany.query.filter_by(
+                agentcompany_code=business_short_code
+            ).first()
+
+            if agent_company:
+                for key, value in mapped_data.items():
+                    if hasattr(agent_company, key) and value is not None:
+                        setattr(agent_company, key, value)
+
+                agent_company.last_updated = now
+                action = 'updated'
+            else:
+                agent_company = AgentCompany(**mapped_data)
+                agent_company.created_at = now
+                db.session.add(agent_company)
+                action = 'created'
+
+            db.session.flush()  # Ensure agent_company.id exists
+
+            # =====================================================
+            # 🔹 NORMALIZED ACCOUNT HANDLING
+            # =====================================================
+            account_number = mapped_data.get('account_number')
+            account_type = mapped_data.get('account_type')  # FLOAT / COMMISSION
+
+            if account_number and account_type:
+                account = AgentAccount.query.filter_by(
+                    agent_company_id=agent_company.id,
+                    account_number=account_number
+                ).first()
+
+                if not account:
+                    account = AgentAccount(
+                        agent_company_id=agent_company.id,
+                        account_number=account_number,
+                        account_type=account_type,
+                        account_alias=mapped_data.get('account_alias'),
+                        currency=mapped_data.get('account_currency', 'KES'),
+                        relationship=mapped_data.get('account_relationship'),
+                        status=mapped_data.get('account_status', 'ACTIVE'),
+                        is_hot_account=mapped_data.get('is_hot_account', False),
+                        last_scraped_at=now
+                    )
+                    db.session.add(account)
+                    db.session.flush()
+                else:
+                    account.last_scraped_at = now
+
+                # ---- Balance snapshot (append-only) ----
+                if any(
+                    mapped_data.get(k) is not None
+                    for k in (
+                        'current_balance',
+                        'available_balance',
+                        'reserved_balance',
+                        'unclear_balance'
+                    )
+                ):
+                    balance = AgentAccountBalance(
+                        agent_account_id=account.id,
+                        current_balance=mapped_data.get('current_balance'),
+                        available_balance=mapped_data.get('available_balance'),
+                        reserved_balance=mapped_data.get('reserved_balance'),
+                        unclear_balance=mapped_data.get('unclear_balance'),
+                        snapshot_at=now
+                    )
+                    db.session.add(balance)
+
+            db.session.commit()
+
+            return {
+                'success': True,
+                'action': action,
+                'agent_company_id': agent_company.id,
+                'business_short_code': business_short_code
+            }
+
+        except Exception as e:
+            db.session.rollback()
+            return {
+                'success': False,
+                'error': str(e),
+                'mapped_data': mapped_data
+            }
+
+    def update_existing_agent_company(self,company: AgentCompany, mapped_data: Dict[str, Any], 
+                                     user_id: Optional[int]) -> Dict[str, Any]:
+        """Update existing agent company with new scraped data"""
+        try:
+            update_count = 0
+            updated_fields = []
+            
+            # Update fields from mapped data
+            for field, value in mapped_data.items():
+                if hasattr(company, field) and value is not None:
+                    current_value = getattr(company, field)
+                    if current_value != value:
+                        setattr(company, field, value)
+                        update_count += 1
+                        updated_fields.append(field)
+            
+            # Always update last_scraped_at timestamp
+            company.last_scraped_at = datetime.utcnow()
+            company.user_id = user_id
+            
+            # If no other fields changed, still count last_scraped_at as an update
+            if update_count == 0:
+                update_count = 1
+                updated_fields.append('last_scraped_at')
+                updated_fields.append('user_id')
+            
+            db.session.commit()
+            
+            return {
+                'success': True,
+                'action': 'updated',
+                'company_id': company.id,
+                'short_code': company.short_code,
+                'update_count': update_count,
+                'updated_fields': updated_fields,
+            }
+            
+        except Exception as e:
+            db.session.rollback()
+            raise e
+        
+    def create_new_agent_company(self,mapped_data: Dict[str, Any], 
+                            user_id: Optional[int]) -> Dict[str, Any]:
+        """Create a new agent company from scraped data"""
+        try:            
+            # Set timestamps
+            mapped_data['created_at'] = datetime.utcnow()
+            mapped_data['last_scraped_at'] = datetime.utcnow()
+            
+            # Create new agent company
+            new_company = AgentCompany(**mapped_data)
+            new_company.user_id = user_id
+            db.session.add(new_company)
+            db.session.commit()
+            
+            # Refresh to get the ID
+            db.session.refresh(new_company)
+            
+            return {
+                'success': True,
+                'action': 'created',
+                'company_id': new_company.id,
+                'short_code': new_company.short_code,
+                'company_name': new_company.company_name,
+                'registration_number': new_company.registration_number,
+                'mapped_data': mapped_data
+            }
+
+        except Exception as e:
+            db.session.rollback()
+            raise e
 

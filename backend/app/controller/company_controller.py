@@ -233,14 +233,16 @@ def get_agent_payments():
     #     }), 500
 
 @company_bp.route('/login-company', methods=['POST'])
+@jwt_required()
 def login_company():
     form_data = request.get_json()
+    current_user_id = get_jwt_identity()
     print(f"the data is {form_data}")
     short_code = form_data.get('shortCode')
     user_name = form_data.get('userName')
     password = form_data.get('password')
     
-    is_successful = login_to_mpesa(short_code=short_code, username=user_name, password=password)
+    is_successful = login_to_mpesa(short_code=short_code, username=user_name, password=password,user_id_passed=current_user_id)
     if not is_successful:
         return jsonify({"success": False, "message": "Login failed. Please check your credentials and try again."})
     return jsonify({"success": True})

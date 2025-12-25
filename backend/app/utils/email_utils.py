@@ -164,6 +164,7 @@ def send_welcome_pack_email(recipient_email, recipient_name, role, company_data,
         print(f"Failed to send welcome pack email: {str(e)}")
         return False
 
+
 def send_email_notification(subject, body,recipient_email):
     try:
         # Set up the MIME
@@ -224,4 +225,102 @@ def send_agent_new_clients_email(agent_email, agent_name, newly_assigned_compani
 
     except Exception as e:
         print(f"Failed to send agent new clients email: {str(e)}")
+        return False
+
+def generate_scraping_report_email(stats_data: dict):
+    """
+    Generate the scraping report email HTML using Jinja2 template.
+    
+    Args:
+        stats_data (dict): The full dictionary returned by gather_scraping_statistics()
+    
+    Returns:
+        str: Rendered HTML email content
+    """
+    # Extract nested dicts for clarity
+    session = stats_data['scraping_session']
+    agent = stats_data['agent_stats']
+    trans = stats_data['transaction_stats']
+    comm = stats_data['commission_stats']
+
+    # Pre-calculate average deposit/withdrawal to avoid template logic
+    avg_deposit = (
+        trans['total_deposit_amount'] / trans['total_deposits']
+        if trans['total_deposits'] > 0 else 0
+    )
+    avg_withdrawal = (
+        trans['total_withdrawal_amount'] / trans['total_withdrawals']
+        if trans['total_withdrawals'] > 0 else 0
+    )
+
+    # Build context for the template
+    context = {
+        # Session info
+        'period_str': f"{session['start_date'].strftime('%d/%m/%Y')} to {session['end_date'].strftime('%d/%m/%Y')}",
+        'scraped_date': session['scraped_at'].strftime('%d/%m/%Y %H:%M'),
+        'company_shortcode': session['company_shortcode'],
+        'total_transactions': session['total_transactions'],
+        'agent_company_count': session['agent_company_count'],
+        'successful_scrapes': session['successful_scrapes'],
+        'failed_scrapes': session['failed_scrapes'],
+
+        # Agent stats
+        'total_agents': agent['total_agents'],
+        'active_agents': agent['active_agents'],
+        'average_float': agent['average_float'],
+        'agents_below_20000': agent['agents_below_20000'],
+        'agents_below_5000': agent['agents_below_5000'],
+        'agents_below_1000': agent['agents_below_1000'],
+
+        # Transaction stats
+        'total_deposits': trans['total_deposits'],
+        'total_withdrawals': trans['total_withdrawals'],
+        'total_deposit_amount': trans['total_deposit_amount'],
+        'total_withdrawal_amount': trans['total_withdrawal_amount'],
+        'net_flow': trans['net_flow'],
+        'average_transaction_value': trans['average_transaction_value'],
+        'avg_deposit': avg_deposit,
+        'avg_withdrawal': avg_withdrawal,
+
+        # Commission stats
+        'total_commission': comm['total_commission'],
+        'commission_transactions': comm['commission_transactions'],
+        'average_commission_rate': comm['average_commission_rate'],
+
+        # Extra
+        'current_year': datetime.now().year,
+    }
+
+    # Render the Jinja2 template (assumes templates/scraping_report_email.html exists)
+    return render_template('scraping_report_email.html', **context)
+
+def send_scraping_report_email(recipient_email: str, stats_data: dict):
+    """
+    Send the scraping report email using the full stats dictionary.
+    """
+    try:
+        # Generate HTML using the full stats data
+        email_html = generate_scraping_report_email(stats_data)
+
+        company_code = stats_data['scraping_session']['company_shortcode']
+
+        # Create message
+        msg = MIMEMultipart('alternative')
+        msg['Subject'] = f"🌿 Data Scraping Report - {company_code} - {datetime.now().strftime('%d/%m/%Y')}"
+        msg['From'] = EMAIL_ADDRESS
+        msg['To'] = recipient_email
+
+        msg.attach(MIMEText(email_html, 'html'))
+
+        # Send email
+        with smtplib.SMTP('smtp.gmail.com', 587) as server:
+            server.starttls()
+            server.login(EMAIL_ADDRESS, EMAIL_PASSWORD)
+            server.send_message(msg)
+
+        print(f"Scraping report email sent to {recipient_email}")
+        return True
+
+    except Exception as e:
+        print(f"Failed to send scraping report email: {str(e)}")
         return False

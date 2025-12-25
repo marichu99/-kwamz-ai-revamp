@@ -16,7 +16,6 @@ def handle_options():
 @jwt_required()
 def get_agent_companies():
     current_user_id = get_jwt_identity()
-    print("we are here")
     service = AgentCompanyService()
     agent_companies, error = service.get_all_agent_companies_by_userid(user_id=current_user_id)
     if error:

@@ -19,6 +19,7 @@ import numpy as np
 from flask import current_app
 
 from app.service.company_service import CompanyService
+from app.model.agentcompany import AgentCompany
 
 logger = logging.getLogger(__name__)
 
@@ -2150,4 +2151,113 @@ class TransactionService:
                 }
         
         return {"rank": len(period_amounts) + 1, "total": len(period_amounts), "percentile": 0}
+
+    def gather_scraping_statistics(start_date, end_date, company_shortcode):
+        """
+        Gather statistics from the database for the email report.
+        """    
+        # Agent statistics
+        total_agents = AgentCompany.query.filter_by(
+            business_short_code=company_shortcode
+        ).count()
+        
+        active_agents = AgentCompany.query.filter_by(
+            business_short_code=company_shortcode,
+            is_active_on_portal=True
+        ).count()
+        
+        # Float balance analysis
+        agents_below_20000 = AgentCompany.query.filter(
+            AgentCompany.business_short_code == company_shortcode,
+            AgentCompany.float_balance < 20000,
+            AgentCompany.float_balance.isnot(None)
+        ).count()
+        
+        agents_below_5000 = AgentCompany.query.filter(
+            AgentCompany.business_short_code == company_shortcode,
+            AgentCompany.float_balance < 5000,
+            AgentCompany.float_balance.isnot(None)
+        ).count()
+        
+        agents_below_1000 = AgentCompany.query.filter(
+            AgentCompany.business_short_code == company_shortcode,
+            AgentCompany.float_balance < 1000,
+            AgentCompany.float_balance.isnot(None)
+        ).count()
+        
+        # Average float balance
+        avg_float_result = db.session.query(
+            db.func.avg(AgentCompany.float_balance)
+        ).filter(
+            AgentCompany.business_short_code == company_shortcode,
+            AgentCompany.float_balance.isnot(None)
+        ).first()
+        
+        average_float = avg_float_result[0] or 0
+        
+        # Transaction statistics for the period
+        transactions = Transaction.query.filter(
+            Transaction.company.has(shortcode=company_shortcode),
+            Transaction.initiation_time.between(start_date, end_date)
+        ).all()
+        
+        total_deposits = sum(1 for t in transactions if t.paid_in and t.paid_in > 0)
+        total_withdrawals = sum(1 for t in transactions if t.withdrawn and t.withdrawn > 0)
+        
+        total_deposit_amount = sum(
+            float(t.paid_in or 0) for t in transactions if t.paid_in
+        )
+        total_withdrawal_amount = sum(
+            float(t.withdrawn or 0) for t in transactions if t.withdrawn
+        )
+        
+        net_flow = total_deposit_amount - total_withdrawal_amount
+        
+        # Commission statistics
+        commission_transactions = [t for t in transactions if t.transaction_type == 'commission']
+        total_commission = sum(float(t.commission_amount or 0) for t in commission_transactions)
+        commission_transaction_count = len(commission_transactions)
+        
+        avg_commission_rate = sum(
+            float(t.commission_rate or 0) for t in commission_transactions
+        ) / commission_transaction_count if commission_transaction_count > 0 else 0
+        
+        # Average transaction value
+        all_amounts = [float(t.paid_in or 0) for t in transactions if t.paid_in] + \
+                    [float(t.withdrawn or 0) for t in transactions if t.withdrawn]
+        average_transaction_value = sum(all_amounts) / len(all_amounts) if all_amounts else 0
+        
+        return {
+            'scraping_session': {
+                'start_date': start_date,
+                'end_date': end_date,
+                'company_shortcode': company_shortcode,
+                'total_transactions': len(transactions),
+                'scraped_at': datetime.now(),
+                'agent_company_count': total_agents,
+                'successful_scrapes': total_agents,  # Adjust based on actual scraping
+                'failed_scrapes': 0  # Adjust based on actual scraping
+            },
+            'agent_stats': {
+                'total_agents': total_agents,
+                'active_agents': active_agents,
+                'agents_below_20000': agents_below_20000,
+                'agents_below_5000': agents_below_5000,
+                'agents_below_1000': agents_below_1000,
+                'average_float': float(average_float)
+            },
+            'transaction_stats': {
+                'total_deposits': total_deposits,
+                'total_withdrawals': total_withdrawals,
+                'total_deposit_amount': total_deposit_amount,
+                'total_withdrawal_amount': total_withdrawal_amount,
+                'net_flow': net_flow,
+                'average_transaction_value': average_transaction_value
+            },
+            'commission_stats': {
+                'total_commission': total_commission,
+                'commission_transactions': commission_transaction_count,
+                'average_commission_rate': avg_commission_rate
+            }
+        }
 
