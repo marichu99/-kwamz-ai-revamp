@@ -1224,7 +1224,7 @@ def _get_total_months_by_shortcode_shortfall(business_shortcode:str,till_scrapin
         return 6,180
     
     # Get the maximum number of days since last scrape
-    days = float(till_scraping_shortfall.get(business_shortcode, 6))
+    days = float(till_scraping_shortfall.get(business_shortcode, 180))
 
     return np.ceil(days/30).astype(int), days
 
@@ -1564,6 +1564,7 @@ def process_organization_rows(page: Page) -> None:
     to_be_rerun: list[int] = []
     close_irritative_dialog_box(page)
     all_shortcodes_ :Set[str] =set()
+    time.sleep(2)
     all_shortcodes = extract_all_business_short_codes(page,all_shortcodes_)
     print(f"[INFO] Extracted {len(all_shortcodes)} business short codes on all pages")
     
@@ -1635,7 +1636,7 @@ def extract_all_business_short_codes(
         short_codes = set()
 
     rows_locator = page.locator("//tbody//tr[@class='el-table__row childTableRow']")
-    print(f"The length of the shortcodes is {len(short_codes)}")
+    print(f"The length of the shortcodes is {len(short_codes)}")    
 
     for i in range(rows_locator.count()):
         row = rows_locator.nth(i)
@@ -1650,6 +1651,7 @@ def extract_all_business_short_codes(
 
     if go_forth_on_organization(page, get_total_from_pagination(page)):
         wait_for_table_load(page)
+        # print(f"From page {counter} We are passing {len(short_codes)}")
         extract_all_business_short_codes(page, short_codes)
 
     return short_codes

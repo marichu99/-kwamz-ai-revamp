@@ -1088,7 +1088,7 @@ class TransactionService:
     def get_last_scraped_per_shortcode(self) -> Dict[str,int]:
         """Get the last scraped transaction ID per business shortcode"""
         try:
-            
+            print(f"We are trying to get the last scraped dictionary ")
             with db_pool.get_cursor() as cursor:
                 return self._get_last_scraped_per_till(cursor)
             
@@ -1289,7 +1289,7 @@ class TransactionService:
         now = datetime.now(self.kenya_tz)
 
         return {
-            row['business_shortcode']: (
+            row['business_short_code']: (
                 now - row['last_scraped_time'].replace(tzinfo=self.kenya_tz)
             ).days
             for row in results

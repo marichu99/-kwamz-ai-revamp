@@ -1,329 +1,286 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <meta http-equiv="X-UA-Compatible" content="IE=edge">
-    <title>🌿 Data Scraping Success Report</title>
-    <style>
-        /* Reset styles */
-        * { margin: 0; padding: 0; box-sizing: border-box; }
-        body {
-            font-family: 'Arial', Helvetica, sans-serif;
-            background-color: #f4f4f4;
-            color: #333333;
-            line-height: 1.6;
-            -webkit-font-smoothing: antialiased;
-        }
-        .container {
-            max-width: 700px;
-            margin: 0 auto;
-            background-color: #ffffff;
-            border-radius: 8px;
-            overflow: hidden;
-            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
-        }
-        .header {
-            background: linear-gradient(135deg, #1a3c34 0%, #2e5b4f 100%);
-            padding: 32px 16px;
-            text-align: center;
-            color: #ffffff;
-        }
-        .header h1 {
-            font-size: 28px;
-            font-weight: bold;
-            margin-bottom: 8px;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            gap: 15px;
-        }
-        .header p {
-            font-size: 15px;
-            opacity: 0.9;
-        }
-        .sub-header {
-            background-color: #e8f5e9;
-            padding: 16px;
-            text-align: center;
-            color: #1a3c34;
-            font-weight: bold;
-            font-size: 18px;
-            border-bottom: 3px solid #c8e6c9;
-        }
-        .content {
-            padding: 32px 24px;
-        }
-        .content h2 {
-            color: #1a3c34;
-            font-size: 22px;
-            margin: 32px 0 16px;
-            padding-bottom: 10px;
-            border-bottom: 2px solid #e8f5e9;
-        }
-        .stats-grid {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
-            gap: 16px;
-            margin: 24px 0;
-        }
-        .stat-card {
-            background: #f1f8e9;
-            border-radius: 10px;
-            padding: 20px;
-            text-align: center;
-            border-left: 5px solid #4caf50;
-            transition: all 0.3s ease;
-        }
-        .stat-card:hover {
-            transform: translateY(-5px);
-            box-shadow: 0 8px 20px rgba(76, 175, 80, 0.15);
-        }
-        .stat-value {
-            font-size: 32px;
-            font-weight: bold;
-            color: #1b5e20;
-            margin: 10px 0;
-        }
-        .stat-label {
-            font-size: 13px;
-            color: #555;
-            text-transform: uppercase;
-            letter-spacing: 1.2px;
-        }
-        .success-box {
-            background-color: #e8f5e9;
-            border-left: 5px solid #4caf50;
-            padding: 20px;
-            border-radius: 8px;
-            margin: 24px 0;
-            color: #2e7d32;
-            font-size: 15px;
-        }
-        .float-analysis {
-            background: linear-gradient(135deg, #e8f5e9 0%, #f1f8e9 100%);
-            border-radius: 10px;
-            padding: 24px;
-            margin: 28px 0;
-            border: 1px solid #c8e6c9;
-        }
-        .float-level {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            padding: 12px 0;
-            border-bottom: 1px dashed #c8e6c9;
-        }
-        .float-level:last-child { border-bottom: none; }
-        .level-label { font-weight: 500; color: #444; }
-        .level-value { font-weight: bold; font-size: 18px; }
-        .level-critical { color: #d32f2f; }
-        .level-warning { color: #f57c00; }
-        .level-safe { color: #388e3c; }
-        .alert-box {
-            background-color: #ffebee;
-            border-left: 5px solid #f44336;
-            padding: 20px;
-            border-radius: 8px;
-            margin: 24px 0;
-            color: #c62828;
-            font-size: 15px;
-        }
-        .data-table {
-            width: 100%;
-            border-collapse: collapse;
-            margin: 20px 0;
-            font-size: 14px;
-            background: #fff;
-        }
-        .data-table th {
-            background-color: #2e5b4f;
-            color: white;
-            padding: 14px 12px;
-            text-align: left;
-        }
-        .data-table td {
-            padding: 12px;
-            border-bottom: 1px solid #eee;
-        }
-        .data-table tr:hover {
-            background-color: #f1f8e9;
-        }
-        .commission-highlight {
-            background: linear-gradient(135deg, #fff8e1 0%, #ffecb3 100%);
-            border-radius: 12px;
-            padding: 28px;
-            margin: 32px 0;
-            text-align: center;
-            border: 2px solid #ffc107;
-        }
-        .commission-amount {
-            font-size: 36px;
-            font-weight: bold;
-            color: #856404;
-            margin: 12px 0;
-        }
-        .commission-label {
-            font-size: 16px;
-            color: #856404;
-            margin-bottom: 8px;
-        }
-        .footer {
-            background-color: #1a3c34;
-            padding: 24px 16px;
-            text-align: center;
-            color: #ffffff;
-            font-size: 13px;
-        }
-        .footer a {
-            color: #81c784;
-            text-decoration: none;
-        }
-        .footer a:hover {
-            text-decoration: underline;
-        }
-        @media only screen and (max-width: 600px) {
-            .container { width: 100%; border-radius: 0; }
-            .header h1 { font-size: 24px; }
-            .stats-grid { grid-template-columns: 1fr 1fr; }
-            .stat-value { font-size: 28px; }
-            .content { padding: 20px 16px; }
-            .commission-amount { font-size: 32px; }
-        }
-    </style>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta http-equiv="X-UA-Compatible" content="IE=edge">
+
+<title>Data Scraping Success Report</title>
+
+<style>
+/* CLIENT RESETS */
+body, table, td, a { -webkit-text-size-adjust: 100%; -ms-text-size-adjust: 100%; }
+table, td { mso-table-lspace: 0pt; mso-table-rspace: 0pt; }
+img { -ms-interpolation-mode: bicubic; }
+body { margin: 0; padding: 0; width: 100% !important; }
+
+/* BASE */
+body {
+    background-color: #f4f4f4;
+    font-family: Arial, Helvetica, sans-serif;
+    color: #333333;
+}
+
+.container {
+    width: 100%;
+    max-width: 700px;
+    margin: 0 auto;
+    background-color: #ffffff;
+    border-radius: 8px;
+    overflow: hidden;
+}
+
+/* HEADER */
+.header {
+    background-color: #1a3c34;
+    color: #ffffff;
+    text-align: center;
+    padding: 28px 16px;
+}
+
+.sub-header {
+    background-color: #e8f5e9;
+    color: #1a3c34;
+    text-align: center;
+    font-weight: bold;
+    padding: 14px;
+    border-bottom: 3px solid #c8e6c9;
+}
+
+.content {
+    padding: 28px 20px;
+}
+
+h2 {
+    color: #1a3c34;
+    border-bottom: 2px solid #e8f5e9;
+    padding-bottom: 6px;
+    margin: 28px 0 16px;
+}
+
+/* STATS */
+.stats-table {
+    width: 100%;
+    border-collapse: collapse;
+}
+
+.stat-card {
+    background-color: #f1f8e9;
+    border-left: 5px solid #4caf50;
+    padding: 16px;
+    text-align: center;
+}
+
+.stat-value {
+    font-size: 26px;
+    font-weight: bold;
+    color: #1b5e20;
+}
+
+.stat-label {
+    font-size: 12px;
+    text-transform: uppercase;
+    color: #555555;
+}
+
+/* BOXES */
+.success-box {
+    background-color: #e8f5e9;
+    border-left: 5px solid #4caf50;
+    padding: 16px;
+    margin: 24px 0;
+    color: #2e7d32;
+}
+
+.alert-box {
+    background-color: #ffebee;
+    border-left: 5px solid #f44336;
+    padding: 16px;
+    margin: 24px 0;
+    color: #c62828;
+}
+
+/* TABLE */
+.data-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 14px;
+}
+
+.data-table th {
+    background-color: #2e5b4f;
+    color: #ffffff;
+    padding: 12px;
+    text-align: left;
+}
+
+.data-table td {
+    padding: 10px;
+    border-bottom: 1px solid #eeeeee;
+}
+
+/* COMMISSION */
+.commission {
+    background-color: #fff8e1;
+    border: 2px solid #ffc107;
+    border-radius: 10px;
+    padding: 22px;
+    text-align: center;
+    margin: 28px 0;
+}
+
+.commission-amount {
+    font-size: 32px;
+    font-weight: bold;
+    color: #856404;
+}
+
+/* FOOTER */
+.footer {
+    background-color: #1a3c34;
+    color: #ffffff;
+    text-align: center;
+    padding: 20px;
+    font-size: 12px;
+}
+
+/* DARK MODE */
+@media (prefers-color-scheme: dark) {
+    body { background-color: #121212 !important; color: #e0e0e0 !important; }
+    .container { background-color: #1e1e1e !important; }
+    .sub-header { background-color: #263238 !important; color: #c8e6c9 !important; }
+    .stat-card { background-color: #263238 !important; }
+    .data-table th { background-color: #1a3c34 !important; }
+    .data-table td { border-color: #333333 !important; }
+    .commission { background-color: #3a2f00 !important; }
+}
+</style>
 </head>
+
 <body>
-    <div class="container">
-        <div class="header">
-            <h1><span>🌿</span> Data Scraping Success Report</h1>
-            <p>Period: {{ period_str }} | Scraped on: {{ scraped_date }}</p>
-        </div>
 
-        <div class="sub-header">
-            Successful Data Collection – {{ company_shortcode }}
-        </div>
+<table width="100%" cellpadding="0" cellspacing="0">
+<tr>
+<td align="center">
 
-        <div class="content">
-            <h2>📊 Scraping Session Summary</h2>
-            <div class="stats-grid">
-                <div class="stat-card">
-                    <div class="stat-value">{{ total_transactions | int | format_number }}</div>
-                    <div class="stat-label">Total Transactions</div>
-                </div>
-                <div class="stat-card">
-                    <div class="stat-value">{{ agent_company_count | int | format_number }}</div>
-                    <div class="stat-label">Agents Scraped</div>
-                </div>
-                <div class="stat-card">
-                    <div class="stat-value">{{ successful_scrapes | int | format_number }}</div>
-                    <div class="stat-label">Successful Scrapes</div>
-                </div>
-                <div class="stat-card">
-                    <div class="stat-value">{{ failed_scrapes | int | format_number }}</div>
-                    <div class="stat-label">Failed Scrapes</div>
-                </div>
-            </div>
+<table class="container" cellpadding="0" cellspacing="0">
+<tr><td>
 
-            <div class="success-box">
-                ✅ Scraping completed successfully! All data has been processed and securely stored in the database.
-            </div>
+<div class="header">
+    <h1>🌿 Data Scraping Success Report</h1>
+    <p>Period: {{ period_str }} | Scraped on: {{ scraped_date }}</p>
+</div>
 
-            <h2>🤖 Agent Statistics</h2>
-            <div class="stats-grid">
-                <div class="stat-card">
-                    <div class="stat-value">{{ total_agents | format_number }}</div>
-                    <div class="stat-label">Total Agents</div>
-                </div>
-                <div class="stat-card">
-                    <div class="stat-value">{{ active_agents | format_number }}</div>
-                    <div class="stat-label">Active Agents</div>
-                </div>
-                <div class="stat-card">
-                    <div class="stat-value">KES {{ average_float | round(0) | int | format_number }}</div>
-                    <div class="stat-label">Average Float</div>
-                </div>
-            </div>
+<div class="sub-header">
+    Successful Data Collection – {{ company_shortcode }}
+</div>
 
-            <h2>💰 Float Balance Analysis</h2>
-            <div class="float-analysis">
-                <div class="float-level">
-                    <span class="level-label">Agents with float below KES 20,000</span>
-                    <span class="level-value level-warning">{{ agents_below_20000 | format_number }}</span>
-                </div>
-                <div class="float-level">
-                    <span class="level-label">Agents with float below KES 5,000</span>
-                    <span class="level-value level-warning">{{ agents_below_5000 | format_number }}</span>
-                </div>
-                <div class="float-level">
-                    <span class="level-label">Agents with float below KES 1,000</span>
-                    <span class="level-value level-critical">{{ agents_below_1000 | format_number }}</span>
-                </div>
-            </div>
+<div class="content">
 
-            {% if agents_below_1000 > 0 %}
-            <div class="alert-box">
-                ⚠️ <strong>Critical Alert:</strong> {{ agents_below_1000 }} agents have critically low float balances below KES 1,000. Immediate review recommended.
-            </div>
-            {% endif %}
+<h2>📊 Scraping Summary</h2>
 
-            <h2>💸 Transaction Overview</h2>
-            <table class="data-table">
-                <thead>
-                    <tr>
-                        <th>Metric</th>
-                        <th>Count</th>
-                        <th>Amount (KES)</th>
-                        <th>Average (KES)</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    <tr>
-                        <td>Deposits</td>
-                        <td>{{ total_deposits | format_number }}</td>
-                        <td>{{ total_deposit_amount | format_currency }}</td>
-                        <td>{{ avg_deposit | format_currency }}</td>
-                    </tr>
-                    <tr>
-                        <td>Withdrawals</td>
-                        <td>{{ total_withdrawals | format_number }}</td>
-                        <td>{{ total_withdrawal_amount | format_currency }}</td>
-                        <td>{{ avg_withdrawal | format_currency }}</td>
-                    </tr>
-                    <tr>
-                        <td><strong>Net Flow</strong></td>
-                        <td colspan="2"><strong>{{ net_flow | format_currency }}</strong></td>
-                        <td><strong>{{ average_transaction_value | format_currency }}</strong></td>
-                    </tr>
-                </tbody>
-            </table>
+<table class="stats-table">
+<tr>
+<td class="stat-card">
+    <div class="stat-value">{{ "{:,}".format(total_transactions|int) }}</div>
+    <div class="stat-label">Transactions</div>
+</td>
+<td class="stat-card">
+    <div class="stat-value">{{ "{:,}".format(agent_company_count|int) }}</div>
+    <div class="stat-label">Agents</div>
+</td>
+</tr>
+<tr>
+<td class="stat-card">
+    <div class="stat-value">{{ "{:,}".format(successful_scrapes|int) }}</div>
+    <div class="stat-label">Successful</div>
+</td>
+<td class="stat-card">
+    <div class="stat-value">{{ "{:,}".format(failed_scrapes|int) }}</div>
+    <div class="stat-label">Failed</div>
+</td>
+</tr>
+</table>
 
-            <div class="commission-highlight">
-                <h2 style="color: #856404; margin-bottom: 16px;">🏆 Total Commission Earnings</h2>
-                <div class="commission-amount">KES {{ total_commission | format_currency }}</div>
-                <div class="commission-label">
-                    From {{ commission_transactions | format_number }} commission transactions
-                </div>
-                <p style="margin-top: 12px; font-size: 16px;">
-                    Average commission rate: <strong>{{ average_commission_rate | round(2) }}%</strong>
-                </p>
-            </div>
+<div class="success-box">
+    ✅ Scraping completed successfully and data stored securely.
+</div>
 
-            <p style="font-size: 15px; color: #555; text-align: center;">
-                <strong>Note:</strong> The next automated scraping session is scheduled for tomorrow at 02:00 AM.
-            </p>
-        </div>
+<h2>💰 Float Alerts</h2>
 
-        <div class="footer">
-            <p>&copy; {{ current_year }} Data Scraping System. All rights reserved.</p>
-            <p>
-                <a href="https://your-dashboard-url.com">View Dashboard</a> |
-                <a href="mailto:support@yourcompany.com">Support</a> |
-                <a href="https://yourcompany.com/privacy">Privacy Policy</a>
-            </p>
-            <p style="margin-top: 12px; font-size: 12px; opacity: 0.8;">
-                This is an automated system report.
-            </p>
-        </div>
+<table class="data-table">
+<tr>
+    <th>Threshold</th>
+    <th>Agents</th>
+</tr>
+<tr>
+    <td>Below KES 20,000</td>
+    <td>{{ "{:,}".format(agents_below_20000|int) }}</td>
+</tr>
+<tr>
+    <td>Below KES 5,000</td>
+    <td>{{ "{:,}".format(agents_below_5000|int) }}</td>
+</tr>
+<tr>
+    <td>Below KES 1,000</td>
+    <td><strong>{{ "{:,}".format(agents_below_1000|int) }}</strong></td>
+</tr>
+</table>
+
+{% if agents_below_1000 > 0 %}
+<div class="alert-box">
+⚠️ <strong>Critical:</strong> Immediate top-up required for low-float agents.
+</div>
+{% endif %}
+
+<h2>💸 Transaction Overview</h2>
+
+<table class="data-table">
+<tr>
+<th>Metric</th>
+<th>Count</th>
+<th>Amount (KES)</th>
+</tr>
+<tr>
+<td>Deposits</td>
+<td>{{ "{:,}".format(total_deposits|int) }}</td>
+<td>{{ "{:,.2f}".format(total_deposit_amount) }}</td>
+</tr>
+<tr>
+<td>Withdrawals</td>
+<td>{{ "{:,}".format(total_withdrawals|int) }}</td>
+<td>{{ "{:,.2f}".format(total_withdrawal_amount) }}</td>
+</tr>
+<tr>
+<td><strong>Net Flow</strong></td>
+<td colspan="2"><strong>{{ "{:,.2f}".format(net_flow) }}</strong></td>
+</tr>
+</table>
+
+<div class="commission">
+    <h2>🏆 Total Commission</h2>
+    <div class="commission-amount">
+        KES {{ "{:,.2f}".format(total_commission) }}
     </div>
+    <p>
+        {{ "{:,}".format(commission_transactions|int) }} transactions<br>
+        Avg rate: {{ "%.2f"|format(average_commission_rate) }}%
+    </p>
+</div>
+
+</div>
+
+<div class="footer">
+    © {{ current_year }} Data Scraping System<br>
+    Automated Report – Do not reply
+</div>
+
+</td></tr>
+</table>
+
+</td>
+</tr>
+</table>
+
 </body>
 </html>
