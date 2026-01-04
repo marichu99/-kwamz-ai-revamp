@@ -103,7 +103,7 @@ class ExportService:
                 'Agent Code': agent.short_code if agent else 'N/A',
                 'Transaction Type': t.reason_type,
                 'Commission Amount': float(t.commission_amount or 0),
-                'Commission Rate': float(t.commission_rate or 0),
+                'Commission Rate': float(t.commission_rate or 0.25),
                 'Linked Transaction': t.linked_transaction_id,
                 'Status': t.transaction_status,
                 'Details': t.details
@@ -141,7 +141,7 @@ class ExportService:
                 'Agent Code': agent.short_code if agent else 'N/A',
                 'Transaction Type': t.reason_type,
                 'Commission Amount': float(t.commission_amount or 0),
-                'Commission Rate': float(t.commission_rate or 0),
+                'Commission Rate': float(t.commission_rate or 0.25),
                 'Linked Transaction': t.linked_transaction_id,
                 'Status': t.transaction_status,
                 'Details': t.details
@@ -219,7 +219,7 @@ class ExportService:
                     'Details': t.details,
                     'Transaction Status': t.transaction_status,
                     'Commission Amount': float(t.commission_amount or 0),
-                    'Commission Rate': float(t.commission_rate or 0),
+                    'Commission Rate': float(t.commission_rate or 0.25),
                     'Parent Transaction ID': t.parent_transaction_id,
                     'Linked Transaction': t.linked_transaction_id,
                     'Reason Type': t.reason_type,

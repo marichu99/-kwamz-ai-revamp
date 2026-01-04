@@ -9,7 +9,7 @@ from app.database.connection_pool import db_pool
 from app.model.company import Company
 from sqlalchemy import and_, case, extract, or_, func
 import logging
-from typing import List, Dict, Any, Optional, Tuple,Union
+from typing import Generator, List, Dict, Any, Optional, Tuple,Union
 from werkzeug.utils import secure_filename
 import json
 import traceback
@@ -349,6 +349,8 @@ class TransactionService:
                     balance_confirmed = balance_confirmed.upper() in ['TRUE', 'YES', '1', 'Y']
                     
                 company_id = company_service.get_company_by_shortcode(company_shortcode).id
+                if(transaction_type == 'commission'):
+                    trans_data['balance']=trans_data['balance']*0.25
                 
                 # Prepare transaction data
                 transaction_data = {
@@ -376,13 +378,13 @@ class TransactionService:
                 # Add commission-specific fields for commission transactions
                 if transaction_type == 'commission':
                     # Extract commission amount from paid_in or withdrawn
+                    commission_rate = self._parse_decimal(trans_data.get('commission_rate', '0.25'))
                     # we should not be hard coding the rate here ......
-                    commission_amount = self._parse_decimal(trans_data.get('commission_amount'))*0.25
+                    commission_amount = self._parse_decimal(trans_data.get('commission_amount'))*commission_rate
                     if not commission_amount:
-                        commission_amount = self._parse_decimal(trans_data.get('paid_in', trans_data.get('withdrawn')))*0.25
+                        commission_amount = self._parse_decimal(trans_data.get('paid_in', trans_data.get('withdrawn')))*commission_rate
                     
                     # Calculate commission rate if not provided
-                    commission_rate = self._parse_decimal(trans_data.get('commission_rate', '0.25'))
                     
                     transaction_data.update({
                         'commission_rate': commission_rate,
@@ -554,6 +556,9 @@ class TransactionService:
                 
                 if not receipt_no:
                     continue
+                
+                if(transaction_type == 'commission'):
+                    row['balance']=row['balance']*0.25
                 
                 # Prepare transaction data from row
                 transaction_data = {
@@ -812,14 +817,15 @@ class TransactionService:
                         Transaction.receipt_no.ilike(search_term),
                         Transaction.details.ilike(search_term),
                         Transaction.other_party_info.ilike(search_term),
-                        Transaction.reason_type.ilike(search_term)
+                        Transaction.reason_type.ilike(search_term),
+                        Transaction.business_shortcode.ilike(search_term)
                     )
                 )
 
             # Get total count before pagination
             total = query.count()
 
-            # Order by most recent first
+            # ORDER BY most recent first
             query = query.order_by(Transaction.completion_time.desc())
 
             # Pagination
@@ -836,37 +842,88 @@ class TransactionService:
                 
                 transactions_data.append(append_dict)
 
-            # Calculate summary totals (optional but very useful)
+
+            # Calculate summary totals FOR THE FILTERED RESULTS
+            # Use a separate query with the same filters to calculate totals
             totals_query = Transaction.query
-            if 'start_date' in filters or 'end_date' in filters or 'company_id' in filters or 'agent_id' in filters:
-                # Re-apply same filters for accurate totals
-                if filters.get('company_id'):
-                    totals_query = totals_query.filter(Transaction.company_id == filters['company_id'])
-                if filters.get('agent_id'):
-                    totals_query = totals_query.filter(Transaction.agent_id == filters['agent_id'])
-                if filters.get('transaction_type'):
-                    totals_query = totals_query.filter(Transaction.transaction_type == filters['transaction_type'])
-                # Date filters already handled above — reuse logic if needed
-
-                if filters.get('start_date'):
-                    # Reuse parsed start_dt if available, or re-parse safely
+            
+            # Re-apply all the same filters to the totals query
+            if filters.get('agent_id'):
+                totals_query = totals_query.filter(Transaction.agent_id == filters['agent_id'])
+            
+            if filters.get('company_id'):
+                totals_query = totals_query.filter(Transaction.company_id == filters['company_id'])
+            
+            if filters.get('transaction_type'):
+                totals_query = totals_query.filter(Transaction.transaction_type == filters['transaction_type'])
+            
+            if filters.get('transaction_status'):
+                totals_query = totals_query.filter(Transaction.transaction_status.ilike(f"%{filters['transaction_status']}%"))
+            
+            if filters.get('reasonType'):
+                totals_query = totals_query.filter(Transaction.reason_type.ilike(f"%{filters['reasonType']}%"))
+            
+            # Date range filtering for totals query
+            if filters.get('start_date'):
+                try:
+                    start_dt = datetime.strptime(filters['start_date'], '%Y-%m-%d')
+                    totals_query = totals_query.filter(Transaction.completion_time >= start_dt)
+                except ValueError:
                     try:
-                        start_dt = datetime.strptime(filters['start_date'].split(' ')[0], '%Y-%m-%d')
+                        start_dt = datetime.strptime(filters['start_date'], '%Y-%m-%d %H:%M:%S')
                         totals_query = totals_query.filter(Transaction.completion_time >= start_dt)
-                    except:
+                    except ValueError:
                         pass
-                if filters.get('end_date'):
+            
+            if filters.get('end_date'):
+                try:
+                    end_dt = datetime.strptime(filters['end_date'], '%Y-%m-%d')
+                    end_dt = end_dt.replace(hour=23, minute=59, second=59)
+                    totals_query = totals_query.filter(Transaction.completion_time <= end_dt)
+                except ValueError:
                     try:
-                        end_dt = datetime.strptime(filters['end_date'].split(' ')[0], '%Y-%m-%d')
-                        end_dt = end_dt.replace(hour=23, minute=59, second=59)
+                        end_dt = datetime.strptime(filters['end_date'], '%Y-%m-%d %H:%M:%S')
                         totals_query = totals_query.filter(Transaction.completion_time <= end_dt)
-                    except:
+                    except ValueError:
                         pass
-
-            total_paid_in = totals_query.with_entities(func.sum(Transaction.paid_in)).scalar() or Decimal('0.00')
-            total_withdrawn = totals_query.with_entities(func.sum(Transaction.withdrawn)).scalar() or Decimal('0.00')
-            total_commission = totals_query.with_entities(func.sum(Transaction.commission_amount)).scalar() or Decimal('0.00')
-
+            
+            # Apply search filter to totals as well
+            if filters.get('search'):
+                search_term = f"%{filters['search'].strip()}%"
+                totals_query = totals_query.filter(
+                    or_(
+                        Transaction.receipt_no.ilike(search_term),
+                        Transaction.details.ilike(search_term),
+                        Transaction.other_party_info.ilike(search_term),
+                        Transaction.reason_type.ilike(search_term),
+                        Transaction.business_shortcode.ilike(search_term)
+                    )
+                )
+            
+            
+            # Calculate all totals in a single query for better performance
+            totals = totals_query.with_entities(
+                func.sum(Transaction.paid_in).label('total_paid_in'),
+                func.sum(Transaction.withdrawn).label('total_withdrawn'),
+                func.sum(Transaction.commission_amount).label('total_commission'),
+                func.count(Transaction.id).label('total_count')
+            ).first()
+            
+            # Extract totals with proper default values
+            total_paid_in = totals.total_paid_in or Decimal('0.00')
+            total_withdrawn = totals.total_withdrawn or Decimal('0.00')
+            total_commission = totals.total_commission or Decimal('0.00')
+            
+            # For float transactions, calculate net flow
+            # For commission transactions, commission is positive income
+            transaction_type = filters.get('transaction_type', 'float')
+            
+            if transaction_type == 'float':
+                net_flow = total_paid_in + total_withdrawn  # withdrawn is negative
+            else:
+                # For commissions, net flow might be just commissions or include paid_in/withdrawn
+                net_flow = total_commission  # or total_paid_in + total_withdrawn depending on your logic
+            
             return {
                 "success": True,
                 "data": transactions_data,
@@ -880,12 +937,14 @@ class TransactionService:
                 },
                 "summary": {
                     "total_paid_in": str(total_paid_in),
-                    "total_commission": str(total_commission),
                     "total_withdrawn": str(total_withdrawn),
-                    "net_flow": str(total_paid_in + total_withdrawn)  # withdrawn is negative
+                    "total_commission": str(total_commission),
+                    "net_flow": str(net_flow),
+                    "total_transactions": total
                 },
                 "filters_applied": filters
             }
+
 
         except Exception as e:
             current_app.logger.error(f"Error in get_transactions service: {str(e)}", exc_info=True)
@@ -1109,6 +1168,17 @@ class TransactionService:
         except Exception as e:
             logger.error(f"Error getting last scraped per shortcode: {str(e)}", exc_info=True)
             return {}
+        
+    def get_all_short_codes_in_txn_tbl(self) -> Dict[str,int]:
+        """Get all shortcodes that have been registered in the transactions table"""
+        try:
+            with db_pool.get_cursor() as cursor:
+                return self._get_all_short_codes_in_txn_tbl(cursor)
+            
+        except Exception as e:
+            logger.error(f"Error getting last scraped per shortcode: {str(e)}", exc_info=True)
+            return {}
+        
     def _get_basic_stats_raw(self, cursor, where_clause: str, params: list, transaction_type: str) -> Dict:
         """Get basic transaction statistics using raw SQL"""
         if transaction_type == 'float':
@@ -1288,14 +1358,12 @@ class TransactionService:
             "growth_rates": growth_rates
         }
 
-    def _get_last_scraped_per_till(self, cursor) -> Dict[str, int]:
+    def _get_last_scraped_per_till(self, cursor:Generator) -> Dict[str, int]:
         """Get number of days since last scrape for each till (Kenya time)"""
         query = """
-            select business_short_code,
-                MAX(last_scraped_at) as last_scraped_time
-            from agentcompanies
-            GROUP BY business_short_code
-            ORDER BY last_scraped_time ASC;
+            SELECT business_shortcode, MAX(updated_at) AS latest_updated_at
+            FROM transactions
+            GROUP BY business_shortcode;
         """
         cursor.execute(query)
         results = cursor.fetchall()
@@ -1303,11 +1371,22 @@ class TransactionService:
         now = datetime.now(self.kenya_tz)
 
         return {
-            row['business_short_code']: (
-                now - row['last_scraped_time'].replace(tzinfo=self.kenya_tz)
+            row['business_shortcode']: (
+                now - row['latest_updated_at'].replace(tzinfo=self.kenya_tz)
             ).days
             for row in results
         }
+        
+    def _get_all_short_codes_in_txn_tbl(self, cursor:Generator) -> List[int]:
+        """Get all shortcodes that have been registered in the transactions table"""
+        query = """
+            select distinct(business_shortcode)
+            from transactions;
+        """
+        cursor.execute(query)
+        results = cursor.fetchall()
+
+        return results
     
     def _get_category_stats_raw(self, cursor, where_clause: str, params: list, transaction_type: str) -> Dict:
         """Get statistics by category using raw SQL"""
@@ -1462,7 +1541,7 @@ class TransactionService:
                     "amount": str(Decimal(trans['commission_amount'])),
                     "date": trans['completion_time'].strftime('%Y-%m-%d %H:%M'),
                     "details": trans['details'],
-                    "rate": str(Decimal(trans['commission_rate'] or '0.00')),
+                    "rate": str(Decimal(trans['commission_rate'] or '0.25')),
                     "original_receipt": trans['linked_transaction_id']
                 } for trans in top_commissions
             ]
@@ -1768,7 +1847,7 @@ class TransactionService:
     def _get_avg_commission_rate_raw(self, cursor, where_clause: str, params: list) -> Decimal:
         """Get average commission rate using raw SQL"""
         query = f"""
-            SELECT COALESCE(AVG(commission_rate), 0) as avg_rate
+            SELECT COALESCE(AVG(commission_rate), 0.25) as avg_rate
             FROM transactions 
             WHERE {where_clause} AND commission_rate > 0
         """
@@ -2226,34 +2305,32 @@ class TransactionService:
         Gather statistics from the database for the email report.
         """    
         # Agent statistics
-        total_agents = AgentCompany.query.filter_by(
-            business_short_code=company_shortcode
-        ).count()
-        
+        total_agents = AgentCompany.query.count()
+                
         active_agents = AgentCompany.query.filter_by(
-            business_short_code=company_shortcode,
+            parent_short_code=company_shortcode,
             is_active_on_portal=True
         ).count()
         
-        # Float balance analysis
-        agents_below_20000 = AgentCompany.query.filter(
-            AgentCompany.business_short_code == company_shortcode,
-            AgentCompany.float_balance < 20000,
-            AgentCompany.float_balance.isnot(None)
-        ).count()
+        # Float balance analysis        
+        agents_below_20000,error= agent_company_service.count_agents_by_balance_threshold(
+                            parent_short_code=company_shortcode,
+                            threshold=20000,
+                            above_threshold=False
+                        )
         
-        agents_below_5000 = AgentCompany.query.filter(
-            AgentCompany.business_short_code == company_shortcode,
-            AgentCompany.float_balance < 5000,
-            AgentCompany.float_balance.isnot(None)
-        ).count()
+        agents_below_5000,error= agent_company_service.count_agents_by_balance_threshold(
+                            parent_short_code=company_shortcode,
+                            threshold=5000,
+                            above_threshold=False
+                        )
         
-        agents_below_1000 = AgentCompany.query.filter(
-            AgentCompany.business_short_code == company_shortcode,
-            AgentCompany.float_balance < 1000,
-            AgentCompany.float_balance.isnot(None)
-        ).count()
-        
+        agents_below_1000,error= agent_company_service.count_agents_by_balance_threshold(
+                            parent_short_code=company_shortcode,
+                            threshold=5000,
+                            above_threshold=False
+                        )
+                
         # Average float balance
         avg_float_result = db.session.query(
             db.func.avg(AgentCompany.float_balance)
@@ -2280,7 +2357,7 @@ class TransactionService:
             float(t.withdrawn or 0) for t in transactions if t.withdrawn
         )
         
-        net_flow = total_deposit_amount - total_withdrawal_amount
+        net_flow = total_deposit_amount + total_withdrawal_amount
         
         # Commission statistics
         commission_transactions = [t for t in transactions if t.transaction_type == 'commission']

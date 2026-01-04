@@ -44,7 +44,6 @@ def get_commissions_report():
         print(f"Error generating commission report: {str(e)}")
         return jsonify({'success': False, 'error': 'Internal server error'}), 500
 
-
 @transaction_bp.route('/export-commissions', methods=['GET'])
 def export_commissions_report():
     """Export commission report in various formats"""
@@ -125,8 +124,8 @@ def get_transactions():
         filters = {
             'agent_id': request.args.get('agent_id', type=int),
             'company_id': request.args.get('company_id', type=int),
-            'start_date': request.args.get('start_date'),
-            'end_date': request.args.get('end_date'),
+            'start_date': request.args.get('startDate'),
+            'end_date': request.args.get('endDate'),
             'reasonType': request.args.get('reasonType'),
             'transaction_status': request.args.get('transaction_status'),
             'transaction_type': request.args.get('transaction_type', 'float'),

@@ -150,6 +150,59 @@ class AgentCompanyService:
             )
             return [], f"Failed to fetch agent companies: {str(e)}"
 
+    def count_agents_by_balance_threshold(self, parent_short_code, threshold=20000, above_threshold=False):
+        """Count agents with accounts above or below a certain balance threshold."""
+        try:
+            # Initialize count
+            agent_count = 0
+            
+            # Get all agent companies for the user
+            agent_companies = AgentCompany.query.filter_by(parent_short_code=parent_short_code).all()
+            
+            for ac in agent_companies:
+                # Get all accounts for this agent company
+                accounts = AgentAccount.query.filter_by(
+                    agent_company_id=ac.id
+                ).all()
+                
+                has_relevant_account = False
+                
+                for account in accounts:
+                    # Get latest balance
+                    latest_balance = (
+                        AgentAccountBalance.query
+                        .filter_by(agent_account_id=account.id)
+                        .order_by(AgentAccountBalance.snapshot_at.desc())
+                        .first()
+                    )
+                    
+                    # Check if balance meets threshold criteria
+                    if latest_balance and latest_balance.current_balance is not None:
+                        current_balance = latest_balance.current_balance
+                        
+                        # Apply threshold filter
+                        meets_criteria = (
+                            (current_balance > threshold) if above_threshold 
+                            else (current_balance < threshold)
+                        )
+                        
+                        # If account meets criteria, mark this agent as having relevant account
+                        if meets_criteria:
+                            has_relevant_account = True
+                            break  # No need to check other accounts for this agent
+                
+                # Increment count if agent has at least one relevant account
+                if has_relevant_account:
+                    agent_count += 1
+            
+            return agent_count, None
+            
+        except Exception as e:
+            current_app.logger.error(
+                f"Error counting agents by balance threshold for uparent_short_codeser {parent_short_code}: {str(e)}"
+            )
+            return 0, f"Failed to count agents: {str(e)}"
+        
     def create_agent_company(self, data, user_id):
         """Create a new agent company."""
         try:

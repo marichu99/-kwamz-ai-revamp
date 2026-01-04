@@ -74,7 +74,7 @@ function TransactionsGrid() {
         transactions.forEach(transaction => {
             const companyName = transaction.company_name || "Unknown Company";
             const businessName = transaction.business_name || "Unknown Business";
-            const shortcode = transaction.shortcode || transaction.business_shortcode || "";
+            const shortcode = transaction.business_shortcode || "";
             const businessKey = `${businessName}${shortcode ? ` (${shortcode})` : ''}`;
             
             // Initialize company if not exists
