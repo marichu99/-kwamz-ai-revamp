@@ -1,6 +1,7 @@
 import smtplib
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
+from typing import Dict
 from flask import render_template
 from datetime import datetime
 from email.mime.multipart import MIMEMultipart
@@ -367,3 +368,46 @@ def send_session_timeout_email(recipient_email: str) -> bool:
     except Exception as e:
         print(f"Failed to send session timeout email: {str(e)}")
         return False
+        
+def send_not_active_short_code_(recipient_email: str, business_name:str, business_short_code:str, company_code:str, status:str) -> bool:
+    """
+    Send a plain-text email notifying the user that their session has timed out
+    and they need to re-login.
+    """
+    try:
+        subject = f"Session Timed Out – Action Required ({datetime.now().strftime('%d/%m/%Y')})"
+
+        body = f"""
+            "Hello,\n\n"
+            "This is to inform you that the agent {business_name} business with shortcode {business_short_code}"
+            "\n\n"
+            "And company shortcode {company_code} is of the status {status}"
+            "It is standard procedure to inform you that the agent is not active as at {datetime.now().strftime('%d/%m/%Y %H:%M:%S')} "
+            "\n\n"
+            "Please ignore this if the necessary measures have been put to place about this specific agent"
+            "\n\n"
+            "Thank you for your support.\n\n"
+            "Kind regards,\n"
+            "System Administration Team"
+            """
+        
+
+        msg = MIMEMultipart()
+        msg["From"] = EMAIL_ADDRESS
+        msg["To"] = recipient_email
+        msg["Subject"] = subject
+
+        msg.attach(MIMEText(body, "plain"))
+
+        with smtplib.SMTP("smtp.gmail.com", 587) as server:
+            server.starttls()
+            server.login(EMAIL_ADDRESS, EMAIL_PASSWORD)
+            server.send_message(msg)
+
+        print(f"Session timeout email sent to {recipient_email}")
+        return True
+
+    except Exception as e:
+        print(f"Failed to send session timeout email: {str(e)}")
+        return False
+    

@@ -691,6 +691,16 @@ class AgentCompanyService:
                 'success': False,
                 'error': str(e)
             }
+        
+    def get_agent_company_by_shortcode_(self, short_code: str) -> AgentCompany | None:
+        """Get agent company by shortcode"""
+        try:
+            return AgentCompany.query.filter_by(short_code=short_code).first()
+           
+        except Exception as e:
+            current_app.logger.error(f"Error getting agent company by shortcode: {str(e)}")
+            return None
+              
     
     def get_all_agent_companies(self, filters: dict = None) -> dict:
         """Get all agent companies with optional filtering"""

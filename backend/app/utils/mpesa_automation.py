@@ -1,10 +1,12 @@
 from playwright.sync_api import sync_playwright,Page,Locator,Download, TimeoutError as PlaywrightTimeoutError
 from flask import current_app
 from app.utils.script import fill_login_form, capture_and_solve_captcha
-from app.utils.email_utils import generate_scraping_report_email, send_scraping_report_email,send_session_timeout_email
+from app.utils.email_utils import generate_scraping_report_email, send_scraping_report_email,send_session_timeout_email,send_not_active_short_code_
 from app.service.transaction_service import TransactionService
 from app.service.agentcompany_service import AgentCompanyService
+from app.service.email_outbox_service import EmailOutboxService
 from app.model.user import User
+from app.model.email_outbox import EmailOutbox
 # from script import fill_login_form, capture_and_solve_captcha
 from PIL import Image, ImageFilter, ImageOps
 from dotenv import load_dotenv
@@ -25,22 +27,27 @@ import numpy as np
 
 transaction_service = TransactionService()
 agent_company_service = AgentCompanyService()
+email_outbox_service = EmailOutboxService()
 company_shortcode = None
 user_id = None
+user = None
 till_scraping_shortfall = {}
 context = None
 browser = None
+MAX_SEND_ATTEMPTS=3
 
 # Load environment variables
 load_dotenv()
 
 def login_to_mpesa(password: str = None, username: str = None, short_code: str = None, user_id_passed: str = None) -> None:
-    global company_shortcode, user_id,till_scraping_shortfall,context,browser
+    global company_shortcode, user_id, user,till_scraping_shortfall,context,browser
     password = password 
     # or os.getenv("AGENT_COMPANY_PASSWORD")
     username = username 
     # or os.getenv("AGENT_COMPANY_USERNAME")
     user_id = user_id_passed
+    user = User.query.filter_by(id=user_id)
+    
     short_code = short_code 
     # or os.getenv("AGENT_COMPANY_SHORTCODE")
     company_shortcode = short_code
@@ -292,7 +299,14 @@ def extract_extra_till_info(page: Page, extra_info: dict) -> Dict[str, Any]:
         # Now merge with the existing extra_info
         if extracted_data:
             print(f"[INFO] Extracted {len(extracted_data)} account details:")
+            
             for key, value in extracted_data.items():
+                if(key == "status" and value !="Active"):
+                    send_alert_on_non_active_("martinmaati31@gmail.com",
+                                              business_name=extra_info.get('company_name'),
+                                              business_short_code=extra_info.get("short_code"),
+                                              status=key)
+                    
                 print(f"  {key}: {value}")
             
             # Add the extracted data to extra_info
@@ -320,6 +334,56 @@ def extract_extra_till_info(page: Page, extra_info: dict) -> Dict[str, Any]:
         # Return the original extra_info dict without modifications
         return extra_info
 
+def send_alert_on_non_active_(
+    recipient_email: str,
+    business_name: str,
+    business_short_code: str,
+    status: str
+):
+    try:
+        # 1. Fetch existing outbox record
+        email_outbox = EmailOutboxService.get_by_business_and_reason(
+            business_short_code=business_short_code,
+            reason="NON_ACTIVE_AGENT"
+        )
+
+        # Since service returns a list, get the first one for this receiver
+        email_outbox = next(
+            (e for e in email_outbox if e.receiver == recipient_email),
+            None
+        )
+
+        # 2. Stop if max attempts reached
+        if email_outbox and (email_outbox.sent_times or 0) >= MAX_SEND_ATTEMPTS:
+            return
+
+        # 3. Send the email
+        send_not_active_short_code_(
+            recipient_email=recipient_email,
+            business_name=business_name,
+            business_short_code=business_short_code,
+            company_code=business_short_code,
+            status=status
+        )
+
+        # 4. Update or create using the service
+        if email_outbox:
+            email_outbox_service.update(
+                email_outbox.id,
+                sent_times=(email_outbox.sent_times or 0) + 1
+            )
+        else:
+            email_outbox_service.create(
+                sender="noreply@company.com",
+                receiver=recipient_email,
+                reason="NON_ACTIVE_AGENT",
+                business_short_code=business_short_code,
+                sent_times=1
+            )
+
+    except Exception as e:
+        print(f"[ERROR] An error occurred: {str(e)}")
+        
 def save_table_to_dataframe_(page: Page, business_shortcode: int,category:str) -> tuple:
     """Extract all rows from paginated table and save to CSV."""
     try:
@@ -464,13 +528,13 @@ def update_transactions_from_file(file_path, business_shortcode, transaction_typ
     success_value = results.get('success', False)
     if success_value:
         summary = results.get('summary', {})
-        print(f"\n✅ Success!")
+        print(f"\n Success!")
         print(f"   Updated: {summary.get('updated_count', 0)}")
         print(f"   Created: {summary.get('created_count', 0)}")
         print(f"   Total: {summary.get('total_processed', 0)}")
         print(f"   Success rate: {summary.get('success_rate', 0):.1f}%")
     else:
-        print(f"\n❌ Failed: {results.get('error', 'Unknown error')}")
+        print(f"\n Failed: {results.get('error', 'Unknown error')}")
     
     # Save the processed file
     df.to_excel(f"{business_shortcode}_{transaction_type}.xlsx", index=False)
@@ -623,7 +687,7 @@ def scrape_till_details(page: Page, business_short_code: int) -> dict:
         # Map to AgentCompany fields
         mapped_data = map_scraped_data_to_agent_company(till_info)
                         
-        print(f"[INFO] Save result for business short code {business_short_code}: {mapped_data}")
+        print(f"[INFO] Map result for business short code {business_short_code}: {mapped_data}")
 
         return mapped_data
         
@@ -1239,7 +1303,6 @@ def scrape_180_days_monthly(page:Page, business_short_code:int=0, pass_value:str
         
     # 180 days divided into 6 chunks of 30 days each
     total_months,days = _get_total_months_by_shortcode_shortfall(str(business_short_code),till_scraping_shortfall)
-    print(f"[INFO] Total months to scrape based on shortfall: {total_months}")
     if(days<7):
         return pd.DataFrame(),True
     for month_offset in range(total_months):
@@ -1670,10 +1733,10 @@ def _get_priority_shortcodes_(all_shortcodes: Set[str]) -> Set[str]:
 
         print(
             f"[INFO] Total months to scrape based on shortfall: "
-            f"{total_months} for shortcode {business_shortcode}"
+            f"{total_months} for shortcode {business_shortcode} and {days} days"
         )
 
-        if days > 7:
+        if days > 3:
             priority_shortcode_indexes.add(business_shortcode)
 
     return priority_shortcode_indexes

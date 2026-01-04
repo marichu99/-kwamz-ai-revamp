@@ -19,11 +19,13 @@ import numpy as np
 from flask import current_app
 
 from app.service.company_service import CompanyService
+from app.service.agentcompany_service import AgentCompanyService
 from app.model.agentcompany import AgentCompany
 
 logger = logging.getLogger(__name__)
 
 company_service = CompanyService(db)
+agent_company_service = AgentCompanyService()
 
 class TransactionService:
     def __init__(self):
@@ -374,12 +376,13 @@ class TransactionService:
                 # Add commission-specific fields for commission transactions
                 if transaction_type == 'commission':
                     # Extract commission amount from paid_in or withdrawn
-                    commission_amount = self._parse_decimal(trans_data.get('commission_amount'))
+                    # we should not be hard coding the rate here ......
+                    commission_amount = self._parse_decimal(trans_data.get('commission_amount'))*0.25
                     if not commission_amount:
-                        commission_amount = self._parse_decimal(trans_data.get('paid_in', trans_data.get('withdrawn')))
+                        commission_amount = self._parse_decimal(trans_data.get('paid_in', trans_data.get('withdrawn')))*0.25
                     
                     # Calculate commission rate if not provided
-                    commission_rate = self._parse_decimal(trans_data.get('commission_rate', '0'))
+                    commission_rate = self._parse_decimal(trans_data.get('commission_rate', '0.25'))
                     
                     transaction_data.update({
                         'commission_rate': commission_rate,
@@ -575,9 +578,9 @@ class TransactionService:
                 
                 if transaction_type == 'commission':
                     transaction_data.update({
-                        'commission_rate': self._parse_decimal(row.get('commission_rate', '0')),
+                        'commission_rate': self._parse_decimal(row.get('commission_rate', '0.25')),
                         'commission_amount': self._parse_decimal(row.get('commission_amount', 
-                                                                       row.get('paid_in', row.get('withdrawn')))),
+                                                                       row.get('paid_in', row.get('withdrawn'))))*0.25,
                         'parent_transaction_id': row.get('parent_transaction_id')
                     })
                 
@@ -824,7 +827,14 @@ class TransactionService:
             transactions = pagination.items
 
             # Serialize transactions
-            transactions_data = [trans.to_dict() for trans in transactions]
+            transactions_data : List = []
+            for trans in transactions:
+                append_dict = trans.to_dict()
+                agent_company = agent_company_service.get_agent_company_by_shortcode_(trans.business_shortcode)
+                if(agent_company):
+                    append_dict["business_name"]=agent_company.company_name or ''
+                
+                transactions_data.append(append_dict)
 
             # Calculate summary totals (optional but very useful)
             totals_query = Transaction.query
@@ -855,6 +865,7 @@ class TransactionService:
 
             total_paid_in = totals_query.with_entities(func.sum(Transaction.paid_in)).scalar() or Decimal('0.00')
             total_withdrawn = totals_query.with_entities(func.sum(Transaction.withdrawn)).scalar() or Decimal('0.00')
+            total_commission = totals_query.with_entities(func.sum(Transaction.commission_amount)).scalar() or Decimal('0.00')
 
             return {
                 "success": True,
@@ -869,6 +880,7 @@ class TransactionService:
                 },
                 "summary": {
                     "total_paid_in": str(total_paid_in),
+                    "total_commission": str(total_commission),
                     "total_withdrawn": str(total_withdrawn),
                     "net_flow": str(total_paid_in + total_withdrawn)  # withdrawn is negative
                 },
@@ -881,6 +893,8 @@ class TransactionService:
                 "success": False,
                 "error": f"Failed to fetch transactions: {str(e)}"
             }
+      
+      
             
     def update_transaction_stats(self,transaction):
         """Update daily transaction statistics"""
@@ -2097,7 +2111,7 @@ class TransactionService:
             return "decelerating"
         else:
             return "stable"
-
+    
     def _calculate_cagr(self, trends: List[Dict], transaction_type: str) -> Optional[float]:
         """Calculate Compound Annual Growth Rate"""
         if len(trends) < 2:
@@ -2113,18 +2127,30 @@ class TransactionService:
             first_total = Decimal(first.get('total_commission', '0.00'))
             latest_total = Decimal(latest.get('total_commission', '0.00'))
         
+        # Check for positive values (CAGR requires positive beginning value)
         if first_total <= 0:
             return None
         
-        # Assume each period is roughly equal time (daily, weekly, monthly)
-        # For CAGR, we need to know the actual time period in years
-        # This is a simplified version assuming each trend is a time period
+        # Check if latest_total is positive (CAGR typically expects positive ending value)
+        # If latest_total is negative or zero, CAGR calculation doesn't make sense
+        if latest_total <= 0:
+            return None
+        
         n_periods = len(trends) - 1
         
-        # Calculate CAGR: (Ending Value / Beginning Value)^(1/n) - 1
-        cagr = (float(latest_total) / float(first_total)) ** (1 / n_periods) - 1
-        return cagr * 100  # Convert to percentage
-
+        try:
+            # Calculate CAGR: (Ending Value / Beginning Value)^(1/n) - 1
+            ratio = float(latest_total) / float(first_total)
+            
+            # Ensure ratio is positive before calculating power
+            if ratio <= 0:
+                return None
+                
+            cagr = ratio ** (1 / n_periods) - 1
+            return cagr * 100  # Convert to percentage
+        except (ValueError, ZeroDivisionError):
+            return None
+        
     def _calculate_growth_consistency(self, period_growth: List[Dict]) -> Dict:
         """Calculate consistency metrics for growth"""
         if not period_growth:

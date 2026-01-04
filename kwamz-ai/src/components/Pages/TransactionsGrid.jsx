@@ -12,7 +12,11 @@ import {
     Coins,
     TrendingUp,
     TrendingDown,
-    DollarSign
+    DollarSign,
+    ChevronRight,
+    ChevronDown,
+    Building,
+    Store
 } from 'lucide-react';
 import axios from 'axios';
 import config from '../../Config';
@@ -45,6 +49,10 @@ function TransactionsGrid() {
         transactionStatus: ''
     });
 
+    // Grouping states
+    const [expandedCompanies, setExpandedCompanies] = useState(new Set());
+    const [expandedBusinesses, setExpandedBusinesses] = useState(new Set());
+
     // Transaction type toggle: 'float' or 'commission'
     const [transactionType, setTransactionType] = useState('float');
 
@@ -57,6 +65,105 @@ function TransactionsGrid() {
     const summary = transactionsResponse.summary || {};
     const filters_applied = transactionsResponse.filters_applied || {};
 
+    // Group transactions by company and business
+    const groupedData = useMemo(() => {
+        if (!transactions || transactions.length === 0) return [];
+
+        const grouped = {};
+        
+        transactions.forEach(transaction => {
+            const companyName = transaction.company_name || "Unknown Company";
+            const businessName = transaction.business_name || "Unknown Business";
+            const shortcode = transaction.shortcode || transaction.business_shortcode || "";
+            const businessKey = `${businessName}${shortcode ? ` (${shortcode})` : ''}`;
+            
+            // Initialize company if not exists
+            if (!grouped[companyName]) {
+                grouped[companyName] = {
+                    company_name: companyName,
+                    businesses: {},
+                    total_transactions: 0,
+                    summary: {
+                        total_paid_in: 0,
+                        total_withdrawn: 0,
+                        total_commission: 0
+                    }
+                };
+            }
+            
+            // Initialize business if not exists
+            if (!grouped[companyName].businesses[businessKey]) {
+                grouped[companyName].businesses[businessKey] = {
+                    business_name: businessName,
+                    shortcode: shortcode,
+                    display_name: businessKey,
+                    transactions: [],
+                    total_transactions: 0,
+                    summary: {
+                        total_paid_in: 0,
+                        total_withdrawn: 0,
+                        total_commission: 0
+                    }
+                };
+            }
+            
+            // Add transaction to business
+            grouped[companyName].businesses[businessKey].transactions.push(transaction);
+            grouped[companyName].businesses[businessKey].total_transactions++;
+            
+            // Update business totals
+            const paidIn = parseFloat(transaction.paid_in || 0);
+            const withdrawn = parseFloat(transaction.withdrawn || 0);
+            const commission = parseFloat(transaction.commission_amount || 0);
+            
+            grouped[companyName].businesses[businessKey].summary.total_paid_in += paidIn;
+            grouped[companyName].businesses[businessKey].summary.total_withdrawn += withdrawn;
+            grouped[companyName].businesses[businessKey].summary.total_commission += commission;
+            
+            // Update company totals
+            grouped[companyName].total_transactions++;
+            grouped[companyName].summary.total_paid_in += paidIn;
+            grouped[companyName].summary.total_withdrawn += withdrawn;
+            grouped[companyName].summary.total_commission += commission;
+        });
+        
+        // Convert to array format for easier rendering
+        const companiesArray = Object.values(grouped).map(company => ({
+            ...company,
+            businesses: Object.values(company.businesses).map(business => ({
+                ...business,
+                summary: {
+                    total_paid_in: business.summary.total_paid_in.toFixed(2),
+                    total_withdrawn: Math.abs(business.summary.total_withdrawn).toFixed(2),
+                    total_commission: business.summary.total_commission.toFixed(2)
+                }
+            })),
+            summary: {
+                total_paid_in: company.summary.total_paid_in.toFixed(2),
+                total_withdrawn: Math.abs(company.summary.total_withdrawn).toFixed(2),
+                total_commission: company.summary.total_commission.toFixed(2)
+            }
+        }));
+        
+        return companiesArray;
+    }, [transactions]);
+
+    // Handle page size change
+    const handlePageSizeChange = (e) => {
+        const newSize = Number(e.target.value);
+        setPageSize(newSize);
+        setCurrentPage(1);
+        setSelectedTransactionIds([]);
+
+        // If using server-side pagination, fetch with new page size
+        if (searchTerm.trim()) {
+            // Client-side filtering, no need to fetch
+        } else {
+            // Server-side pagination, fetch new data
+            fetchTransactions();
+        }
+    };
+
     // Fetch transactions from API
     const fetchTransactions = async () => {
         setIsLoading(true);
@@ -66,7 +173,7 @@ function TransactionsGrid() {
                 page: currentPage,
                 per_page: pageSize,
                 transaction_type: transactionType,
-                search: searchTerm, // Add this
+                search: searchTerm,
                 ...filters
             };
 
@@ -171,34 +278,49 @@ function TransactionsGrid() {
         return () => document.removeEventListener('mousedown', handleClickOutside);
     }, []);
 
-    // Calculate pagination for client-side filtered results
-    const totalItems = pagination.total || 0;
-    const totalPages = pagination.pages || 0;
-    const paginatedTransactions = transactions;
-
-    // Handle page change for client-side filtering
-    const handlePageChange = (page) => {
-        if (page >= 1 && page <= totalPages) {
-            setCurrentPage(page);
-            setSelectedTransactionIds([]);
-            // fetchTransactions();
-            console.log('Page changed to:', page);
+    // Group toggle functions
+    const toggleCompany = (companyName) => {
+        const newExpanded = new Set(expandedCompanies);
+        if (newExpanded.has(companyName)) {
+            newExpanded.delete(companyName);
+            // Also collapse all businesses in this company
+            const newBusinessExpanded = new Set(expandedBusinesses);
+            groupedData
+                .find(c => c.company_name === companyName)
+                ?.businesses.forEach(b => {
+                    newBusinessExpanded.delete(b.display_name);
+                });
+            setExpandedBusinesses(newBusinessExpanded);
+        } else {
+            newExpanded.add(companyName);
         }
+        setExpandedCompanies(newExpanded);
     };
 
-    // Handle page size change
-    const handlePageSizeChange = (e) => {
-        const newSize = Number(e.target.value);
-        setPageSize(newSize);
-        setCurrentPage(1);
-        setSelectedTransactionIds([]);
-
-        // If using server-side pagination, fetch with new page size
-        if (searchTerm.trim()) {
-            // Client-side filtering, no need to fetch
+    const toggleBusiness = (businessKey) => {
+        const newExpanded = new Set(expandedBusinesses);
+        if (newExpanded.has(businessKey)) {
+            newExpanded.delete(businessKey);
         } else {
-            // Server-side pagination, fetch new data
-            fetchTransactions();
+            newExpanded.add(businessKey);
+        }
+        setExpandedBusinesses(newExpanded);
+    };
+
+    const toggleExpandAll = () => {
+        if (expandedCompanies.size === groupedData.length) {
+            // Collapse all
+            setExpandedCompanies(new Set());
+            setExpandedBusinesses(new Set());
+        } else {
+            // Expand all
+            const allCompanies = new Set(groupedData.map(c => c.company_name));
+            const allBusinesses = new Set();
+            groupedData.forEach(c => {
+                c.businesses.forEach(b => allBusinesses.add(b.display_name));
+            });
+            setExpandedCompanies(allCompanies);
+            setExpandedBusinesses(allBusinesses);
         }
     };
 
@@ -211,12 +333,25 @@ function TransactionsGrid() {
         );
     };
 
-    // Handle select all checkboxes
+    // Handle select all checkboxes for visible transactions
     const handleSelectAll = () => {
-        if (selectedTransactionIds.length === paginatedTransactions.length) {
+        // Get all visible transaction IDs
+        const allVisibleTransactionIds = [];
+        groupedData.forEach(company => {
+            company.businesses.forEach(business => {
+                if (expandedCompanies.has(company.company_name) && 
+                    expandedBusinesses.has(business.display_name)) {
+                    business.transactions.forEach(t => {
+                        allVisibleTransactionIds.push(t.id);
+                    });
+                }
+            });
+        });
+
+        if (selectedTransactionIds.length === allVisibleTransactionIds.length) {
             setSelectedTransactionIds([]);
         } else {
-            setSelectedTransactionIds(paginatedTransactions.map((t) => t.id));
+            setSelectedTransactionIds(allVisibleTransactionIds);
         }
     };
 
@@ -274,6 +409,8 @@ function TransactionsGrid() {
         setFilters(prev => ({ ...prev, [field]: value }));
         setCurrentPage(1);
         setSelectedTransactionIds([]);
+        setExpandedCompanies(new Set());
+        setExpandedBusinesses(new Set());
     };
 
     // Handle reset filters
@@ -287,7 +424,9 @@ function TransactionsGrid() {
         setSearchTerm('');
         setCurrentPage(1);
         setSelectedTransactionIds([]);
-        fetchTransactions(); // Fetch fresh data with reset filters
+        setExpandedCompanies(new Set());
+        setExpandedBusinesses(new Set());
+        fetchTransactions();
     };
 
     // Toggle transaction type
@@ -303,6 +442,8 @@ function TransactionsGrid() {
             transactionStatus: ''
         });
         setSearchTerm('');
+        setExpandedCompanies(new Set());
+        setExpandedBusinesses(new Set());
     };
 
     // Format currency
@@ -323,13 +464,6 @@ function TransactionsGrid() {
             hour: '2-digit',
             minute: '2-digit'
         });
-    };
-
-    // Format percentage
-    const formatPercentage = (rate) => {
-        if (!rate) return '0%';
-        const num = parseFloat(rate);
-        return `${num.toFixed(2)}%`;
     };
 
     // Get transaction type label
@@ -371,7 +505,7 @@ function TransactionsGrid() {
                 </button>
             </div>
 
-            {/* Stats Summary - using summary from response */}
+            {/* Stats Summary */}
             <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
                 <div className={`rounded-xl p-4 ${transactionType === 'float' ? 'bg-blue-50 dark:bg-slate-700' : 'bg-amber-50 dark:bg-slate-700'
                     }`}>
@@ -426,7 +560,7 @@ function TransactionsGrid() {
                         <div className="bg-green-50 dark:bg-slate-700 rounded-xl p-4">
                             <div className="text-sm text-green-600 dark:text-green-400 font-medium">Total Commission</div>
                             <div className="text-2xl font-bold text-slate-800 dark:text-white">
-                                {formatCurrency(summary.total_commission_amount || '0.00')}
+                                {formatCurrency(summary.total_commission || '0.00')}
                             </div>
                         </div>
                         <div className="bg-blue-50 dark:bg-slate-700 rounded-xl p-4">
@@ -456,6 +590,24 @@ function TransactionsGrid() {
                         <BarChart3 className="w-4 h-4" />
                         <span>Statistics</span>
                     </button>
+                    {groupedData.length > 0 && (
+                        <button
+                            onClick={toggleExpandAll}
+                            className="flex items-center space-x-2 py-2 px-4 bg-slate-500 text-white rounded-xl hover:bg-slate-600 transition-colors"
+                        >
+                            {expandedCompanies.size === groupedData.length ? (
+                                <>
+                                    <ChevronDown className="w-4 h-4" />
+                                    <span>Collapse All</span>
+                                </>
+                            ) : (
+                                <>
+                                    <ChevronRight className="w-4 h-4" />
+                                    <span>Expand All</span>
+                                </>
+                            )}
+                        </button>
+                    )}
                 </div>
 
                 {/* Action Buttons */}
@@ -612,150 +764,252 @@ function TransactionsGrid() {
                 </div>
             </div>
 
-            {/* Transactions Grid */}
-            <div className="overflow-x-auto">
-                <table className="w-full table-auto">
-                    <thead>
-                        <tr className="bg-slate-100 dark:bg-slate-700 text-left text-slate-600 dark:text-slate-300">
-                            <th className="px-4 py-3 font-semibold rounded-l-xl">
-                                <input
-                                    type="checkbox"
-                                    checked={selectedTransactionIds.length === paginatedTransactions.length && paginatedTransactions.length > 0}
-                                    onChange={handleSelectAll}
-                                    className={`w-4 h-4 border-slate-300 rounded focus:ring-2 ${transactionType === 'float'
-                                        ? 'text-blue-600 focus:ring-blue-500'
-                                        : 'text-amber-600 focus:ring-amber-500'
-                                        } dark:bg-slate-700 dark:border-slate-600`}
-                                />
-                            </th>
-                            <th className="px-4 py-3 font-semibold">
-                                {transactionType === 'float' ? 'Receipt No' : 'Commission Receipt No'}
-                            </th>
-                            <th className="px-4 py-3 font-semibold">Completion Time</th>
-                            <th className="px-4 py-3 font-semibold">Details</th>
-                            <th className="px-4 py-3 font-semibold">
-                                {transactionType === 'float' ? 'Transaction Type' : 'Commission Type'}
-                            </th>
-                            {transactionType === 'float' ? (
-                                <>
-                                    <th className="px-4 py-3 font-semibold">Amount</th>
-                                    <th className="px-4 py-3 font-semibold">Balance</th>
-                                </>
-                            ) : (
-                                <>
-                                    <th className="px-4 py-3 font-semibold">Commission Amount</th>
-                                    <th className="px-4 py-3 font-semibold">Rate</th>
-                                </>
-                            )}
-                            <th className="px-4 py-3 font-semibold">Status</th>
-                            <th className="px-4 py-3 font-semibold rounded-r-xl">
-                                {transactionType === 'float' ? 'Other Party' : 'Original Receipt'}
-                            </th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        {paginatedTransactions.map((t, index) => (
-                            <tr
-                                key={t.id}
-                                className={`border-b border-slate-200 dark:border-slate-600 ${index % 2 === 0 ? 'bg-white dark:bg-slate-800' : 'bg-slate-50 dark:bg-slate-700/50'
-                                    } hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors`}
-                            >
-                                <td className="px-4 py-3">
-                                    <input
-                                        type="checkbox"
-                                        checked={selectedTransactionIds.includes(t.id)}
-                                        onChange={() => handleSelectTransaction(t.id)}
-                                        className={`w-4 h-4 border-slate-300 rounded focus:ring-2 ${transactionType === 'float'
-                                            ? 'text-blue-600 focus:ring-blue-500'
-                                            : 'text-amber-600 focus:ring-amber-500'
-                                            } dark:bg-slate-700 dark:border-slate-600`}
-                                    />
-                                </td>
-                                <td className="px-4 py-3 font-mono text-sm font-medium">
-                                    <span className={
-                                        transactionType === 'float'
-                                            ? 'text-blue-600 dark:text-blue-400'
-                                            : 'text-amber-600 dark:text-amber-400'
-                                    }>
-                                        {t.receipt_no}
-                                    </span>
-                                </td>
-                                <td className="px-4 py-3 text-sm">
-                                    {formatDate(t.completion_time)}
-                                </td>
-                                <td className="px-4 py-3 max-w-xs">
-                                    <div className="truncate" title={t.details}>
-                                        {t.details}
-                                    </div>
-                                </td>
-                                <td className="px-4 py-3">
-                                    <span className={`px-2 py-1 text-xs rounded-full ${t.reason_type?.includes('Deposit')
-                                        ? 'bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200'
-                                        : t.reason_type?.includes('Withdrawal')
-                                            ? 'bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-200'
-                                            : 'bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200'
-                                        }`}>
-                                        {transactionType === 'float'
-                                            ? (t.reason_type ? t.reason_type.split(' ')[0] : '-')
-                                            : (t.details ? t.details.split(' ')[0] : '-')
-                                        }
-                                    </span>
-                                </td>
+            {/* Grouped Transactions Grid */}
+            <div className="space-y-3">
+                {groupedData.map(company => (
+                    <div key={company.company_name} className="bg-slate-50 dark:bg-slate-800/50 rounded-lg overflow-hidden border border-slate-200 dark:border-slate-700">
+                        {/* Company Header */}
+                        <button
+                            onClick={() => toggleCompany(company.company_name)}
+                            className="w-full px-4 py-3 flex items-center justify-between hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors border-b border-slate-200 dark:border-slate-700"
+                        >
+                            <div className="flex items-center">
+                                {expandedCompanies.has(company.company_name) ? (
+                                    <ChevronDown className="w-4 h-4 mr-3 text-slate-500" />
+                                ) : (
+                                    <ChevronRight className="w-4 h-4 mr-3 text-slate-500" />
+                                )}
+                                <Building className="w-4 h-4 mr-2 text-blue-500" />
+                                <span className="font-bold text-slate-800 dark:text-white">{company.company_name}</span>
+                                <span className="ml-3 text-sm bg-blue-100 dark:bg-blue-900 text-blue-800 dark:text-blue-300 px-2 py-1 rounded-full">
+                                    {company.total_transactions} transactions
+                                </span>
+                            </div>
+                            <div className="text-sm">
                                 {transactionType === 'float' ? (
                                     <>
-                                        <td className="px-4 py-3 font-medium">
-                                            {t.paid_in && parseFloat(t.paid_in) > 0 ? (
-                                                <span className="text-green-600 dark:text-green-400">
-                                                    +{formatCurrency(t.paid_in)}
-                                                </span>
-                                            ) : (
-                                                <span className="text-red-600 dark:text-red-400">
-                                                    -{formatCurrency(t.withdrawn)}
-                                                </span>
-                                            )}
-                                        </td>
-                                        <td className="px-4 py-3 font-bold">
-                                            {formatCurrency(t.balance)}
-                                        </td>
+                                        <span className="text-green-600 dark:text-green-400 mr-3">
+                                            +{formatCurrency(company.summary.total_paid_in)}
+                                        </span>
+                                        <span className="text-red-600 dark:text-red-400">
+                                            -{formatCurrency(company.summary.total_withdrawn)}
+                                        </span>
                                     </>
                                 ) : (
-                                    <>
-                                        <td className="px-4 py-3 font-bold text-amber-600 dark:text-amber-400">
-                                            {formatCurrency(t.commission_amount || t.paid_in)}
-                                        </td>
-                                        <td className="px-4 py-3">
-                                            <div className="text-sm text-slate-600 dark:text-slate-400">
-                                                {formatPercentage(t.commission_rate)}
-                                            </div>
-                                        </td>
-                                    </>
-                                )}
-                                <td className="px-4 py-3">
-                                    <span className={`px-2 py-1 text-xs rounded-full ${t.transaction_status === 'Completed'
-                                        ? 'bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200'
-                                        : 'bg-yellow-100 text-yellow-800 dark:bg-yellow-900 dark:text-yellow-200'
-                                        }`}>
-                                        {t.transaction_status || 'Unknown'}
+                                    <span className="text-amber-600 dark:text-amber-400">
+                                        {formatCurrency(company.summary.total_commission)}
                                     </span>
-                                </td>
-                                <td className="px-4 py-3 max-w-xs">
-                                    <div className="truncate" title={
-                                        transactionType === 'float'
-                                            ? t.other_party_info
-                                            : t.linked_transaction_id
-                                    }>
-                                        {transactionType === 'float'
-                                            ? (t.other_party_info || '-')
-                                            : (t.linked_transaction_id || '-')
-                                        }
+                                )}
+                            </div>
+                        </button>
+                        
+                        {/* Businesses within Company */}
+                        {expandedCompanies.has(company.company_name) && (
+                            <div className="px-4 py-2 bg-white dark:bg-slate-900">
+                                {company.businesses.map(business => (
+                                    <div key={business.display_name} className="mb-2 last:mb-0">
+                                        {/* Business Header */}
+                                        <button
+                                            onClick={() => toggleBusiness(business.display_name)}
+                                            className="w-full px-3 py-2 flex items-center justify-between hover:bg-slate-50 dark:hover:bg-slate-800 rounded transition-colors"
+                                        >
+                                            <div className="flex items-center">
+                                                {expandedBusinesses.has(business.display_name) ? (
+                                                    <ChevronDown className="w-4 h-4 mr-2 text-slate-500" />
+                                                ) : (
+                                                    <ChevronRight className="w-4 h-4 mr-2 text-slate-500" />
+                                                )}
+                                                <Store className="w-4 h-4 mr-2 text-green-500" />
+                                                <span className="font-semibold text-slate-700 dark:text-slate-300">{business.display_name}</span>
+                                                <span className="ml-2 text-xs bg-green-100 dark:bg-green-900 text-green-800 dark:text-green-300 px-2 py-0.5 rounded-full">
+                                                    {business.total_transactions} transactions
+                                                </span>
+                                            </div>
+                                            <div className="text-xs">
+                                                {transactionType === 'float' ? (
+                                                    <>
+                                                        <span className="text-green-600 dark:text-green-400 mr-2">
+                                                            +{formatCurrency(business.summary.total_paid_in)}
+                                                        </span>
+                                                        <span className="text-red-600 dark:text-red-400">
+                                                            -{formatCurrency(business.summary.total_withdrawn)}
+                                                        </span>
+                                                    </>
+                                                ) : (
+                                                    <span className="text-amber-600 dark:text-amber-400">
+                                                        {formatCurrency(business.summary.total_commission)}
+                                                    </span>
+                                                )}
+                                            </div>
+                                        </button>
+                                        
+                                        {/* Transactions within Business */}
+                                        {expandedBusinesses.has(business.display_name) && (
+                                            <div className="mt-2 overflow-x-auto">
+                                                <table className="w-full text-sm">
+                                                    <thead>
+                                                        <tr className="bg-slate-100 dark:bg-slate-800 text-left text-slate-600 dark:text-slate-300">
+                                                            <th className="px-3 py-2 font-semibold rounded-l-xl">
+                                                                <input
+                                                                    type="checkbox"
+                                                                    checked={
+                                                                        business.transactions.length > 0 &&
+                                                                        business.transactions.every(t => selectedTransactionIds.includes(t.id))
+                                                                    }
+                                                                    onChange={() => {
+                                                                        const businessTransactionIds = business.transactions.map(t => t.id);
+                                                                        const allSelected = businessTransactionIds.every(id => 
+                                                                            selectedTransactionIds.includes(id)
+                                                                        );
+                                                                        
+                                                                        if (allSelected) {
+                                                                            // Deselect all in this business
+                                                                            setSelectedTransactionIds(prev => 
+                                                                                prev.filter(id => !businessTransactionIds.includes(id))
+                                                                            );
+                                                                        } else {
+                                                                            // Select all in this business
+                                                                            setSelectedTransactionIds(prev => 
+                                                                                [...new Set([...prev, ...businessTransactionIds])]
+                                                                            );
+                                                                        }
+                                                                    }}
+                                                                    className={`w-4 h-4 border-slate-300 rounded focus:ring-2 ${transactionType === 'float'
+                                                                        ? 'text-blue-600 focus:ring-blue-500'
+                                                                        : 'text-amber-600 focus:ring-amber-500'
+                                                                        } dark:bg-slate-700 dark:border-slate-600`}
+                                                                />
+                                                            </th>
+                                                            <th className="px-3 py-2 font-semibold">
+                                                                {transactionType === 'float' ? 'Receipt No' : 'Commission Receipt No'}
+                                                            </th>
+                                                            <th className="px-3 py-2 font-semibold">Completion Time</th>
+                                                            <th className="px-3 py-2 font-semibold">Details</th>
+                                                            <th className="px-3 py-2 font-semibold">
+                                                                {transactionType === 'float' ? 'Transaction Type' : 'Commission Type'}
+                                                            </th>
+                                                            {transactionType === 'float' ? (
+                                                                <>
+                                                                    <th className="px-3 py-2 font-semibold">Amount</th>
+                                                                    <th className="px-3 py-2 font-semibold">Balance</th>
+                                                                </>
+                                                            ) : (
+                                                                <>
+                                                                    <th className="px-3 py-2 font-semibold">Commission Amount</th>
+                                                                    <th className="px-3 py-2 font-semibold">Balance</th>
+                                                                </>
+                                                            )}
+                                                            <th className="px-3 py-2 font-semibold">Status</th>
+                                                            {transactionType === 'float' && (
+                                                                <th className="px-3 py-2 font-semibold rounded-r-xl">Other Party</th>
+                                                            )}
+                                                        </tr>
+                                                    </thead>
+                                                    <tbody>
+                                                        {business.transactions.map((t, index) => (
+                                                            <tr
+                                                                key={t.id}
+                                                                className={`border-b border-slate-200 dark:border-slate-600 ${index % 2 === 0 ? 'bg-white dark:bg-slate-800' : 'bg-slate-50 dark:bg-slate-700/50'
+                                                                    } hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors`}
+                                                            >
+                                                                <td className="px-3 py-2">
+                                                                    <input
+                                                                        type="checkbox"
+                                                                        checked={selectedTransactionIds.includes(t.id)}
+                                                                        onChange={() => handleSelectTransaction(t.id)}
+                                                                        className={`w-4 h-4 border-slate-300 rounded focus:ring-2 ${transactionType === 'float'
+                                                                            ? 'text-blue-600 focus:ring-blue-500'
+                                                                            : 'text-amber-600 focus:ring-amber-500'
+                                                                            } dark:bg-slate-700 dark:border-slate-600`}
+                                                                    />
+                                                                </td>
+                                                                <td className="px-3 py-2 font-mono text-sm font-medium">
+                                                                    <span className={
+                                                                        transactionType === 'float'
+                                                                            ? 'text-blue-600 dark:text-blue-400'
+                                                                            : 'text-amber-600 dark:text-amber-400'
+                                                                    }>
+                                                                        {t.receipt_no}
+                                                                    </span>
+                                                                </td>
+                                                                <td className="px-3 py-2 text-sm">
+                                                                    {formatDate(t.completion_time)}
+                                                                </td>
+                                                                <td className="px-3 py-2 max-w-xs">
+                                                                    <div className="truncate" title={t.details}>
+                                                                        {t.details}
+                                                                    </div>
+                                                                </td>
+                                                                <td className="px-3 py-2">
+                                                                    <span className={`px-2 py-1 text-xs rounded-full ${t.reason_type?.includes('Deposit')
+                                                                        ? 'bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200'
+                                                                        : t.reason_type?.includes('Withdrawal')
+                                                                            ? 'bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-200'
+                                                                            : 'bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200'
+                                                                        }`}>
+                                                                        {transactionType === 'float'
+                                                                            ? (t.reason_type ? t.reason_type.split(' ')[0] : '-')
+                                                                            : (t.details ? t.details.split(' ')[0] : '-')
+                                                                        }
+                                                                    </span>
+                                                                </td>
+                                                                {transactionType === 'float' ? (
+                                                                    <>
+                                                                        <td className="px-3 py-2 font-medium">
+                                                                            {t.paid_in && parseFloat(t.paid_in) > 0 ? (
+                                                                                <span className="text-green-600 dark:text-green-400">
+                                                                                    +{formatCurrency(t.paid_in)}
+                                                                                </span>
+                                                                            ) : (
+                                                                                <span className="text-red-600 dark:text-red-400">
+                                                                                    -{formatCurrency(t.withdrawn)}
+                                                                                </span>
+                                                                            )}
+                                                                        </td>
+                                                                        <td className="px-3 py-2 font-bold">
+                                                                            {formatCurrency(t.balance)}
+                                                                        </td>
+                                                                    </>
+                                                                ) : (
+                                                                    <>
+                                                                        <td className="px-3 py-2 font-bold text-amber-600 dark:text-amber-400">
+                                                                            {formatCurrency(t.commission_amount || t.paid_in)}
+                                                                        </td>
+                                                                        <td className="px-3 py-2 font-bold">
+                                                                            {formatCurrency(t.balance)}
+                                                                        </td>
+                                                                    </>
+                                                                )}
+                                                                <td className="px-3 py-2">
+                                                                    <span className={`px-2 py-1 text-xs rounded-full ${t.transaction_status === 'Completed'
+                                                                        ? 'bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200'
+                                                                        : 'bg-yellow-100 text-yellow-800 dark:bg-yellow-900 dark:text-yellow-200'
+                                                                        }`}>
+                                                                        {t.transaction_status || 'Unknown'}
+                                                                    </span>
+                                                                </td>
+                                                                {transactionType === 'float' && (
+                                                                    <td className="px-3 py-2 max-w-xs">
+                                                                        <div className="truncate" title={t.other_party_info}>
+                                                                            {t.other_party_info || '-'}
+                                                                        </div>
+                                                                    </td>
+                                                                )}
+                                                            </tr>
+                                                        ))}
+                                                    </tbody>
+                                                </table>
+                                            </div>
+                                        )}
                                     </div>
-                                </td>
-                            </tr>
-                        ))}
-                    </tbody>
-                </table>
-
-                {paginatedTransactions.length === 0 && !isLoading && (
+                                ))}
+                            </div>
+                        )}
+                    </div>
+                ))}
+                
+                {/* Empty State */}
+                {groupedData.length === 0 && !isLoading && (
                     <div className="text-center py-8 text-slate-500 dark:text-slate-400">
                         {searchTerm.trim()
                             ? `No ${transactionType === 'float' ? 'float' : 'commission'} transactions found matching "${searchTerm}"`
@@ -779,7 +1033,7 @@ function TransactionsGrid() {
             <div className="flex flex-col sm:flex-row justify-between items-center mt-4 space-y-4 sm:space-y-0">
                 <div className="flex items-center space-x-2">
                     <span className="text-sm text-slate-600 dark:text-slate-300">
-                        Showing {(currentPage - 1) * pageSize + 1} - {Math.min(currentPage * pageSize, totalItems)} of {totalItems} transactions
+                        Showing {(currentPage - 1) * pageSize + 1} - {Math.min(currentPage * pageSize, pagination.total)} of {pagination.total} transactions
                     </span>
                     <select
                         value={pageSize}
@@ -794,32 +1048,44 @@ function TransactionsGrid() {
                 </div>
                 <div className="flex items-center space-x-2">
                     <button
-                        onClick={() => handlePageChange(1)}
+                        onClick={() => {
+                            setCurrentPage(1);
+                            setSelectedTransactionIds([]);
+                        }}
                         disabled={currentPage === 1}
                         className="py-1 px-3 bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300 rounded-xl hover:bg-slate-200 dark:hover:bg-slate-600 disabled:opacity-50 disabled:cursor-not-allowed"
                     >
                         First
                     </button>
                     <button
-                        onClick={() => handlePageChange(currentPage - 1)}
+                        onClick={() => {
+                            setCurrentPage(currentPage - 1);
+                            setSelectedTransactionIds([]);
+                        }}
                         disabled={currentPage === 1}
                         className="py-1 px-3 bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300 rounded-xl hover:bg-slate-200 dark:hover:bg-slate-600 disabled:opacity-50 disabled:cursor-not-allowed"
                     >
                         Previous
                     </button>
                     <span className="text-sm text-slate-600 dark:text-slate-300">
-                        Page {currentPage} of {totalPages}
+                        Page {currentPage} of {pagination.pages || 1}
                     </span>
                     <button
-                        onClick={() => handlePageChange(currentPage + 1)}
-                        disabled={currentPage === totalPages}
+                        onClick={() => {
+                            setCurrentPage(currentPage + 1);
+                            setSelectedTransactionIds([]);
+                        }}
+                        disabled={currentPage === (pagination.pages || 1)}
                         className="py-1 px-3 bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300 rounded-xl hover:bg-slate-200 dark:hover:bg-slate-600 disabled:opacity-50 disabled:cursor-not-allowed"
                     >
                         Next
                     </button>
                     <button
-                        onClick={() => handlePageChange(totalPages)}
-                        disabled={currentPage === totalPages}
+                        onClick={() => {
+                            setCurrentPage(pagination.pages || 1);
+                            setSelectedTransactionIds([]);
+                        }}
+                        disabled={currentPage === (pagination.pages || 1)}
                         className="py-1 px-3 bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300 rounded-xl hover:bg-slate-200 dark:hover:bg-slate-600 disabled:opacity-50 disabled:cursor-not-allowed"
                     >
                         Last
