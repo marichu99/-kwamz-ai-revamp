@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Upload, FileText, Shield, X, CheckCircle, AlertCircle, Loader2, Download, Trash2, RefreshCw } from 'lucide-react';
+import { Upload, FileText, Shield, X, CheckCircle, AlertCircle, Loader2, Download, Trash2, RefreshCw, FileSignature } from 'lucide-react';
 import config from '../../Config';
 import { useToast } from './ToastProvider';
 
@@ -52,7 +52,8 @@ const KYCDocumentUploadPage = ({
     // Document status with document IDs for backend operations
     const [documentStatus, setDocumentStatus] = useState({
         kra: { uploaded: false, fileName: '', fileUrl: '', documentId: null },
-        police: { uploaded: false, fileName: '', fileUrl: '', documentId: null }
+        police: { uploaded: false, fileName: '', fileUrl: '', documentId: null },
+        mpesa: { uploaded: false, fileName: '', fileUrl: '', documentId: null }
     });
 
     const [confirmDialog, setConfirmDialog] = useState({
@@ -65,11 +66,11 @@ const KYCDocumentUploadPage = ({
 
     const kraPinFileRef = useRef(null);
     const policeClearanceFileRef = useRef(null);
+    const mpesaAgreementFileRef = useRef(null);
     const genericFileRef = useRef(null);
 
     // Check for existing documents when modal opens
     useEffect(() => {
-
         if (isOpen && user?.id) {
             checkExistingDocuments();
         }
@@ -78,7 +79,6 @@ const KYCDocumentUploadPage = ({
     // Validate name match
     useEffect(() => {
         if (taxPayerName && clearedUserName) {
-
             if (taxPayerName !== clearedUserName) {
                 showToast('The taxpayer name does not match police clearance form details', 'error');
                 setErrors(prev => ({ ...prev, nameMatch: 'The taxpayer name does not match police clearance form details' }));
@@ -97,7 +97,6 @@ const KYCDocumentUploadPage = ({
             const kraData = await kraResponse.json();
 
             if (kraData.exists) {
-
                 setKraPin(kraData.document.extracted_data["PIN"] || '');
                 setTaxPayerName(kraData.document.extracted_data["Taxpayer Name"] || '');
                 setEmail(kraData.document.extracted_data["Email address"] || '');
@@ -120,7 +119,6 @@ const KYCDocumentUploadPage = ({
             const policeData = await policeResponse.json();
 
             if (policeData.exists) {
-
                 setPoliceClearance(policeData.document.extracted_data["Reference Number"] || '');
                 setClearedUserName(policeData.document.extracted_data["Name"] || '');
                 setIdNumber(policeData.document.extracted_data["ID Number"] || '');
@@ -134,6 +132,24 @@ const KYCDocumentUploadPage = ({
                     }
                 }));
                 setErrors(prev => ({ ...prev, nameMatch: '' }));
+            }
+
+            // Check Mpesa Agency Agreement document
+            const mpesaResponse = await fetch(
+                `${config.API_URL}/document/status/${user.id}/mpesa_agreement`
+            );
+            const mpesaData = await mpesaResponse.json();
+
+            if (mpesaData.exists) {
+                setDocumentStatus(prev => ({
+                    ...prev,
+                    mpesa: {
+                        uploaded: true,
+                        fileName: mpesaData.document.filename,
+                        fileUrl: mpesaData.document.gcp_url,
+                        documentId: mpesaData.document.id
+                    }
+                }));
             }
         } catch (err) {
             console.error('Error checking existing documents:', err);
@@ -173,7 +189,7 @@ const KYCDocumentUploadPage = ({
                         uploaded: true,
                         fileName: file.name,
                         fileUrl: result.gcp_url,
-                        documentId: null // Backend doesn't return ID in extract response
+                        documentId: result.documentId || null
                     }
                 }));
                 setErrors(prev => ({ ...prev, nameMatch: '' }));
@@ -202,15 +218,28 @@ const KYCDocumentUploadPage = ({
                         uploaded: true,
                         fileName: file.name,
                         fileUrl: result.gcp_url,
-                        documentId: null
+                        documentId: result.documentId || null
                     }
                 }));
 
                 setErrors(prev => ({ ...prev, nameMatch: '' }));
             }
 
+            // Handle Mpesa Agency Agreement response
+            if (docType === 'mpesa') {
+                setDocumentStatus(prev => ({
+                    ...prev,
+                    mpesa: {
+                        uploaded: true,
+                        fileName: file.name,
+                        fileUrl: result.gcp_url,
+                        documentId: result.documentId || null
+                    }
+                }));
+            }
+
             showToast(
-                `${docType === 'kra' ? 'KRA PIN' : 'Police Clearance'} document uploaded successfully`,
+                `${docType === 'kra' ? 'KRA PIN' : docType === 'police' ? 'Police Clearance' : 'Mpesa Agency Agreement'} document uploaded successfully`,
                 'success'
             );
 
@@ -269,7 +298,7 @@ const KYCDocumentUploadPage = ({
         setConfirmDialog({
             isOpen: true,
             title: 'Delete Document',
-            message: `Are you sure you want to delete this ${docType === 'kra' ? 'KRA PIN' : 'Police Clearance'
+            message: `Are you sure you want to delete this ${docType === 'kra' ? 'KRA PIN' : docType === 'police' ? 'Police Clearance' : 'Mpesa Agency Agreement'
                 } document? This action cannot be undone.`,
             type: 'danger',
             onConfirm: async () => {
@@ -297,6 +326,8 @@ const KYCDocumentUploadPage = ({
                         resetFileInput(kraPinFileRef);
                     } else if (docType === 'police') {
                         resetPoliceClearance();
+                    } else if (docType === 'mpesa') {
+                        resetMpesaAgreement();
                     }
 
                     setDocumentStatus(prev => ({
@@ -316,15 +347,13 @@ const KYCDocumentUploadPage = ({
     };
 
     const handleReupload = async (docType) => {
-        console.log("The docType is >>", docType)
         setConfirmDialog({
             isOpen: true,
             title: 'Re-upload Document',
-            message: `Are you sure you want to replace the existing ${docType === 'kra' ? 'KRA PIN' : 'Police Clearance'
+            message: `Are you sure you want to replace the existing ${docType === 'kra' ? 'KRA PIN' : docType === 'police' ? 'Police Clearance' : 'Mpesa Agency Agreement'
                 } document?`,
             type: 'warning',
             onConfirm: async () => {
-                // fileRef.current?.click();
                 setConfirmDialog(prev => ({ ...prev, isOpen: false }));
 
                 // Create a promise to wait for file selection
@@ -374,8 +403,9 @@ const KYCDocumentUploadPage = ({
                     await uploadFile('/extract_kra_pin', file, 'kra');
                 } else if (docType === 'police') {
                     await uploadFile('/extract_police_clearance', file, 'police');
+                } else if (docType === 'mpesa') {
+                    await uploadFile('/extract_mpesa_agreement', file, 'mpesa');
                 }
-
             }
         });
     };
@@ -388,6 +418,7 @@ const KYCDocumentUploadPage = ({
         if (!policeClearance) newErrors.policeClearance = 'Police clearance is required';
         if (!idNumber) newErrors.idNumber = 'ID number is required';
         if (!taxPayerName) newErrors.taxPayerName = 'Tax payer name is required';
+        if (!documentStatus.mpesa.uploaded) newErrors.mpesa = 'Mpesa Agency Agreement is required';
 
         if (Object.keys(newErrors).length > 0) {
             setErrors(newErrors);
@@ -414,7 +445,8 @@ const KYCDocumentUploadPage = ({
                             kraPin: kraPin,
                             policeClearance: policeClearance,
                             taxPayerName: taxPayerName,
-                            idNumber: idNumber
+                            idNumber: idNumber,
+                            mpesaAgreementUploaded: documentStatus.mpesa.uploaded
                         })
                     });
 
@@ -454,10 +486,12 @@ const KYCDocumentUploadPage = ({
         setErrors({});
         setDocumentStatus({
             kra: { uploaded: false, fileName: '', fileUrl: '', documentId: null },
-            police: { uploaded: false, fileName: '', fileUrl: '', documentId: null }
+            police: { uploaded: false, fileName: '', fileUrl: '', documentId: null },
+            mpesa: { uploaded: false, fileName: '', fileUrl: '', documentId: null }
         });
         resetFileInput(policeClearanceFileRef);
         resetFileInput(kraPinFileRef);
+        resetFileInput(mpesaAgreementFileRef);
     };
 
     const resetPoliceClearance = () => {
@@ -468,6 +502,14 @@ const KYCDocumentUploadPage = ({
             police: { uploaded: false, fileName: '', fileUrl: '', documentId: null }
         }));
         resetFileInput(policeClearanceFileRef);
+    };
+
+    const resetMpesaAgreement = () => {
+        setDocumentStatus(prev => ({
+            ...prev,
+            mpesa: { uploaded: false, fileName: '', fileUrl: '', documentId: null }
+        }));
+        resetFileInput(mpesaAgreementFileRef);
     };
 
     const resetFileInput = (ref) => {
@@ -491,7 +533,7 @@ const KYCDocumentUploadPage = ({
             <div className="space-y-2">
                 <label className="block text-sm font-medium text-gray-700">{label}</label>
 
-                {!isIdNumber && (
+                {!isIdNumber && value !== undefined && (
                     <div className="relative">
                         <input
                             type="text"
@@ -651,6 +693,16 @@ const KYCDocumentUploadPage = ({
                         />
 
                         <FileUploadArea
+                            label="Mpesa Agency Agreement"
+                            icon={<FileSignature className="h-5 w-5 text-blue-600" />}
+                            fileRef={mpesaAgreementFileRef}
+                            onChange={(e) => uploadFile('/extract_mpesa_agreement', e.target.files[0], 'mpesa')}
+                            value={undefined} // No text field for this
+                            error={errors.mpesa}
+                            docType="mpesa"
+                        />
+
+                        <FileUploadArea
                             label="ID Number"
                             icon={<FileText className="h-5 w-5 text-blue-600" />}
                             fileRef={null}
@@ -666,7 +718,7 @@ const KYCDocumentUploadPage = ({
                         <input
                             type="file"
                             accept=".pdf"
-                            ref= {genericFileRef}
+                            ref={genericFileRef}
                             className="hidden"
                         />
 
@@ -686,8 +738,9 @@ const KYCDocumentUploadPage = ({
                                 !kraPin ||
                                 !policeClearance ||
                                 !idNumber ||
-                                !taxPayerName
-                                || errors.nameMatch.length > 0}
+                                !taxPayerName ||
+                                !documentStatus.mpesa.uploaded ||
+                                errors.nameMatch?.length > 0}
                             className="flex-1 bg-blue-600 text-white px-4 py-2 rounded-md hover:bg-blue-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed font-medium"
                         >
                             Submit Documents
