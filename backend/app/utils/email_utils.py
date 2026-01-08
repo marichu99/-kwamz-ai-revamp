@@ -375,22 +375,23 @@ def send_not_active_short_code_(recipient_email: str, business_name:str, busines
     and they need to re-login.
     """
     try:
-        subject = f"Session Timed Out – Action Required ({datetime.now().strftime('%d/%m/%Y')})"
+        subject = f"Detection of Non Active Company– Action Required ({datetime.now().strftime('%d/%m/%Y')})"
 
         body = f"""
-            "Hello,\n\n"
-            "This is to inform you that the agent {business_name} business with shortcode {business_short_code}"
-            "\n\n"
-            "And company shortcode {company_code} is of the status {status}"
-            "It is standard procedure to inform you that the agent is not active as at {datetime.now().strftime('%d/%m/%Y %H:%M:%S')} "
-            "\n\n"
-            "Please ignore this if the necessary measures have been put to place about this specific agent"
-            "\n\n"
-            "Thank you for your support.\n\n"
-            "Kind regards,\n"
-            "System Administration Team"
+            Hello,
+
+            This is to inform you that the agent {business_name} business with shortcode {business_short_code} 
+            and company shortcode {company_code} is of the status {status}.
+
+            It is standard procedure to inform you that the agent is not active as at {datetime.now().strftime('%d/%m/%Y %H:%M:%S')}.
+
+            Please ignore this if the necessary measures have been put in place about this specific agent.
+
+            Thank you for your support.
+
+            Kind regards,
+            System Administration Team
             """
-        
 
         msg = MIMEMultipart()
         msg["From"] = EMAIL_ADDRESS

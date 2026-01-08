@@ -57,6 +57,42 @@ class DocumentProcessingService:
         db.session.add(doc)
         db.session.commit()
         return doc
+    
+    def process_mpesa_agreement(self, file, agent_id):
+        """
+        Process Mpesa Agency Agreement document (no data extraction needed)
+        """
+        # 1. Resolve company
+        company_id = self._get_company_id(agent_id)
+        
+        print(f"Processing Mpesa Agreement for Agent ID: {agent_id}, Company ID: {company_id}")
+
+        # 2. Save temp
+        filename = secure_filename(file.filename)
+        temp_path = os.path.join('/tmp', f"{agent_id}_mpesa_agreement_{filename}")
+        
+        print(f"Saving temporary file to: {temp_path}")
+        file.save(temp_path)
+
+        try:
+            # 3. Upload to GCP (no extraction needed)
+            file.seek(0)  # Reset for upload
+            gcp_url, gcp_path = self._upload_to_gcp(file, company_id, agent_id, 'mpesa_agreement', filename)
+
+            # 4. Save to DB with empty extracted_data
+            doc = self._save_to_db(agent_id, company_id, 'mpesa_agreement', filename, gcp_url, gcp_path, {})
+
+            # 5. Return
+            return {
+                "success": True,
+                "gcp_url": gcp_url,
+                "documentId": doc.id,
+                "message": "Mpesa Agency Agreement uploaded successfully"
+            }
+
+        finally:
+            if os.path.exists(temp_path):
+                os.remove(temp_path)
 
     def process(self, file, agent_id, doc_type, extract_func):
         """

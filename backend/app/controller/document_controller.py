@@ -219,6 +219,71 @@ def extract_police_clearance():
         return jsonify({"error": str(e)}), 400
 
 
+@document_bp.route('/extract_mpesa_agreement', methods=['POST'])
+def extract_mpesa_agreement():
+    """
+    Upload/Re-upload Mpesa Agency Agreement document
+    
+    Request:
+        - file: PDF file (multipart/form-data)
+        - agent_id: ID of the agent
+        
+    Response:
+        {
+            "gcp_url": "https://storage.googleapis.com/...",
+            "documentId": 123,
+            "message": "Mpesa Agency Agreement uploaded successfully"
+        }
+    """
+    file = request.files.get('file')
+    agent_id = request.form.get('agent_id')
+    
+    if not file or not agent_id:
+        return jsonify({"error": "File and agent_id are required"}), 400
+    
+    try:
+        # Check if document already exists (for re-upload)
+        existing_doc = AgentDocuments.query.filter_by(
+            agent_id=agent_id,
+            doc_type='mpesa_agreement'
+        ).first()
+        
+        # If re-uploading, delete old file from GCP
+        if existing_doc:
+            try:
+                bucket = current_app.document_service.storage_client.bucket(current_app.document_service.bucket_name)
+                blob = bucket.blob(existing_doc.gcp_path)
+                if blob.exists():
+                    blob.delete()
+            except Exception as e:
+                print(f"Warning: Failed to delete old file: {str(e)}")
+            
+            # Delete old database record
+            db.session.delete(existing_doc)
+            db.session.commit()
+        
+        # Process the document - Mpesa agreement doesn't need extraction
+        result = current_app.document_service.process_mpesa_agreement(
+            file=file,
+            agent_id=agent_id
+        )
+        
+        # Get the newly created document ID
+        new_doc = AgentDocuments.query.filter_by(
+            agent_id=agent_id,
+            doc_type='mpesa_agreement'
+        ).order_by(AgentDocuments.uploaded_at.desc()).first()
+        
+        return jsonify({
+            "gcp_url": result.get("gcp_url", ""),
+            "documentId": new_doc.id if new_doc else None,
+            "message": "Mpesa Agency Agreement uploaded successfully"
+        }), 200
+        
+    except Exception as e:
+        print(f"Mpesa Agreement upload error: {str(e)}")
+        return jsonify({"error": str(e)}), 400
+
 @document_bp.route('/delete/<int:document_id>', methods=['DELETE'])
 def delete_document(document_id):
     """

@@ -374,7 +374,7 @@ def send_alert_on_non_active_(
             )
         else:
             email_outbox_service.create(
-                sender="noreply@company.com",
+                sender=user.email,
                 receiver=recipient_email,
                 reason="NON_ACTIVE_AGENT",
                 business_short_code=business_short_code,
@@ -383,14 +383,16 @@ def send_alert_on_non_active_(
 
     except Exception as e:
         print(f"[ERROR] An error occurred: {str(e)}")
-        
+     
+       
 def save_table_to_dataframe_(page: Page, business_shortcode: int,category:str) -> tuple:
     """Extract all rows from paginated table and save to CSV."""
     try:
         print("[INFO] Starting table extraction...")
 
-        page_no = 1
-        print(f"\n[INFO] Extracting page {page_no}...")
+        # get the latest receipt number for this shortcode
+        latest_receipt_number = till_scraping_shortfall[business_shortcode][1]
+        print(f"The latest receipt number for {business_shortcode} is {latest_receipt_number}")
         
         try:                
             page.wait_for_load_state("networkidle", timeout=10000)
@@ -426,78 +428,236 @@ def save_table_to_dataframe_(page: Page, business_shortcode: int,category:str) -
         traceback.print_exc()
         return None, None
 
-def save_table_to_dataframe_download(page: Page,business_shortcode:int,additional_category:str="") -> tuple:
-    close_irritative_dialog_box(page)
-    print("[EXPORT] Starting Excel export...")
+def save_table_to_dataframe_latest_(page: Page, business_shortcode: int, category: str) -> tuple:
+    """Extract all rows from paginated table and process receipt links from match point to latest."""
+    try:
+        print("[INFO] Starting table extraction...")
 
-    export_trigger = page.locator("div.el-dropdown.padding-export >> span").first
-    export_trigger.wait_for(state="visible", timeout=30000)
-    export_trigger.scroll_into_view_if_needed()
-
-    export_trigger.hover(force=True, timeout=10_000)
-    print("[EXPORT] Hovered successfully")
-    time.sleep(2)  
-
-    # 2. Wait for ANY dropdown menu to actually appear in the viewport (not just DOM)
-    page.wait_for_function(
-        """() => {
-            const menus = document.querySelectorAll('ul.el-dropdown-menu');
-            for (const menu of menus) {
-                const rect = menu.getBoundingClientRect();
-                if (rect.width > 0 && rect.height > 0 && rect.top >= 0) {
-                    return true;
-                }
-            }
-            return false;
-        }""",
-        timeout=20_000
-    )
-    print("[EXPORT] Export dropdown menu is visually open")
-
-    # 3. Get ALL menu items from ALL dropdown menus
-    all_items = page.locator("ul.el-dropdown-menu li.el-dropdown-menu__item")
-
-    # Find all items that contain "Excel" (case-sensitive match as in your UI)
-    excel_items = all_items.filter(has_text="Excel")
-
-    excel_count = excel_items.count()
-    print(f"[EXPORT] Found {excel_count} visible 'Excel' options across all dropdowns")
-
-    if excel_count < 3:
-        raise Exception(f"Expected at least 3 Excel export options, found only {excel_count}")
-
-    target_excel = excel_items.nth(2)
-
-    print(f"[EXPORT] Targeting the 3rd 'Excel' option (index 2 in filtered list)")
-
-    # 4. Click + download
-    with page.expect_download(timeout=60_000) as download_info:
-        # First try normal click
-        try:
-            target_excel.click(force=True, timeout=15_000)
-            print("[EXPORT] Clicked 'Excel' (All Data) successfully")
+        # Get the latest receipt number for this shortcode
+        latest_receipt_number = str(till_scraping_shortfall[business_shortcode][1])
+        print(f"The latest receipt number for {business_shortcode} is {latest_receipt_number}")
+        
+        try:                
+            # Wait for page to load
+            page.wait_for_load_state("networkidle", timeout=10000)
+            
+            # Wait for table to be visible
+            body_tbl = page.wait_for_selector(
+                "//table[@class='el-table__body']",
+                timeout=10000
+            )
+        
+            if not body_tbl.is_visible():
+                print("[WARN] Table body not visible, ending extraction.")
+                return None, None
         except Exception as e:
-            print("[EXPORT] Normal click failed, falling back to JS click...")
-            target_excel.evaluate("el => el.click()")
-
-    download: Download = download_info.value
-
-    # THIS IS THE MAGIC: Read bytes directly into pandas
-    print(f"[EXPORT] Reading {download.suggested_filename} directly into pandas...")
-    temp_path = download.path()  # Playwright saves it temporarily
+            print("[WARN] Table body not visible or not found, ending extraction.")
+            return None, None
+        
+        # Find the matching receipt and click all from that point to latest
+        print(f"[INFO] Looking for receipt {latest_receipt_number} and transactions from match point...")
+        
+        try:
+            # Find all receipt links on the page
+            receipt_links = page.locator("span.receipt-link")
+            receipt_count = receipt_links.count()
+            
+            if receipt_count == 0:
+                print("[WARN] No receipt links found on the page.")
+                return None, None
+                
+            print(f"[INFO] Found {receipt_count} receipt links on the page.")
+            
+            # First pass: Find all matching receipts and the latest receipt
+            matching_indices = []
+            latest_receipt_index = -1
+            
+            for i in range(receipt_count):
+                try:
+                    link_text = receipt_links.nth(i).inner_text(timeout=3000).strip()
+                    
+                    # Check if this link matches the latest receipt number
+                    if link_text == latest_receipt_number:
+                        latest_receipt_index = i
+                        print(f"[INFO] Latest receipt found at position {i}")
+                    
+                    # Check if this link contains the latest receipt number pattern
+                    # (adjust this logic based on your matching criteria)
+                    if link_text == latest_receipt_number or latest_receipt_number in link_text:
+                        matching_indices.append(i)
+                        print(f"[INFO] Matching receipt found at position {i}: {link_text}")
+                        
+                except Exception as e:
+                    print(f"[WARN] Could not read link at position {i}: {e}")
+                    continue
+            
+            if not matching_indices and latest_receipt_index == -1:
+                print(f"[ERROR] No matching receipts found for {latest_receipt_number}")
+                return None, None
+            
+            # Determine the starting point for clicking
+            # Option 1: Start from the earliest matching receipt
+            start_index = min(matching_indices) if matching_indices else latest_receipt_index
+            
+            # Option 2: Start from the latest matching receipt (uncomment if needed)
+            # start_index = max(matching_indices) if matching_indices else latest_receipt_index
+            
+            print(f"[INFO] Starting to click receipts from position {start_index} to {receipt_count-1}")
+            
+            # Click all receipts from the starting point to the end
+            for i in range(start_index, receipt_count):
+                try:
+                    # Get link text
+                    link_text = receipt_links.nth(i).inner_text(timeout=5000).strip()
+                    print(f"[INFO] Clicking receipt {i+1}/{receipt_count}: {link_text}")
+                    
+                    # Store the original page context for returning
+                    original_page = page
+                    
+                    # Click the receipt link
+                    receipt_links.nth(i).click()
+                    print(f"[INFO] Clicked transaction: {link_text}")
+                    
+                    # Wait for the receipt page to load
+                    time.sleep(2)  # Initial wait
+                    page.wait_for_load_state("networkidle", timeout=10000)
+                    
+                    # Check if we're on a new tab
+                    current_page = page
+                    if len(page.context.pages) > 1:
+                        # Switch to the new tab
+                        new_page = page.context.pages[-1]
+                        new_page.bring_to_front()
+                        current_page = new_page
+                    
+                    # Extract details from the receipt
+                    extract_success = extract_extra_details_on_receipt(current_page, link_text)
+                    
+                    # Close the receipt tab if it was opened in a new tab
+                    if current_page != original_page:
+                        current_page.close()
+                        original_page.bring_to_front()
+                        page = original_page  # Reset page reference
+                    
+                    # If we navigated in the same tab, go back to the main table
+                    elif i < receipt_count - 1:  # Don't go back after the last one
+                        try:
+                            page.go_back()
+                            page.wait_for_load_state("networkidle", timeout=10000)
+                            # Re-locate elements after navigation
+                            receipt_links = page.locator("span.receipt-link")
+                            print(f"[INFO] Navigated back to main table")
+                        except Exception as nav_error:
+                            print(f"[WARN] Could not navigate back: {nav_error}")
+                    
+                    # Wait a bit before processing next link
+                    if i < receipt_count - 1:
+                        time.sleep(1)
+                    
+                except Exception as e:
+                    print(f"[WARN] Failed to process link at position {i}: {e}")
+                    # Try to recover and continue
+                    try:
+                        page.bring_to_front()
+                        receipt_links = page.locator("span.receipt-link")
+                    except:
+                        pass
+                    continue
+            
+            print(f"[INFO] Successfully processed {receipt_count - start_index} receipts from position {start_index}")
+                
+        except Exception as e:
+            print(f"[ERROR] Failed to locate or process receipt links: {e}")
+            traceback.print_exc()
+            return None, None
+        
+        # Continue with the rest of your table extraction logic
+        # ... [Your existing code for extracting table data] ...
+        
+        # return extracted_data, metadata  # Replace with your actual return values
+        
+    except Exception as exc:
+        print(f"[ERROR] Table extraction failed: {exc}")
+        traceback.print_exc()
+        return None, None
     
-    df,success_value = update_transactions_from_file(
-        file_path=temp_path,
-        business_shortcode=business_shortcode,
-        transaction_type=additional_category,
-        company_shortcode=company_shortcode,
-        agent_id=None
-    )
+def save_table_to_dataframe_download(page: Page,business_shortcode:int,additional_category:str="") -> tuple:
+    try:
+        close_irritative_dialog_box(page)
+        print("[EXPORT] Starting Excel export...")
 
-    print(f"[SUCCESS] Loaded DataFrame in-memory: {df.shape[0]} rows × {df.shape[1]} columns")
-    print(f"   Columns: {list(df.columns)}")
+        export_trigger = page.locator("div.el-dropdown.padding-export >> span").first
+        export_trigger.wait_for(state="visible", timeout=30000)
+        export_trigger.scroll_into_view_if_needed()
 
-    return df, success_value
+        export_trigger.hover(force=True, timeout=10_000)
+        print("[EXPORT] Hovered successfully")
+        time.sleep(3)  
+
+        # 2. Wait for ANY dropdown menu to actually appear in the viewport (not just DOM)
+        page.wait_for_function(
+            """() => {
+                const menus = document.querySelectorAll('ul.el-dropdown-menu');
+                for (const menu of menus) {
+                    const rect = menu.getBoundingClientRect();
+                    if (rect.width > 0 && rect.height > 0 && rect.top >= 0) {
+                        return true;
+                    }
+                }
+                return false;
+            }""",
+            timeout=40000
+        )
+        print("[EXPORT] Export dropdown menu is visually open")
+
+        # 3. Get ALL menu items from ALL dropdown menus
+        all_items = page.locator("ul.el-dropdown-menu li.el-dropdown-menu__item")
+
+        # Find all items that contain "Excel" (case-sensitive match as in your UI)
+        excel_items = all_items.filter(has_text="Excel")
+
+        excel_count = excel_items.count()
+        print(f"[EXPORT] Found {excel_count} visible 'Excel' options across all dropdowns")
+
+        if excel_count < 3:
+            raise Exception(f"Expected at least 3 Excel export options, found only {excel_count}")
+
+        target_excel = excel_items.nth(2)
+
+        print(f"[EXPORT] Targeting the 3rd 'Excel' option (index 2 in filtered list)")
+
+        # 4. Click + download
+        with page.expect_download(timeout=60_000) as download_info:
+            # First try normal click
+            try:
+                target_excel.click(force=True, timeout=15_000)
+                print("[EXPORT] Clicked 'Excel' (All Data) successfully")
+            except Exception as e:
+                print("[EXPORT] Normal click failed, falling back to JS click...")
+                target_excel.evaluate("el => el.click()")
+
+        download: Download = download_info.value
+
+        # THIS IS THE MAGIC: Read bytes directly into pandas
+        print(f"[EXPORT] Reading {download.suggested_filename} directly into pandas...")
+        temp_path = download.path()  # Playwright saves it temporarily
+        
+        df,success_value = update_transactions_from_file(
+            file_path=temp_path,
+            business_shortcode=business_shortcode,
+            transaction_type=additional_category,
+            company_shortcode=company_shortcode,
+            agent_id=None
+        )
+
+        print(f"[SUCCESS] Loaded DataFrame in-memory: {df.shape[0]} rows × {df.shape[1]} columns")
+        print(f"   Columns: {list(df.columns)}")
+
+        return df, success_value
+    except Exception as e:
+        print(f"[ERROR] An error has occurred {e}")
+        save_table_to_dataframe_(page=page,business_shortcode=business_shortcode,additional_category=additional_category)
+    
 
 def update_transactions_from_file(file_path, business_shortcode, transaction_type, company_shortcode, agent_id):
     """
@@ -699,16 +859,38 @@ def scrape_till_details(page: Page, business_short_code: int) -> dict:
             'business_short_code': business_short_code
         }   
 
+
 def click_receipt_link(page:Page,transaction_id: str) -> bool:
     try:
         print(f"Clicking receipt link for transaction ID: {transaction_id}")
         selector = f'span.receipt-link:has-text("{transaction_id}")'
         page.wait_for_selector(selector, state="visible",timeout=5000)
         page.click(selector)
-        return True
+        return extract_extra_details_on_receipt(page=page,receipt_no=transaction_id)
     except Exception as e:
         print(f"Error clicking receipt link: {e}")
         return False
+
+
+def extract_extra_details_on_receipt(page:Page,receipt_no:str) -> bool:
+    try:
+        print(f"[INFO] Trying to extract more details")
+        transactions_div = page.wait_for_selector(selector="//div[@class='portal-collapse background-box section-box section-box-buttom bottom-radius']",
+                                                  state="visible",
+                                                  timeout=10000)
+        
+        transactions_div_html = transactions_div.inner_html()
+        
+        soup = BeautifulSoup(transactions_div_html,"html.parser")
+        
+        with open(f"transaction_{receipt_no}.html","r+",encoding="utf8") as f:
+            f.write(soup.prettify())
+        
+        return True
+    except Exception as e:
+        print(f"[ERROR] An error has occurred {str(e)}")                
+        return False
+
 
 def extract_till_info(inner_html: str) -> dict:
     """
@@ -1049,7 +1231,11 @@ def process_float_account_details(page: Page, business_short_code: int, mapped_d
         
         print("We are checking whether a till is frozen or not")        
         if is_till_frozen(page):
-            return "frozen",False
+            send_alert_on_non_active_(user.email,
+                                      mapped_data.get("company_name","-"),
+                                      business_short_code=business_short_code,
+                                      status="FROZEN")
+            # return "frozen",False
 
         print(f"This is the date and time selection")
         
@@ -1288,7 +1474,7 @@ def _get_total_months_by_shortcode_shortfall(business_shortcode:str,till_scrapin
         return 6,180
     
     # Get the maximum number of days since last scrape
-    days = float(till_scraping_shortfall.get(business_shortcode, 180))
+    days = float(till_scraping_shortfall[business_shortcode][0])
 
     return np.ceil(days/30).astype(int), days
 
@@ -1303,7 +1489,7 @@ def scrape_180_days_monthly(page:Page, business_short_code:int=0, pass_value:str
         
     # 180 days divided into 6 chunks of 30 days each
     total_months,days = _get_total_months_by_shortcode_shortfall(str(business_short_code),till_scraping_shortfall)
-    if(days<7):
+    if(days==0 and pass_value !="second"):
         return pd.DataFrame(),True
     for month_offset in range(total_months):
         close_irritative_dialog_box(page)
@@ -1341,7 +1527,7 @@ def scrape_180_days_monthly(page:Page, business_short_code:int=0, pass_value:str
                     additional_category=additional_category
                 )
             else:
-                df, success_value = save_table_to_dataframe_(
+                df, success_value = save_table_to_dataframe_latest_(
                     page,
                     business_shortcode=business_short_code,
                     category=pass_value
@@ -1652,7 +1838,8 @@ def process_organization_rows(page: Page) -> None:
             total_in_list=total_in_list,
             total_processed_so_far=total_processed,
             priority_short_codes=priority_short_codes,
-            to_be_rerun=to_be_rerun
+            to_be_rerun=to_be_rerun,
+            pass_value="first"
         )
 
         total_processed += processed_on_this_page
@@ -1667,13 +1854,19 @@ def process_organization_rows(page: Page) -> None:
                 end_date=datetime.now(),
                 company_shortcode=company_shortcode
             )
-
-            user = User.query.filter_by(id=user_id).first()
             
+            # send_scraping_report_email(user.email, stats)
             send_scraping_report_email("martinmaati31@gmail.com", stats)
             while go_previous_on_organisation(page):
                 pass
-            break
+            
+            # start the second pass
+            start_second_pass(page=page,
+                              total_in_list=total_in_list,
+                              total_processed_so_far=total_processed,
+                              priority_short_codes=all_shortcodes,
+                              to_be_rerun=to_be_rerun,
+                              pass_value="second")            
 
         time.sleep(1)  # Gentle pause between pages
 
@@ -1684,6 +1877,20 @@ def process_organization_rows(page: Page) -> None:
             # get into the second pass
         else:
             print("[ERROR] Some organizations still failed after retries.")
+
+def start_second_pass(page:Page,total_in_list:int,total_processed_so_far:int,priority_short_codes:List[int],to_be_rerun:List[int],pass_value:str):
+    while True:
+        try:
+            processed_on_this_page = process_page_rows(
+                                        page=page,
+                                        total_in_list=total_in_list,
+                                        total_processed_so_far=total_processed_so_far,
+                                        priority_short_codes=priority_short_codes,
+                                        to_be_rerun=to_be_rerun,
+                                        pass_value=pass_value
+                                    )
+        except Exception as e:
+            print(f"[ERROR] An error has occured here {str(e)}")
 
 def wait_for_table_load(page: Page, timeout: int = 15000) -> None:
     """Wait for network idle and allow lazy loading."""
@@ -1736,7 +1943,7 @@ def _get_priority_shortcodes_(all_shortcodes: Set[str]) -> Set[str]:
             f"{total_months} for shortcode {business_shortcode} and {days} days"
         )
 
-        if days > 3:
+        if days != 0:
             priority_shortcode_indexes.add(business_shortcode)
 
     return priority_shortcode_indexes
@@ -1748,6 +1955,7 @@ def process_page_rows(
     total_processed_so_far: int,
     priority_short_codes: set[str],
     to_be_rerun: list[int],
+    pass_value: str
 ) -> int:
     """Process all visible rows on the current page with virtual scrolling support."""
     close_irritative_dialog_box(page)
@@ -1782,11 +1990,11 @@ def process_page_rows(
         row.click(timeout=15000)
         page.wait_for_timeout(1000)
 
-        success = process_single_row(page, business_short_code, total_processed_so_far + processed_on_page + 1)
+        success = process_single_row(page, business_short_code, total_processed_so_far + processed_on_page + 1,pass_value=pass_value)
 
         if success:
             print(f"[SUCCESS] Completed row {total_processed_so_far + processed_on_page + 1}")
-            return_to_organization_list(page)
+            # return_to_organization_list(page)
             
         else:
             to_be_rerun.append(business_short_code)
@@ -1829,7 +2037,7 @@ def extract_business_short_code(row: Locator) -> int | None:
         print(f"[ERROR] Failed to extract short code: {e}")
         return None
 
-def process_single_row(page: Page, business_short_code: int, row_number: int) -> bool:
+def process_single_row(page: Page, business_short_code: int, row_number: int, pass_value: int) -> bool:
     """Process one organization row end-to-end."""
     try:
         print(f"\n[SUCCESS] Processing Row {row_number} | Business Code: {business_short_code}")
@@ -1844,7 +2052,7 @@ def process_single_row(page: Page, business_short_code: int, row_number: int) ->
             return_to_organization_list(page)
             return False
 
-        if not process_float_commission(page, business_short_code, mapped_data=mapped_data, pass_value="first"):
+        if not process_float_commission(page, business_short_code, mapped_data=mapped_data, pass_value=pass_value):
             print("[ERROR] Failed to process float/commission")
             # return_to_organization_list(page)
             return False

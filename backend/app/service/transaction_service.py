@@ -1361,7 +1361,7 @@ class TransactionService:
     def _get_last_scraped_per_till(self, cursor:Generator) -> Dict[str, int]:
         """Get number of days since last scrape for each till (Kenya time)"""
         query = """
-            SELECT business_shortcode, MAX(updated_at) AS latest_updated_at
+            SELECT business_shortcode, MAX(receipt_no) AS latest_receipt_no, MAX(updated_at) AS latest_updated_at
             FROM transactions
             GROUP BY business_shortcode;
         """
@@ -1371,9 +1371,9 @@ class TransactionService:
         now = datetime.now(self.kenya_tz)
 
         return {
-            row['business_shortcode']: (
+            row['business_shortcode']: [(
                 now - row['latest_updated_at'].replace(tzinfo=self.kenya_tz)
-            ).days
+            ).days,row['latest_receipt_no']]
             for row in results
         }
         
