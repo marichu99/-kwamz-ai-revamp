@@ -18,6 +18,7 @@ import SystemUsersList from '../Pages/SystemUsersList';
 import AgentCompanyPaymentsGrid from '../Pages/AgentCompanyPaymentsGrid';
 import BankList from '../Pages/BankList';
 import TransactionsGrid from '../Pages/TransactionsGrid';
+import ConfigGrid from '../Pages/ConfigGrid';
 function Dashboard({ currentPage, setCurrentPage }) {
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-50 via-blue-50 to-purple-50 dark:from-slate-900 dark:via-slate-800 dark:to-slate-900 p-6">
@@ -49,6 +50,7 @@ function Dashboard({ currentPage, setCurrentPage }) {
         {currentPage === 'company-list' && <CompanyList />}
         {currentPage === 'transactions-list' && <TransactionsGrid />}
         {currentPage === 'bank-list' && <BankList />}
+        {currentPage === 'configs' && <ConfigGrid />}
         {currentPage === 'checkout' && <Checkout />}
         {currentPage === 'pesapal' && <PaymentForm />}
       </div>

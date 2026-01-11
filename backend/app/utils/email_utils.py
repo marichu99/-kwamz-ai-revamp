@@ -326,6 +326,29 @@ def send_scraping_report_email(recipient_email: str, stats_data: dict):
         print(f"Failed to send scraping report email: {str(e)}")
         return False
     
+def _send_email(subject: str, body: str, recipient: str, is_html: bool = True):
+    """Send an email notification."""
+    try:
+        msg = MIMEMultipart('alternative')
+        msg['Subject'] = subject
+        msg['From'] = EMAIL_ADDRESS
+        msg['To'] = recipient
+        
+        if is_html:
+            msg.attach(MIMEText(body, 'html'))
+        else:
+            msg.attach(MIMEText(body, 'plain'))
+        
+        with smtplib.SMTP("smtp.gmail.com", 587) as server:
+            server.starttls()
+            server.login(EMAIL_ADDRESS, EMAIL_PASSWORD)
+            server.send_message(msg)
+        
+        print(f"Email sent: {subject}")
+        
+    except Exception as e:
+        print(f"Failed to send email: {e}")
+    
 def send_session_timeout_email(recipient_email: str) -> bool:
     """
     Send a plain-text email notifying the user that their session has timed out

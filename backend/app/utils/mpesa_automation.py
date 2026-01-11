@@ -428,15 +428,54 @@ def save_table_to_dataframe_(page: Page, business_shortcode: int,category:str) -
         traceback.print_exc()
         return None, None
 
-def save_table_to_dataframe_latest_(page: Page, business_shortcode: int, category: str) -> tuple:
+def get_latest_receipt_no(page: Page, business_shortcode: int, pass_value: str) -> str:
+    """Extract all rows from paginated table and process receipt links from match point to latest."""
+    print("[INFO] Starting table extraction...")
+
+    # Add thread safety if needed (uncomment if multi-threaded)
+    # with till_scraping_lock:
+    
+    # Check dictionary existence and structure
+    if not isinstance(till_scraping_shortfall, dict):
+        print(f"[ERROR] till_scraping_shortfall is not a dictionary")
+        return None
+        
+    print(f"The till scraping shortfall has {len(till_scraping_shortfall)} entries")
+    
+    # Check if key exists
+    if business_shortcode not in till_scraping_shortfall:
+        # Try converting to string if business_shortcode is int but keys are strings
+        if str(business_shortcode) in till_scraping_shortfall:
+            business_shortcode = str(business_shortcode)
+        else:
+            print(f"[ERROR] Business shortcode {business_shortcode} not found")
+            print(f"Available keys (first 10): {list(till_scraping_shortfall.keys())[:10]}")
+            return None
+    
+    # Check value structure
+    value = till_scraping_shortfall[business_shortcode]
+    if not isinstance(value, (list, tuple)) or len(value) < 2:
+        print(f"[ERROR] Invalid structure for {business_shortcode}: {value}")
+        return None
+        
+    latest_receipt_number = str(value[1])
+    print(f"The latest receipt number for {business_shortcode} is {latest_receipt_number}")
+    return latest_receipt_number
+
+def save_table_to_dataframe_latest_(page: Page, business_shortcode: int, pass_value: str, additional_category: str) -> tuple:
     """Extract all rows from paginated table and process receipt links from match point to latest."""
     try:
         print("[INFO] Starting table extraction...")
-
-        # Get the latest receipt number for this shortcode
-        latest_receipt_number = str(till_scraping_shortfall[business_shortcode][1])
-        print(f"The latest receipt number for {business_shortcode} is {latest_receipt_number}")
         
+        success = click_search_button(page=page)        
+        
+        if not success:
+            print(f"[ERROR] Can not select the search button")
+        
+        select_pagination_size(page=page)
+        # Get the latest receipt number for this shortcode
+        print(f"The till scraping shortfall {till_scraping_shortfall}")
+                
         try:                
             # Wait for page to load
             page.wait_for_load_state("networkidle", timeout=10000)
@@ -446,141 +485,256 @@ def save_table_to_dataframe_latest_(page: Page, business_shortcode: int, categor
                 "//table[@class='el-table__body']",
                 timeout=10000
             )
-        
+            
             if not body_tbl.is_visible():
                 print("[WARN] Table body not visible, ending extraction.")
                 return None, None
+
+            # Parse the table directly
+            html_content = body_tbl.inner_html()
+            
+            # Save raw HTML (optional)
+            with open(f"transactions_{business_shortcode}.html", "w", encoding="utf8") as f:
+                f.write(BeautifulSoup(html_content, "html.parser").prettify())
+            
+            # Convert to DataFrame
+            df,columns = parse_element_plus_transactions(html_content,transaction_type=additional_category,business_shortcode=business_shortcode)
+            
+            if df.empty:
+                print("[WARN] No transactions found in table.")
+                return None, None
+                
+            return df, columns
+
         except Exception as e:
-            print("[WARN] Table body not visible or not found, ending extraction.")
+            print(f"[ERROR] Failed to extract table: {e}")
             return None, None
         
         # Find the matching receipt and click all from that point to latest
-        print(f"[INFO] Looking for receipt {latest_receipt_number} and transactions from match point...")
+        # print(f"[INFO] Looking for receipt {latest_receipt_number} and transactions from match point...")
         
-        try:
-            # Find all receipt links on the page
-            receipt_links = page.locator("span.receipt-link")
-            receipt_count = receipt_links.count()
+        # try:
+        #     # Find all receipt links on the page
+        #     receipt_links = page.locator("span.receipt-link")
+        #     receipt_count = receipt_links.count()
             
-            if receipt_count == 0:
-                print("[WARN] No receipt links found on the page.")
-                return None, None
+        #     if receipt_count == 0:
+        #         print("[WARN] No receipt links found on the page.")
+        #         return None, None
                 
-            print(f"[INFO] Found {receipt_count} receipt links on the page.")
+        #     print(f"[INFO] Found {receipt_count} receipt links on the page.")
             
-            # First pass: Find all matching receipts and the latest receipt
-            matching_indices = []
-            latest_receipt_index = -1
+        #     # First pass: Find all matching receipts and the latest receipt
+        #     matching_indices = []
+        #     latest_receipt_index = -1
             
-            for i in range(receipt_count):
-                try:
-                    link_text = receipt_links.nth(i).inner_text(timeout=3000).strip()
+        #     for i in range(receipt_count):
+        #         try:
+        #             link_text = receipt_links.nth(i).inner_text(timeout=3000).strip()
                     
-                    # Check if this link matches the latest receipt number
-                    if link_text == latest_receipt_number:
-                        latest_receipt_index = i
-                        print(f"[INFO] Latest receipt found at position {i}")
-                    
-                    # Check if this link contains the latest receipt number pattern
-                    # (adjust this logic based on your matching criteria)
-                    if link_text == latest_receipt_number or latest_receipt_number in link_text:
-                        matching_indices.append(i)
-                        print(f"[INFO] Matching receipt found at position {i}: {link_text}")
+        #             # Check if this link matches the latest receipt number
+        #             if link_text == latest_receipt_number or latest_receipt_number in link_text:
+        #                 latest_receipt_index = i
+        #                 matching_indices.append(i)
+        #                 print(f"[INFO] Latest receipt found at position {i}")
+        #                 print(f"[INFO] Matching receipt found at position {i}: {link_text}")
                         
-                except Exception as e:
-                    print(f"[WARN] Could not read link at position {i}: {e}")
-                    continue
+        #         except Exception as e:
+        #             print(f"[WARN] Could not read link at position {i}: {e}")
+        #             continue
             
-            if not matching_indices and latest_receipt_index == -1:
-                print(f"[ERROR] No matching receipts found for {latest_receipt_number}")
-                return None, None
+        #     if not matching_indices and latest_receipt_index == -1:
+        #         print(f"[ERROR] No matching receipts found for {latest_receipt_number}")
+        #         return None, None
             
-            # Determine the starting point for clicking
-            # Option 1: Start from the earliest matching receipt
-            start_index = min(matching_indices) if matching_indices else latest_receipt_index
+        #     # Determine the starting point for clicking
+        #     # Option 1: Start from the earliest matching receipt
+        #     # start_index = min(matching_indices) if matching_indices else latest_receipt_index
             
-            # Option 2: Start from the latest matching receipt (uncomment if needed)
-            # start_index = max(matching_indices) if matching_indices else latest_receipt_index
+        #     # Option 2: Start from the latest matching receipt (uncomment if needed)
+        #     start_index = max(matching_indices) if matching_indices else latest_receipt_index
             
-            print(f"[INFO] Starting to click receipts from position {start_index} to {receipt_count-1}")
+        #     print(f"[INFO] Starting to click receipts from position {start_index} to {receipt_count-1}")
             
-            # Click all receipts from the starting point to the end
-            for i in range(start_index, receipt_count):
-                try:
-                    # Get link text
-                    link_text = receipt_links.nth(i).inner_text(timeout=5000).strip()
-                    print(f"[INFO] Clicking receipt {i+1}/{receipt_count}: {link_text}")
+        #     # Click all receipts from the starting point to the end
+        #     for i in range(start_index, receipt_count):
+        #         try:
+        #             # Get link text
+        #             link_text = receipt_links.nth(i).inner_text(timeout=5000).strip()
+        #             print(f"[INFO] Clicking receipt {i+1}/{receipt_count}: {link_text}")
                     
-                    # Store the original page context for returning
-                    original_page = page
+        #             # Store the original page context for returning
+        #             original_page = page
                     
-                    # Click the receipt link
-                    receipt_links.nth(i).click()
-                    print(f"[INFO] Clicked transaction: {link_text}")
+        #             # Click the receipt link
+        #             receipt_links.nth(i).click()
+        #             print(f"[INFO] Clicked transaction: {link_text}")
                     
-                    # Wait for the receipt page to load
-                    time.sleep(2)  # Initial wait
-                    page.wait_for_load_state("networkidle", timeout=10000)
+        #             # Wait for the receipt page to load
+        #             time.sleep(2)  # Initial wait
+        #             page.wait_for_load_state("networkidle", timeout=10000)
                     
-                    # Check if we're on a new tab
-                    current_page = page
-                    if len(page.context.pages) > 1:
-                        # Switch to the new tab
-                        new_page = page.context.pages[-1]
-                        new_page.bring_to_front()
-                        current_page = new_page
+        #             # Check if we're on a new tab
+        #             current_page = page
+        #             if len(page.context.pages) > 1:
+        #                 # Switch to the new tab
+        #                 new_page = page.context.pages[-1]
+        #                 new_page.bring_to_front()
+        #                 current_page = new_page
                     
-                    # Extract details from the receipt
-                    extract_success = extract_extra_details_on_receipt(current_page, link_text)
+        #             # Extract details from the receipt
+        #             extract_success = extract_extra_details_on_receipt(current_page, link_text)
                     
-                    # Close the receipt tab if it was opened in a new tab
-                    if current_page != original_page:
-                        current_page.close()
-                        original_page.bring_to_front()
-                        page = original_page  # Reset page reference
+        #             # Close the receipt tab if it was opened in a new tab
+        #             if current_page != original_page:
+        #                 current_page.close()
+        #                 original_page.bring_to_front()
+        #                 page = original_page  # Reset page reference
                     
-                    # If we navigated in the same tab, go back to the main table
-                    elif i < receipt_count - 1:  # Don't go back after the last one
-                        try:
-                            page.go_back()
-                            page.wait_for_load_state("networkidle", timeout=10000)
-                            # Re-locate elements after navigation
-                            receipt_links = page.locator("span.receipt-link")
-                            print(f"[INFO] Navigated back to main table")
-                        except Exception as nav_error:
-                            print(f"[WARN] Could not navigate back: {nav_error}")
+        #             # If we navigated in the same tab, go back to the main table
+        #             elif i < receipt_count - 1:  # Don't go back after the last one
+        #                 try:
+        #                     page.go_back()
+        #                     page.wait_for_load_state("networkidle", timeout=10000)
+        #                     # Re-locate elements after navigation
+        #                     receipt_links = page.locator("span.receipt-link")
+        #                     print(f"[INFO] Navigated back to main table")
+        #                 except Exception as nav_error:
+        #                     print(f"[WARN] Could not navigate back: {nav_error}")
                     
-                    # Wait a bit before processing next link
-                    if i < receipt_count - 1:
-                        time.sleep(1)
+        #             # Wait a bit before processing next link
+        #             if i < receipt_count - 1:
+        #                 time.sleep(1)
                     
-                except Exception as e:
-                    print(f"[WARN] Failed to process link at position {i}: {e}")
-                    # Try to recover and continue
-                    try:
-                        page.bring_to_front()
-                        receipt_links = page.locator("span.receipt-link")
-                    except:
-                        pass
-                    continue
+        #         except Exception as e:
+        #             print(f"[WARN] Failed to process link at position {i}: {e}")
+        #             # Try to recover and continue
+        #             try:
+        #                 page.bring_to_front()
+        #                 receipt_links = page.locator("span.receipt-link")
+        #             except:
+        #                 pass
+        #             continue
             
-            print(f"[INFO] Successfully processed {receipt_count - start_index} receipts from position {start_index}")
+        #     print(f"[INFO] Successfully processed {receipt_count - start_index} receipts from position {start_index}")
                 
-        except Exception as e:
-            print(f"[ERROR] Failed to locate or process receipt links: {e}")
-            traceback.print_exc()
-            return None, None
-        
-        # Continue with the rest of your table extraction logic
-        # ... [Your existing code for extracting table data] ...
-        
-        # return extracted_data, metadata  # Replace with your actual return values
-        
+        # except Exception as e:
+        #     print(f"[ERROR] Failed to locate or process receipt links: {e}")
+        #     traceback.print_exc()
+        #     return None, None
+
     except Exception as exc:
         print(f"[ERROR] Table extraction failed: {exc}")
         traceback.print_exc()
         return None, None
     
+def parse_element_plus_transactions(html_content: str, transaction_type: str, business_shortcode: str) -> tuple:
+    """
+    Parse an Element Plus (el-table) transaction table HTML into a pandas DataFrame.
+    
+    Args:
+        html_content (str): The HTML string containing <tbody> with transaction rows
+        
+    Returns:
+        pd.DataFrame: DataFrame with the requested columns
+    """
+    soup = BeautifulSoup(html_content, "html.parser")
+    
+    # Find all data rows
+    rows = soup.select("tbody tr.el-table__row")
+    
+    data = []
+    
+    for row in rows:
+        cells = row.find_all("td")
+        if len(cells) < 10:  # We expect at least 10 columns
+            continue
+            
+        # Extract values safely
+        # Column 1: Receipt No.
+        receipt_cell = cells[0].find("span", class_="receipt-link")
+        receipt_no = receipt_cell.get_text(strip=True) if receipt_cell else ""
+        
+        # Column 2: Completion Time
+        completion_time = cells[1].get_text(strip=True)
+        
+        # Column 3: Details
+        details = cells[2].get_text(strip=True)
+        
+        # Column 4: Other Party Info
+        other_party = cells[3].get_text(strip=True)
+        
+        # Column 5: Transaction Status
+        status = cells[4].get_text(strip=True)
+        
+        # Column 6: Currency
+        currency = cells[5].get_text(strip=True)
+        
+        # Column 7: Withdrawn (negative amount → positive value)
+        withdrawn_raw = cells[6].get_text(strip=True)
+        withdrawn = re.sub(r'[^0-9.]', '', withdrawn_raw) if withdrawn_raw.strip("-") else "0.00"
+        
+        # Column 8: Paid In (positive amount)
+        paid_in_raw = cells[7].get_text(strip=True)
+        paid_in = re.sub(r'[^0-9.]', '', paid_in_raw) if paid_in_raw.strip("-") else "0.00"
+        
+        # Column 9: Balance
+        balance_raw = cells[8].get_text(strip=True)
+        balance = balance_raw.replace(",", "") if balance_raw else "0.00"
+        
+        # Columns not present in this table view
+        initiation_time = ""      # Not shown in your HTML
+        balance_confirmed = ""    # Not shown
+        reason_type = ""          # Not shown
+        linked_txn_id = ""        # Not shown
+        account_no = ""           # Not shown
+        
+        data.append({
+            "Receipt No.": receipt_no,
+            "Completion Time": completion_time,
+            "Initiation Time": initiation_time,
+            "Details": details,
+            "Transaction Status": status,
+            "Paid In": paid_in,
+            "Withdrawn": withdrawn,
+            "Balance": balance,
+            "Balance Confirmed": balance_confirmed,
+            "Reason Type": reason_type,
+            "Other Party Info": other_party,
+            "Linked Transaction ID": linked_txn_id,
+            "A/C No.": account_no,
+            "Currency": currency
+        })
+    
+    df = pd.DataFrame(data)
+    
+    # Optional: Convert numeric columns to proper types
+    numeric_cols = ["Paid In", "Withdrawn", "Balance"]
+    for col in numeric_cols:
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0.0)
+            
+    # Update transactions
+    results = transaction_service.update_transactions_from_dataframe(
+        df=df,
+        transaction_type=transaction_type,
+        company_shortcode=company_shortcode,
+        agent_id=None,
+        business_shortcode=business_shortcode
+    )
+    success_value = results.get('success', False)
+    if success_value:
+        summary = results.get('summary', {})
+        print(f"\n Success!")
+        print(f"   Updated: {summary.get('updated_count', 0)}")
+        print(f"   Created: {summary.get('created_count', 0)}")
+        print(f"   Total: {summary.get('total_processed', 0)}")
+        print(f"   Success rate: {summary.get('success_rate', 0):.1f}%")
+    else:
+        print(f"\n Failed: {results.get('error', 'Unknown error')}")
+    
+    return df,df.columns
+
 def save_table_to_dataframe_download(page: Page,business_shortcode:int,additional_category:str="") -> tuple:
     try:
         close_irritative_dialog_box(page)
@@ -656,8 +810,34 @@ def save_table_to_dataframe_download(page: Page,business_shortcode:int,additiona
         return df, success_value
     except Exception as e:
         print(f"[ERROR] An error has occurred {e}")
-        save_table_to_dataframe_(page=page,business_shortcode=business_shortcode,additional_category=additional_category)
-    
+        save_table_to_dataframe_download(page=page,business_shortcode=business_shortcode,additional_category=additional_category)
+
+def process_detailed_receipt(page: Page, receipt_no: str, transaction_type: str = 'float'):
+    try:
+        # Wait for the detailed view
+        page.wait_for_selector("//div[contains(@class, 'portal-collapse-content')]", timeout=15000)
+        
+        # Get HTML
+        detailed_html = page.inner_html(selector="//div[contains(@class, 'portal-collapse-content')]")
+        
+        # Save for debugging
+        with open(f"detailed_{receipt_no}.html", "w", encoding="utf-8") as f:
+            f.write(detailed_html)
+        
+        # Update transaction
+        result = transaction_service.update_transaction_with_detailed_info(
+            receipt_no=receipt_no,
+            detailed_html=detailed_html,
+            transaction_type=transaction_type,
+            commit=True
+        )
+        
+        print(f"[DETAIL] {result['message']}")
+        return result["success"]
+        
+    except Exception as e:
+        print(f"[ERROR] Failed to process detailed receipt {receipt_no}: {str(e)}")
+        return False    
 
 def update_transactions_from_file(file_path, business_shortcode, transaction_type, company_shortcode, agent_id):
     """
@@ -701,6 +881,7 @@ def update_transactions_from_file(file_path, business_shortcode, transaction_typ
     print(f"💾 Saved to: {business_shortcode}_{transaction_type}.xlsx")
     
     return df, success_value
+
 
 def is_till_frozen(page:Page)-> bool:
     
@@ -883,7 +1064,7 @@ def extract_extra_details_on_receipt(page:Page,receipt_no:str) -> bool:
         
         soup = BeautifulSoup(transactions_div_html,"html.parser")
         
-        with open(f"transaction_{receipt_no}.html","r+",encoding="utf8") as f:
+        with open(f"transaction_{receipt_no}.html","w+",encoding="utf8") as f:
             f.write(soup.prettify())
         
         return True
@@ -1220,41 +1401,41 @@ def select_account_dropdown(page: Page, account_name: str, arrow_down_count: int
         return False
 
 def process_float_account_details(page: Page, business_short_code: int, mapped_data: Optional[dict], pass_value: str) -> tuple:
-    try:
-        print("[INFO] Processing Float Account Details")
+    # try:
+    print("[INFO] Processing Float Account Details")
 
-        # Step 1: Select Float Account (usually 2nd or 3rd option)
-        if not select_account_dropdown(page, "Float Account", arrow_down_count=2):
-            return "dropdown",False
-        
-        extract_extra_till_info(page, mapped_data)
-        
-        print("We are checking whether a till is frozen or not")        
-        if is_till_frozen(page):
-            send_alert_on_non_active_(user.email,
-                                      mapped_data.get("company_name","-"),
-                                      business_short_code=business_short_code,
-                                      status="FROZEN")
-            # return "frozen",False
+    # Step 1: Select Float Account (usually 2nd or 3rd option)
+    if not select_account_dropdown(page, "Float Account", arrow_down_count=2):
+        return "dropdown",False
+    
+    extract_extra_till_info(page, mapped_data)
+    
+    print("We are checking whether a till is frozen or not")        
+    if is_till_frozen(page):
+        send_alert_on_non_active_(user.email,
+                                    mapped_data.get("company_name","-"),
+                                    business_short_code=business_short_code,
+                                    status="FROZEN")
+        # return "frozen",False
 
-        print(f"This is the date and time selection")
-        
-        time.sleep(1)  # Wait for table to load
+    print(f"This is the date and time selection")
+    
+    time.sleep(1)  # Wait for table to load
 
-        print("We are trying to save to the dataframe")
-        
-        df,success_value = scrape_180_days_monthly(page,business_short_code=business_short_code,pass_value=pass_value,additional_category="float")
-        if df is not None or success_value:
-            print("[SUCCESS] Float table extracted")
-            return "dataframe",True
-        else:
-            print("[ERROR] Failed to extract float table")
-            return "dataframe",False
+    print("We are trying to save to the dataframe")
+    
+    df,success_value = scrape_180_days_monthly(page,business_short_code=business_short_code,pass_value=pass_value,additional_category="float")
+    if df is not None or success_value:
+        print("[SUCCESS] Float table extracted")
+        return "dataframe",True
+    else:
+        print("[ERROR] Failed to extract float table")
+        return "dataframe",False
 
-    except Exception as e:
-        print(f"[ERROR] process_float_account_details failed: {e}")
-        page.screenshot(path="float_error.png")
-        return False
+    # except Exception as e:
+    #     print(f"[ERROR] process_float_account_details failed: {e}")
+    #     page.screenshot(path="float_error.png")
+    #     return False
 
 def click_search_button(page: Page) -> bool:
     try:
@@ -1486,11 +1667,25 @@ def scrape_180_days_monthly(page:Page, business_short_code:int=0, pass_value:str
     all_data = []
     
     success_value_ : bool = False
-        
+            
     # 180 days divided into 6 chunks of 30 days each
-    total_months,days = _get_total_months_by_shortcode_shortfall(str(business_short_code),till_scraping_shortfall)
-    if(days==0 and pass_value !="second"):
+    # if pass value is second, we need to refresh the till_scraping_shortfall
+    total_months,days = None,None
+    if(pass_value == "second"):
+        till_scraping_shortfall_ = transaction_service.get_last_scraped_per_shortcode()
+        total_months,days = _get_total_months_by_shortcode_shortfall(str(business_short_code),till_scraping_shortfall_)
+    else:
+        total_months,days = _get_total_months_by_shortcode_shortfall(str(business_short_code),till_scraping_shortfall)
+    print(f"The pass value is {pass_value} and the days spent are {days}")
+    if(days==0 and pass_value =="first"):
         return pd.DataFrame(),True
+    elif days == 0 and pass_value == "second" and additional_category == "float":
+        df, success_value = save_table_to_dataframe_latest_(
+                    page,
+                    business_shortcode=business_short_code,
+                    pass_value=pass_value,
+                    additional_category=additional_category
+                )
     for month_offset in range(total_months):
         close_irritative_dialog_box(page)
         print(f"\n{'='*60}")
@@ -1520,17 +1715,14 @@ def scrape_180_days_monthly(page:Page, business_short_code:int=0, pass_value:str
         
         # Get data for this period
         try:
-            if pass_value == "first":
-                df, success_value = save_table_to_dataframe_download(
+            if pass_value == "first" and additional_category == "float":
+                if not does_transaction_exist_for_period_(page=page):
+                    continue
+                df, success_value = save_table_to_dataframe_latest_(
                     page, 
                     business_shortcode=business_short_code,
+                    pass_value=pass_value,
                     additional_category=additional_category
-                )
-            else:
-                df, success_value = save_table_to_dataframe_latest_(
-                    page,
-                    business_shortcode=business_short_code,
-                    category=pass_value
                 )
             
             if len(df) > 0:
@@ -1752,6 +1944,49 @@ def navigate_to_review_transaction(page) -> bool:
         print(f"[ERROR] Navigation failed: {e}")
         return False
 
+def select_pagination_size(page: Page, down_presses: int = 3, timeout: int = 8000) -> bool:
+    """
+    Opens the page size dropdown in Element Plus table pagination and selects
+    an option by pressing down arrow the specified number of times + Enter.
+    
+    Most common use-case: down_presses=4 usually selects "50" if default is 10
+    
+    Returns:
+        bool: True if operation succeeded, False otherwise
+    """
+    try:
+        # 1. Locate the dropdown arrow button
+        dropdown_arrow = page.locator(
+            "//span[@class='el-pagination__sizes']//i[contains(@class, 'el-select__caret')]"
+        )
+
+        # Make sure it's visible
+        dropdown_arrow.wait_for(state="visible", timeout=timeout)
+
+        # 2. Click to open dropdown
+        dropdown_arrow.click()
+
+        # Small delay - Element Plus animation is sometimes a bit slow
+        page.wait_for_timeout(300)
+
+        # 3. Press down arrow multiple times
+        for _ in range(down_presses):
+            page.keyboard.press("ArrowDown")
+            time.sleep(0.2)   # small delay between keypresses
+
+        time.sleep(1)
+        # 4. Confirm selection
+        page.keyboard.press("Enter")
+        page.keyboard.press("Enter")
+
+        # Optional: wait a tiny bit for UI to settle
+
+        return True
+
+    except Exception as e:
+        print(f" Error while changing page size: {e}")
+        return False
+    
 def close_irritative_dialog_box(page:Page) -> bool:
     """Close any irritative dialog boxes that may block interactions."""
     try:
@@ -1763,6 +1998,18 @@ def close_irritative_dialog_box(page:Page) -> bool:
     except Exception as e:
         print(f"[ERROR] Failed to close irritative dialog box: {e}")
     return False
+
+def does_transaction_exist_for_period_(page:Page) -> bool:
+    """Close any irritative dialog boxes that may block interactions."""
+    try:
+        org_detail = page.wait_for_selector(
+            "//div[@class='el-table--fit el-table--border el-table--enable-row-hover el-table el-table--layout-fixed is-scrolling-none']//span[@class='el-table__empty-text'][normalize-space()='No records found.']",
+            timeout=5000
+        )
+        return False
+    except Exception as e:
+        print(f"[WARN]: The transactions exists {e}")
+        return True
     
 def close_detail_panel(page):
     """Attempt to close any open detail panels and return to list."""

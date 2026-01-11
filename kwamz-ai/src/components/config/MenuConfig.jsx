@@ -36,6 +36,7 @@ export const adminMenuItems = [
         label: "Setup",
         submenu: [
             { id: "bank-list", label: "Bank Details" },
+            { id: "configs", label: "System Configs" },
         ]
     },
     
