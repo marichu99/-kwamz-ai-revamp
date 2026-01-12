@@ -5,6 +5,7 @@ from flask_cors import CORS
 from flask_bcrypt import Bcrypt
 from flask_jwt_extended import JWTManager
 from google.cloud import storage
+from app.config.celery_config import celery
 import os
 from dotenv import load_dotenv
 
@@ -25,6 +26,11 @@ def create_app():
     app.config['JWT_SECRET_KEY'] = os.getenv('JWT_SECRET_KEY', 'your-secret-key')
     app.config['JWT_ACCESS_TOKEN_EXPIRES'] = 3600
     app.config['GCP_BUCKET'] = os.getenv('GCP_BUCKET', 'trovana-docs')
+    app.config['SECRET_KEY']   = 'my-secret-key'
+    app.config['DEBUG']        = False
+    app.config['DATABASE_URI']  = os.getenv('DATABASE_URL','postgresql://user:pass@localhost/db')
+    app.config['REDIS_URL']    = os.getenv('REDIS_URL','redis://localhost:6379/0')
+    app.config['CELERY_BROKER_URL']  =os.getenv('CELERY_BROKER_URL','redis://localhost:6379/0')
     # Initialize extensions
     db.init_app(app)
     migrate.init_app(app, db)
@@ -49,7 +55,10 @@ def create_app():
     from app.model.pesapalrefund import PesapalRefund
     from app.model.bank_config import BankConfig
     from app.model.bank_models import Bank
+    from app.model.email_outbox import EmailOutbox
     from app.model.transaction import Transaction, TransactionStats
+    from app.model.fraud_alert import FraudAlert,FraudReportHistory
+    from app.model.config import Config,DetectionLog,SuspiciousAccount
     
     # Initialize Pesapal Client and Payment Service
     from app.utils.pesapalclient import PesapalClient, PesapalConfig, FlaskIPNStorage

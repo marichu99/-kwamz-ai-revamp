@@ -1,3 +1,4 @@
+import asyncio
 import pandas as pd
 import os
 from datetime import datetime, timedelta, timezone
@@ -17,15 +18,21 @@ from datetime import datetime
 from decimal import Decimal, InvalidOperation
 import numpy as np
 from flask import current_app
+from concurrent.futures import ThreadPoolExecutor
 
+from app.utils.email_utils import _send_email
 from app.service.company_service import CompanyService
 from app.service.agentcompany_service import AgentCompanyService
 from app.model.agentcompany import AgentCompany
+from app.service.fraud_detector import FraudDetectionService
+from app.model.fraud_alert import FraudAlert, FraudReportHistory
+from app.model.user import User
 
 logger = logging.getLogger(__name__)
 
 company_service = CompanyService(db)
 agent_company_service = AgentCompanyService()
+executor = ThreadPoolExecutor(max_workers=5)
 
 class TransactionService:
     def __init__(self):
@@ -349,8 +356,9 @@ class TransactionService:
                     balance_confirmed = balance_confirmed.upper() in ['TRUE', 'YES', '1', 'Y']
                     
                 company_id = company_service.get_company_by_shortcode(company_shortcode).id
-                if(transaction_type == 'commission'):
-                    trans_data['balance']=trans_data['balance']*0.25
+                balance_value = self._parse_decimal(trans_data.get('balance', '0'))
+                if transaction_type == 'commission':
+                    balance_value = balance_value * Decimal('0.25')
                 
                 # Prepare transaction data
                 transaction_data = {
@@ -381,10 +389,10 @@ class TransactionService:
                     commission_rate = self._parse_decimal(trans_data.get('commission_rate', '0.25'))
                     # we should not be hard coding the rate here ......
                     commission_amount = self._parse_decimal(trans_data.get('commission_amount'))*commission_rate
-                    if not commission_amount:
-                        commission_amount = self._parse_decimal(trans_data.get('paid_in', trans_data.get('withdrawn')))*commission_rate
-                    
-                    # Calculate commission rate if not provided
+                    if commission_amount is None:
+                        # Use paid_in or withdrawn to calculate commission
+                        amount = self._parse_decimal(trans_data.get('paid_in')) or self._parse_decimal(trans_data.get('withdrawn'))
+                        commission_amount = amount * commission_rate if amount else Decimal('0')
                     
                     transaction_data.update({
                         'commission_rate': commission_rate,
@@ -1170,15 +1178,516 @@ class TransactionService:
             logger.error(f"Error getting last scraped per shortcode: {str(e)}", exc_info=True)
             return {}
         
-    def get_all_short_codes_in_txn_tbl(self) -> Dict[str,int]:
-        """Get all shortcodes that have been registered in the transactions table"""
+    def get_all_shortcodes_in_txn_tbl(self) -> List[str]:
+        """Get all shortcodes that have been registered in the transactions table."""
         try:
             with db_pool.get_cursor() as cursor:
-                return self._get_all_short_codes_in_txn_tbl(cursor)
+                return self._get_all_shortcodes_in_txn_tbl(cursor)
+        except Exception as e:
+            logger.error(f"Error getting shortcodes: {str(e)}", exc_info=True)
+            return []
+    
+    def _get_all_shortcodes_in_txn_tbl(self, cursor) -> List[str]:
+        """Get all shortcodes that have been registered in the transactions table."""
+        query = """
+            SELECT DISTINCT business_shortcode
+            FROM transactions
+            WHERE business_shortcode IS NOT NULL
+            AND business_shortcode != ''
+        """
+        cursor.execute(query)
+        results = cursor.fetchall()
+        return [row[0] for row in results]
+    
+    def get_recent_transactions_for_shortcode(self, shortcode: str, 
+                                            limit: int = 100) -> List[Dict]:
+        """Get recent transactions for a specific shortcode."""
+        try:
+            with db_pool.get_cursor() as cursor:
+                return self._get_recent_transactions_for_shortcode(cursor, shortcode, limit)
+        except Exception as e:
+            logger.error(f"Error getting transactions for {shortcode}: {str(e)}", exc_info=True)
+            return []
+    
+    def _get_recent_transactions_for_shortcode(self, cursor, shortcode: str, 
+                                             limit: int) -> List[Dict]:
+        """Get recent transactions for a specific shortcode."""
+        query = """
+            SELECT 
+                id, receipt_no, completion_time, initiation_time,
+                details, transaction_status, paid_in, withdrawn,
+                balance, balance_confirmed, reason_type, other_party_info,
+                linked_transaction_id, account_number, currency,
+                transaction_type, business_shortcode, company_id, agent_id,
+                created_at, updated_at
+            FROM transactions
+            WHERE business_shortcode = %s
+            AND transaction_status = 'Completed'
+            ORDER BY completion_time DESC
+            LIMIT %s
+        """
+        cursor.execute(query, (shortcode, limit))
+        columns = [desc[0] for desc in cursor.description]
+        results = cursor.fetchall()
+        
+        transactions = []
+        for row in results:
+            txn = dict(zip(columns, row))
+            # Convert datetime objects
+            for date_field in ['completion_time', 'initiation_time', 'created_at', 'updated_at']:
+                if txn.get(date_field) and isinstance(txn[date_field], datetime):
+                    txn[date_field] = txn[date_field]
+            transactions.append(txn)
+        
+        return transactions
+    
+    def get_historical_transactions_for_shortcode(self, shortcode: str, 
+                                                days: int = 30) -> List[Dict]:
+        """Get historical transactions for fraud analysis."""
+        try:
+            with db_pool.get_cursor() as cursor:
+                return self._get_historical_transactions_for_shortcode(cursor, shortcode, days)
+        except Exception as e:
+            logger.error(f"Error getting historical transactions: {str(e)}", exc_info=True)
+            return []
+    
+    def _get_historical_transactions_for_shortcode(self, cursor, shortcode: str, 
+                                                 days: int) -> List[Dict]:
+        """Get historical transactions for fraud analysis."""
+        cutoff_date = datetime.now() - timedelta(days=days)
+        
+        query = """
+            SELECT 
+                id, receipt_no, completion_time, initiation_time,
+                details, transaction_status, paid_in, withdrawn,
+                balance, balance_confirmed, reason_type, other_party_info,
+                linked_transaction_id, account_number, currency,
+                transaction_type, business_shortcode, company_id, agent_id,
+                created_at, updated_at
+            FROM transactions
+            WHERE business_shortcode = %s
+            AND transaction_status = 'Completed'
+            AND completion_time >= %s
+            ORDER BY completion_time DESC
+        """
+        cursor.execute(query, (shortcode, cutoff_date))
+        columns = [desc[0] for desc in cursor.description]
+        results = cursor.fetchall()
+        
+        transactions = []
+        for row in results:
+            txn = dict(zip(columns, row))
+            # Convert datetime objects
+            for date_field in ['completion_time', 'initiation_time', 'created_at', 'updated_at']:
+                if txn.get(date_field) and isinstance(txn[date_field], datetime):
+                    txn[date_field] = txn[date_field]
+            transactions.append(txn)
+        
+        return transactions
+    
+    async def run_fraud_detection_for_user_async(self, user_id: int) -> Dict:
+        """
+        Run fraud detection for a user asynchronously.
+        This is the main method called by Celery task.
+        """
+        logger.info(f"Starting async fraud detection for user_id: {user_id}")
+        
+        # Get user
+        user = User.query.get(user_id)
+        if not user:
+            logger.error(f"User {user_id} not found")
+            return {'status': 'error', 'message': 'User not found'}
+        
+        # Initialize fraud detection service
+        fraud_service = FraudDetectionService(user=user)
+        
+        # Step 1: Historical analysis (first run only)
+        historical_report = await self._run_historical_analysis(fraud_service, user)
+        
+        # Step 2: Recent transactions check
+        recent_detections = await self._check_recent_transactions(fraud_service)
+        
+        # Step 3: Send summary to user
+        await self._send_detection_summary(user, historical_report, recent_detections)
+        
+        logger.info(f"Completed fraud detection for user: {user.email}")
+        
+        return {
+            'status': 'success',
+            'user_id': user_id,
+            'historical_patterns': len(historical_report.get('detections', [])),
+            'recent_detections': len(recent_detections),
+            'timestamp': datetime.now().isoformat()
+        }
+    
+    async def _run_historical_analysis(self, fraud_service: FraudDetectionService, user: User) -> Dict:
+        """Run historical fraud analysis (first time for user)."""
+        # Check if user has already received historical report
+        report_count = FraudReportHistory.query.filter_by(user_id=user.id).count()
+        
+        if report_count > 0:
+            logger.info(f"User {user.email} already received historical report")
+            return {'summary': {}, 'detections': []}
+        
+        logger.info(f"Running historical analysis for {user.email}")
+        
+        # Get all shortcodes
+        shortcodes = self.get_all_shortcodes_in_txn_tbl()
+        all_transactions = []
+        
+        # Fetch historical transactions
+        loop = asyncio.get_event_loop()
+        
+        for shortcode in shortcodes:
+            transactions = await loop.run_in_executor(
+                executor,
+                lambda s=shortcode: self.get_historical_transactions_for_shortcode(s, days=30)
+            )
+            all_transactions.extend(transactions)
+        
+        if all_transactions:
+            # Run detection
+            result = await loop.run_in_executor(
+                executor,
+                fraud_service.run_detection,
+                all_transactions
+            )
+            
+            # Send historical report email
+            await loop.run_in_executor(
+                executor,
+                fraud_service.send_historical_report,
+                result['summary']
+            )
+            
+            # Record in database
+            await self._record_report_history(user, result['summary'])
+            
+            return result
+        
+        return {'summary': {}, 'detections': []}
+    
+    async def _check_recent_transactions(self, fraud_service: FraudDetectionService) -> List[Dict]:
+        """Check recent transactions for fraud patterns."""
+        logger.info("Checking recent transactions for fraud patterns")
+        
+        shortcodes = self.get_all_shortcodes_in_txn_tbl()
+        all_detections = []
+        
+        loop = asyncio.get_event_loop()
+        
+        # Process shortcodes in batches
+        batch_size = 3
+        for i in range(0, len(shortcodes), batch_size):
+            batch = shortcodes[i:i + batch_size]
+            
+            batch_tasks = []
+            for shortcode in batch:
+                task = loop.run_in_executor(
+                    executor,
+                    lambda s=shortcode: self._process_single_shortcode(fraud_service, s)
+                )
+                batch_tasks.append(task)
+            
+            # Wait for batch to complete
+            batch_results = await asyncio.gather(*batch_tasks, return_exceptions=True)
+            
+            for result in batch_results:
+                if isinstance(result, Exception):
+                    logger.error(f"Error processing shortcode: {result}")
+                elif result:
+                    all_detections.extend(result)
+        
+        return all_detections
+    
+    def _process_single_shortcode(self, fraud_service: FraudDetectionService, shortcode: str) -> List[Dict]:
+        """Process a single shortcode (runs in thread pool)."""
+        # Get recent transactions
+        transactions = self.get_recent_transactions_for_shortcode(
+            shortcode,
+            limit=fraud_service.config.get('recent_transactions_limit', 100)
+        )
+        
+        if not transactions:
+            return []
+        
+        # Run detection
+        result = fraud_service.run_detection(transactions)
+        
+        # Send notifications for high-risk detections
+        for detection in result.get('detections', []):
+            if detection.get('risk_level') == 'HIGH':
+                # Check alert limit before sending
+                receipt_nos = detection.get('receipt_nos', [])
+                if not self._should_limit_alerts(receipt_nos):
+                    fraud_service.send_fraud_notification(detection, detection.get('fraud_type'))
+        
+        return result.get('detections', [])
+    
+    async def _send_detection_summary(self, user: User, historical_report: Dict, recent_detections: List[Dict]):
+        """Send a summary of the fraud detection run to the user."""
+        summary_template = """
+        <html><body>
+        <h2>🔍 Fraud Detection Summary</h2>
+        <p><strong>Date:</strong> {date}</p>
+        <p><strong>User:</strong> {user_email}</p>
+        
+        <h3>📊 Results Summary</h3>
+        <ul>
+        <li><strong>Historical Analysis:</strong> {historical_patterns} suspicious patterns found</li>
+        <li><strong>Recent Transactions Check:</strong> {recent_detections} fraud alerts detected</li>
+        <li><strong>High-Risk Alerts:</strong> {high_risk_count}</li>
+        </ul>
+        
+        <h3>🚨 Immediate Actions Required</h3>
+        <p>Please review the detailed reports sent to your email.</p>
+        
+        <hr>
+        <p style="color: #666; font-size: 12px;">
+        This is an automated fraud detection summary.
+        </p>
+        </body></html>
+        """
+        
+        # Count high-risk detections
+        high_risk_count = sum(1 for d in recent_detections if d.get('risk_level') == 'HIGH')
+        
+        body = summary_template.format(
+            date=datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+            user_email=user.email,
+            historical_patterns=len(historical_report.get('detections', [])),
+            recent_detections=len(recent_detections),
+            high_risk_count=high_risk_count
+        )
+        
+        # Send email
+        loop = asyncio.get_event_loop()
+        await loop.run_in_executor(
+            executor,
+            lambda: _send_email(
+                subject=f"Fraud Detection Summary - {datetime.now().strftime('%Y-%m-%d')}",
+                body=body,
+                recipient=user.email,
+                is_html=True
+            )
+        )
+    
+    def _should_limit_alerts(self, receipt_nos: List[str]) -> bool:
+        """Check if alerts should be limited for this receipt group."""
+        if not receipt_nos:
+            return False
+        
+        # Sort and create hash
+        receipt_hash = hash(tuple(sorted(receipt_nos)))
+        
+        # Check existing alerts for this group in last 24 hours
+        yesterday = datetime.now() - timedelta(days=1)
+        
+        alert_count = FraudAlert.query.filter(
+            FraudAlert.receipt_hash == receipt_hash,
+            FraudAlert.created_at >= yesterday
+        ).count()
+        
+        return alert_count >= 3  # Max 3 alerts per group per day
+    
+    async def _record_report_history(self, user: User, report_summary: Dict):
+        """Record report history in database."""
+        try:
+            history = FraudReportHistory(
+                user_id=user.id,
+                analysis_period_days=30,
+                total_transactions=report_summary.get('total_transactions_analyzed', 0),
+                suspicious_patterns=report_summary.get('suspicious_patterns_found', 0),
+                accounts_flagged=report_summary.get('accounts_flagged', 0),
+                report_data=report_summary
+            )
+            
+            loop = asyncio.get_event_loop()
+            await loop.run_in_executor(
+                executor,
+                lambda: db.session.add(history) or db.session.commit()
+            )
+            
+            logger.info(f"Recorded fraud report history for user {user.email}")
             
         except Exception as e:
-            logger.error(f"Error getting last scraped per shortcode: {str(e)}", exc_info=True)
-            return {}
+            logger.error(f"Failed to record report history: {str(e)}")
+    
+    # PERIODIC AND DAILY REPORTS (called by Celery beat)
+    
+    def send_daily_fraud_report(self):
+        """Send daily fraud report (called by Celery beat)."""
+        try:
+            logger.info("Starting daily fraud report generation")
+            
+            # Get all admin users
+            admins = User.query.filter_by(is_admin=True).all()
+            
+            for admin in admins:
+                self._send_daily_report_to_admin(admin)
+                
+            logger.info("Daily fraud reports sent")
+            
+        except Exception as e:
+            logger.error(f"Error sending daily report: {str(e)}", exc_info=True)
+    
+    def _send_daily_report_to_admin(self, admin: User):
+        """Send daily report to a single admin."""
+        # Get today's date
+        today = datetime.now().date()
+        yesterday = today - timedelta(days=1)
+        
+        # Get fraud alerts from yesterday
+        alerts = FraudAlert.query.filter(
+            FraudAlert.created_at >= yesterday,
+            FraudAlert.created_at < today
+        ).all()
+        
+        # Get report history from yesterday
+        reports = FraudReportHistory.query.filter(
+            FraudReportHistory.created_at >= yesterday,
+            FraudReportHistory.created_at < today
+        ).all()
+        
+        # Generate report
+        report_template = """
+        <html><body>
+        <h2>📊 Daily Fraud Detection Report</h2>
+        <p><strong>Date:</strong> {date}</p>
+        <p><strong>Generated For:</strong> {admin_email}</p>
+        
+        <h3>📈 Daily Statistics</h3>
+        <ul>
+        <li><strong>Total Fraud Alerts:</strong> {total_alerts}</li>
+        <li><strong>High-Risk Alerts:</strong> {high_risk_alerts}</li>
+        <li><strong>Reports Generated:</strong> {reports_generated}</li>
+        <li><strong>Unique Accounts Flagged:</strong> {unique_accounts}</li>
+        </ul>
+        
+        <h3>🎯 Top Fraud Types</h3>
+        <ul>
+        {fraud_types}
+        </ul>
+        
+        <hr>
+        <p style="color: #666; font-size: 12px;">
+        Generated automatically by Fraud Detection System.
+        </p>
+        </body></html>
+        """
+        
+        # Count fraud types
+        fraud_type_counts = {}
+        for alert in alerts:
+            fraud_type = alert.fraud_type
+            fraud_type_counts[fraud_type] = fraud_type_counts.get(fraud_type, 0) + 1
+        
+        fraud_types_html = ""
+        for fraud_type, count in sorted(fraud_type_counts.items(), key=lambda x: x[1], reverse=True):
+            fraud_types_html += f"<li><strong>{fraud_type}:</strong> {count}</li>"
+        
+        # Count unique accounts
+        unique_accounts = len(set(alert.account_phone for alert in alerts if alert.account_phone))
+        
+        body = report_template.format(
+            date=today.strftime('%Y-%m-%d'),
+            admin_email=admin.email,
+            total_alerts=len(alerts),
+            high_risk_alerts=sum(1 for a in alerts if a.risk_level == 'HIGH'),
+            reports_generated=len(reports),
+            unique_accounts=unique_accounts,
+            fraud_types=fraud_types_html
+        )
+        
+        # Send email
+        _send_email(
+            subject=f"Daily Fraud Report - {today.strftime('%Y-%m-%d')}",
+            body=body,
+            recipient=admin.email,
+            is_html=True
+        )
+    
+    def run_fraud_detection_for_user(self, user) -> Dict:
+        """Run fraud detection for a specific user."""
+        logger.info(f"Starting fraud detection for user: {user.email}")
+        
+        # Initialize fraud detection service
+        fraud_service = FraudDetectionService(user=user)
+        
+        # Step 1: Get historical report (first run)
+        historical_report = self._generate_historical_report(user, fraud_service)
+        
+        # Step 2: Check recent transactions per shortcode
+        recent_detections = self._check_recent_transactions(fraud_service)
+        
+        # Combine results
+        result = {
+            'historical_report': historical_report,
+            'recent_detections': recent_detections,
+            'detection_time': datetime.now(),
+            'user_id': user.id,
+            'user_email': user.email
+        }
+        
+        return result
+    
+    def _generate_historical_report(self, user, fraud_service: FraudDetectionService) -> Dict:
+        """Generate historical fraud analysis report."""
+        logger.info("Generating historical fraud analysis report")
+        
+        # Get all shortcodes
+        shortcodes = self.get_all_shortcodes_in_txn_tbl()
+        all_transactions = []
+        
+        # Get historical transactions for each shortcode
+        for shortcode in shortcodes:
+            transactions = self.get_historical_transactions_for_shortcode(
+                shortcode, 
+                days=fraud_service.config['analysis_period_days']
+            )
+            all_transactions.extend(transactions)
+        
+        # Run detection on historical data
+        if all_transactions:
+            historical_result = fraud_service.run_detection(all_transactions)
+            
+            # Send historical report
+            fraud_service.send_historical_report(historical_result['summary'])
+            
+            return historical_result
+        else:
+            logger.info("No historical transactions found for analysis")
+            return {'summary': {}, 'detections': [], 'account_summary': {}}
+    
+    def _check_recent_transactions(self, fraud_service: FraudDetectionService) -> List[Dict]:
+        """Check recent transactions for fraud patterns."""
+        logger.info("Checking recent transactions for fraud patterns")
+        
+        shortcodes = self.get_all_shortcodes_in_txn_tbl()
+        all_detections = []
+        
+        for shortcode in shortcodes:
+            # Get recent transactions for this shortcode
+            transactions = self.get_recent_transactions_for_shortcode(
+                shortcode,
+                limit=fraud_service.config['recent_transactions_limit']
+            )
+            
+            if transactions:
+                # Run detection
+                result = fraud_service.run_detection(transactions)
+                
+                # Send notifications for high-risk detections
+                for detection in result.get('detections', []):
+                    if detection.get('risk_level') == 'HIGH':
+                        fraud_service.send_fraud_notification(
+                            detection, 
+                            detection.get('fraud_type')
+                        )
+                
+                all_detections.extend(result.get('detections', []))
+        
+        return all_detections
         
     def _get_basic_stats_raw(self, cursor, where_clause: str, params: list, transaction_type: str) -> Dict:
         """Get basic transaction statistics using raw SQL"""

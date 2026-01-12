@@ -464,51 +464,131 @@ def get_latest_receipt_no(page: Page, business_shortcode: int, pass_value: str) 
 
 def save_table_to_dataframe_latest_(page: Page, business_shortcode: int, pass_value: str, additional_category: str) -> tuple:
     """Extract all rows from paginated table and process receipt links from match point to latest."""
-    try:
-        print("[INFO] Starting table extraction...")
+    # try:
+    print("[INFO] Starting table extraction...")
+    headers = []
+    all_data_rows = []
+    
+    success = click_search_button(page=page)        
+    
+    if not success:
+        print(f"[ERROR] Can not select the search button")
+    
+    select_pagination_size(page=page)
+    # Get the latest receipt number for this shortcode
+    # print(f"The till scraping shortfall {till_scraping_shortfall}")
         
-        success = click_search_button(page=page)        
-        
-        if not success:
-            print(f"[ERROR] Can not select the search button")
-        
-        select_pagination_size(page=page)
-        # Get the latest receipt number for this shortcode
-        print(f"The till scraping shortfall {till_scraping_shortfall}")
-                
-        try:                
-            # Wait for page to load
-            page.wait_for_load_state("networkidle", timeout=10000)
-            
-            # Wait for table to be visible
-            body_tbl = page.wait_for_selector(
-                "//table[@class='el-table__body']",
-                timeout=10000
-            )
-            
-            if not body_tbl.is_visible():
-                print("[WARN] Table body not visible, ending extraction.")
-                return None, None
-
-            # Parse the table directly
-            html_content = body_tbl.inner_html()
-            
-            # Save raw HTML (optional)
-            with open(f"transactions_{business_shortcode}.html", "w", encoding="utf8") as f:
-                f.write(BeautifulSoup(html_content, "html.parser").prettify())
-            
-            # Convert to DataFrame
-            df,columns = parse_element_plus_transactions(html_content,transaction_type=additional_category,business_shortcode=business_shortcode)
-            
-            if df.empty:
-                print("[WARN] No transactions found in table.")
-                return None, None
-                
-            return df, columns
-
-        except Exception as e:
-            print(f"[ERROR] Failed to extract table: {e}")
+        # Extract headers
+    header_tbl = page.wait_for_selector(
+        "//table[@class='el-table__header']",
+        timeout=10000
+    )
+    
+    soup = BeautifulSoup(header_tbl.inner_html(), "html.parser")
+    tr = soup.find("thead").find("tr")
+    headers = [th.get_text(strip=True) for th in tr.find_all("th")]
+    print(f"[SUCCESS] Headers: {headers}")
+    
+    #
+    scroll_to_bottom(page)
+    
+    # Paginate through all data
+    page_no = 1
+    time.sleep(1)  
+    print(f"\n[INFO] Extracting page {page_no}...")
+    
+    try:                
+        page.wait_for_load_state("networkidle", timeout=10000)
+        body_tbl = page.wait_for_selector(
+            "//table[@class='el-table__body']",
+            timeout=10000
+        )
+    
+        if not body_tbl.is_visible():
             return None, None
+    except Exception as e:
+        print("[WARN] Table body not visible, ending extraction.")
+        return None, None
+        
+    soup = BeautifulSoup(body_tbl.inner_html(), "html.parser")
+    tbody = soup.find("tbody")
+
+    if tbody:
+        for tr in tbody.find_all("tr"):
+            cells = [td.get_text(strip=True) for td in tr.find_all("td")]
+            if len(cells) == len(headers):
+                all_data_rows.append([business_shortcode] + cells)
+    
+
+    # Create DataFrame
+    if not all_data_rows:
+        print("[WARN] No data rows extracted")
+        df = pd.DataFrame(columns=["OrganizationRowIndex"] + headers)
+    else:
+        df = pd.DataFrame(all_data_rows, columns=["OrganizationRowIndex"] + headers)
+        print(f"[SUCCESS] Extracted {len(df)} total rows")
+        print(df.tail())
+    
+        # Update transactions
+    results = transaction_service.update_transactions_from_dataframe(
+        df=df,
+        transaction_type=additional_category,
+        company_shortcode=company_shortcode,
+        agent_id=None,
+        business_shortcode=business_shortcode
+    )
+    success_value = results.get('success', False)
+    if success_value:
+        summary = results.get('summary', {})
+        print(f"\n Success!")
+        print(f"   Updated: {summary.get('updated_count', 0)}")
+        print(f"   Created: {summary.get('created_count', 0)}")
+        print(f"   Total: {summary.get('total_processed', 0)}")
+        print(f"   Success rate: {summary.get('success_rate', 0):.1f}%")
+    else:
+        print(f"\n Failed: {results.get('error', 'Unknown error')}")
+        
+    df.to_csv(f"{additional_category}_{business_shortcode}.csv")
+
+    return df, success_value
+
+    # except Exception as exc:
+    #     print(f"[ERROR] Table extraction failed: {exc}")
+    #     traceback.print_exc()
+    #     return None, None      
+        # try:                
+        #     # Wait for page to load
+        #     page.wait_for_load_state("networkidle", timeout=10000)
+            
+        #     # Wait for table to be visible
+        #     body_tbl = page.wait_for_selector(
+        #         "//table[@class='el-table__body']",
+        #         timeout=20000
+        #     )
+            
+        #     if not body_tbl.is_visible():
+        #         print("[WARN] Table body not visible, ending extraction.")
+        #         return None, None
+
+        #     # Parse the table directly
+        #     html_content = body_tbl.inner_html()
+            
+        #     # Save raw HTML (optional)
+        #     with open(f"transactions_{business_shortcode}.html", "w", encoding="utf8") as f:
+        #         f.write(BeautifulSoup(html_content, "html.parser").prettify())
+            
+        #     # Convert to DataFrame
+        #     df,columns = parse_element_plus_transactions(html_content,transaction_type=additional_category,business_shortcode=business_shortcode)
+            
+        #     if df.empty:
+        #         print("[WARN] No transactions found in table.")
+        #         return None, None
+                
+        #     return df, columns
+
+        # except Exception as e:
+        #     print(f"[ERROR] Failed to extract table: {e}")
+        #     return None, None
         
         # Find the matching receipt and click all from that point to latest
         # print(f"[INFO] Looking for receipt {latest_receipt_number} and transactions from match point...")
@@ -623,10 +703,6 @@ def save_table_to_dataframe_latest_(page: Page, business_shortcode: int, pass_va
         #     traceback.print_exc()
         #     return None, None
 
-    except Exception as exc:
-        print(f"[ERROR] Table extraction failed: {exc}")
-        traceback.print_exc()
-        return None, None
     
 def parse_element_plus_transactions(html_content: str, transaction_type: str, business_shortcode: str) -> tuple:
     """
@@ -1677,15 +1753,16 @@ def scrape_180_days_monthly(page:Page, business_short_code:int=0, pass_value:str
     else:
         total_months,days = _get_total_months_by_shortcode_shortfall(str(business_short_code),till_scraping_shortfall)
     print(f"The pass value is {pass_value} and the days spent are {days}")
-    if(days==0 and pass_value =="first"):
+    if(days <=2 and pass_value =="first"):
         return pd.DataFrame(),True
-    elif days == 0 and pass_value == "second" and additional_category == "float":
+    elif days <=2 and pass_value == "second":
         df, success_value = save_table_to_dataframe_latest_(
                     page,
                     business_shortcode=business_short_code,
                     pass_value=pass_value,
                     additional_category=additional_category
                 )
+        return df,success_value
     for month_offset in range(total_months):
         close_irritative_dialog_box(page)
         print(f"\n{'='*60}")
@@ -1715,13 +1792,12 @@ def scrape_180_days_monthly(page:Page, business_short_code:int=0, pass_value:str
         
         # Get data for this period
         try:
-            if pass_value == "first" and additional_category == "float":
+            if pass_value == "first":
                 if not does_transaction_exist_for_period_(page=page):
                     continue
-                df, success_value = save_table_to_dataframe_latest_(
+                df, success_value = save_table_to_dataframe_download(
                     page, 
                     business_shortcode=business_short_code,
-                    pass_value=pass_value,
                     additional_category=additional_category
                 )
             
@@ -1944,7 +2020,7 @@ def navigate_to_review_transaction(page) -> bool:
         print(f"[ERROR] Navigation failed: {e}")
         return False
 
-def select_pagination_size(page: Page, down_presses: int = 3, timeout: int = 8000) -> bool:
+def select_pagination_size(page: Page, down_presses: int = 3, timeout: int = 20000) -> bool:
     """
     Opens the page size dropdown in Element Plus table pagination and selects
     an option by pressing down arrow the specified number of times + Enter.
@@ -1955,31 +2031,28 @@ def select_pagination_size(page: Page, down_presses: int = 3, timeout: int = 800
         bool: True if operation succeeded, False otherwise
     """
     try:
-        # 1. Locate the dropdown arrow button
-        dropdown_arrow = page.locator(
-            "//span[@class='el-pagination__sizes']//i[contains(@class, 'el-select__caret')]"
-        )
-
-        # Make sure it's visible
-        dropdown_arrow.wait_for(state="visible", timeout=timeout)
-
-        # 2. Click to open dropdown
-        dropdown_arrow.click()
-
-        # Small delay - Element Plus animation is sometimes a bit slow
-        page.wait_for_timeout(300)
-
-        # 3. Press down arrow multiple times
-        for _ in range(down_presses):
-            page.keyboard.press("ArrowDown")
-            time.sleep(0.2)   # small delay between keypresses
-
-        time.sleep(1)
-        # 4. Confirm selection
-        page.keyboard.press("Enter")
-        page.keyboard.press("Enter")
+        
+        page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+        # page.wait_for_load_state("networkidle", timeout=10000)
+        
+        pagination_dropdown = "//span[@class='el-pagination__sizes']//i[@class='el-icon el-select__caret el-select__icon']"
+        dropdown = page.locator(pagination_dropdown).first
+        time.sleep(2)
+        
+        if dropdown.is_visible():
+            dropdown.click()
+            
+            for _ in range(3):
+                page.keyboard.press("ArrowDown")
+                time.sleep(0.2)
+            
+            page.keyboard.press("Enter")
+        else:
+            print("[WARN] Pagination size dropdown not visible")
+            return False
 
         # Optional: wait a tiny bit for UI to settle
+        time.sleep(2)
 
         return True
 
@@ -2195,6 +2268,23 @@ def _get_priority_shortcodes_(all_shortcodes: Set[str]) -> Set[str]:
 
     return priority_shortcode_indexes
 
+# def force_refresh_with_routing(page:Page):
+#     try:
+#         # Disable HTTP cache by enabling routing
+#         # The route handler simply continues the request without caching
+#         page.route('**', lambda route: route.continue())
+
+#         page.goto("https://example.com")
+#         print("Page loaded the first time (cache disabled).")
+
+#         # Now, page.reload() will perform a hard refresh because the cache is disabled
+#         page.reload()
+#         print("Page reloaded (hard refresh).")
+
+#         return True
+#     except Exception as e:
+#         print(f"[ERROR] An error occurred {str(e)}")
+#         return False
 
 def process_page_rows(
     page: Page,

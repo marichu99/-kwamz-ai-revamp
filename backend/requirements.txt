@@ -24,3 +24,6 @@ bs4
 pandas
 google-cloud-storage
 xlrd
+celery
+redis
+flower
