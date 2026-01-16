@@ -346,20 +346,48 @@ def get_transaction_stats():
             'end_date': request.args.get('end_date'),
             'transaction_type': request.args.get('transaction_type', 'float')
         }
-        
+
         # Remove None values
         filters = {k: v for k, v in filters.items() if v is not None}
-        
+
         result = transaction_service.get_transaction_stats(filters)
-        
+
         if result['success']:
             return jsonify(result), 200
         else:
             return jsonify(result), 400
-            
+
     except Exception as e:
         current_app.logger.error(f"Error fetching transaction stats: {str(e)}")
         return jsonify({"error": f"Failed to fetch statistics: {str(e)}"}), 500
+
+
+@transaction_bp.route('/dashboard-analytics', methods=['GET'])
+def get_dashboard_analytics():
+    """
+    Get comprehensive analytics data for the dashboard.
+    Returns KPIs, trends, distribution, and recent activity.
+    """
+    try:
+        filters = {
+            'company_id': request.args.get('company_id', type=int),
+            'agent_id': request.args.get('agent_id', type=int),
+            'days': request.args.get('days', 30, type=int)
+        }
+
+        # Remove None values
+        filters = {k: v for k, v in filters.items() if v is not None}
+
+        result = transaction_service.get_dashboard_analytics(filters)
+
+        if result['success']:
+            return jsonify(result), 200
+        else:
+            return jsonify(result), 400
+
+    except Exception as e:
+        current_app.logger.error(f"Error fetching dashboard analytics: {str(e)}")
+        return jsonify({"error": f"Failed to fetch dashboard analytics: {str(e)}"}), 500
 
 
 @transaction_bp.route('/export', methods=['GET'])

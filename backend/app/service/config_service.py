@@ -46,9 +46,19 @@ class ConfigService:
             time_window_minutes=data.get('time_window_minutes', 5),
             amount_variance=data.get('amount_variance', 0.1),
             min_transactions_rollover=data.get('min_transactions_rollover', 3),
-            split_threshold=data.get('split_threshold', 2),
+            split_threshold=data.get('split_threshold', 5),
             rapid_back_forth_threshold=data.get('rapid_back_forth_threshold', 2),
-            
+
+            # Split Transaction Thresholds
+            split_min_amount=data.get('split_min_amount', 100.0),
+            split_max_amount=data.get('split_max_amount', 50000.0),
+            split_total_amount_threshold=data.get('split_total_amount_threshold', 10000.0),
+
+            # Periodic Check Settings
+            periodic_check_interval_minutes=data.get('periodic_check_interval_minutes', 30),
+            analysis_period_days=data.get('analysis_period_days', 30),
+            max_transactions_per_check=data.get('max_transactions_per_check', 100),
+
             # Risk Thresholds
             high_risk_score=data.get('high_risk_score', 50),
             medium_risk_score=data.get('medium_risk_score', 30),
@@ -125,7 +135,7 @@ class ConfigService:
     def validate_config_data(data):
         """Validate configuration data"""
         errors = []
-        
+
         # SMTP Validation
         if data.get('email_enabled', False):
             if not data.get('smtp_server'):
@@ -134,16 +144,39 @@ class ConfigService:
                 errors.append('Sender email is required when email is enabled')
             if not data.get('recipient_emails'):
                 errors.append('At least one recipient email is required')
-        
+
         # Detection Parameters Validation
-        if data.get('time_window_minutes', 0) < 1 or data.get('time_window_minutes', 0) > 60:
+        time_window = data.get('time_window_minutes', 5)
+        if time_window < 1 or time_window > 60:
             errors.append('Time window must be between 1 and 60 minutes')
-        
-        if data.get('amount_variance', 0) < 0.01 or data.get('amount_variance', 0) > 1.0:
+
+        amount_variance = data.get('amount_variance', 0.1)
+        if amount_variance < 0.01 or amount_variance > 1.0:
             errors.append('Amount variance must be between 0.01 and 1.0')
-        
-        if data.get('min_transactions_rollover', 0) < 2:
+
+        if data.get('min_transactions_rollover', 3) < 2:
             errors.append('Minimum transactions for roll-over must be at least 2')
+
+        # Split Transaction Threshold Validation
+        split_threshold = data.get('split_threshold', 5)
+        if split_threshold < 2 or split_threshold > 50:
+            errors.append('Split threshold must be between 2 and 50 transactions')
+
+        split_min = data.get('split_min_amount', 100.0)
+        split_max = data.get('split_max_amount', 50000.0)
+        if split_min < 0:
+            errors.append('Split minimum amount cannot be negative')
+        if split_max < split_min:
+            errors.append('Split maximum amount must be greater than minimum amount')
+
+        split_total = data.get('split_total_amount_threshold', 10000.0)
+        if split_total < 0:
+            errors.append('Split total amount threshold cannot be negative')
+
+        # Periodic Check Validation
+        periodic_interval = data.get('periodic_check_interval_minutes', 30)
+        if periodic_interval < 1 or periodic_interval > 1440:
+            errors.append('Periodic check interval must be between 1 and 1440 minutes (24 hours)')
         
         # Risk Thresholds Validation
         if data.get('high_risk_score', 0) < data.get('medium_risk_score', 0):

@@ -34,9 +34,9 @@ const ConfirmationDialog = ({ isOpen, onClose, onConfirm, title, message, type =
 };
 
 const KYCDocumentUploadPage = ({
-    isOpen = true,
+    isOpen = false,
     onClose = () => { },
-    user = { idnumber: '12345678', id: '1' },
+    user = null,
     onSubmitSuccess
 }) => {
     const [kraPin, setKraPin] = useState('');
@@ -44,7 +44,7 @@ const KYCDocumentUploadPage = ({
     const [email, setEmail] = useState('');
     const [policeClearance, setPoliceClearance] = useState('');
     const [clearedUserName, setClearedUserName] = useState('');
-    const [idNumber, setIdNumber] = useState(user?.idnumber || '');
+    const [idNumber, setIdNumber] = useState('');
     const [loading, setLoading] = useState(false);
     const [errors, setErrors] = useState({});
     const { showToast } = useToast();
@@ -69,12 +69,49 @@ const KYCDocumentUploadPage = ({
     const mpesaAgreementFileRef = useRef(null);
     const genericFileRef = useRef(null);
 
-    // Check for existing documents when modal opens
+    // Track the current user ID to detect changes
+    const previousUserIdRef = useRef(null);
+
+    // Reset form when user changes or modal opens with a different user
     useEffect(() => {
         if (isOpen && user?.id) {
+            // Check if this is a different user than before
+            if (previousUserIdRef.current !== user.id) {
+                // Reset all state for the new user
+                setKraPin('');
+                setTaxPayerName('');
+                setEmail('');
+                setPoliceClearance('');
+                setClearedUserName('');
+                setIdNumber(user?.idnumber || '');
+                setErrors({});
+                setDocumentStatus({
+                    kra: { uploaded: false, fileName: '', fileUrl: '', documentId: null },
+                    police: { uploaded: false, fileName: '', fileUrl: '', documentId: null },
+                    mpesa: { uploaded: false, fileName: '', fileUrl: '', documentId: null }
+                });
+
+                // Reset file inputs
+                if (kraPinFileRef.current) kraPinFileRef.current.value = '';
+                if (policeClearanceFileRef.current) policeClearanceFileRef.current.value = '';
+                if (mpesaAgreementFileRef.current) mpesaAgreementFileRef.current.value = '';
+                if (genericFileRef.current) genericFileRef.current.value = '';
+
+                // Update the tracked user ID
+                previousUserIdRef.current = user.id;
+            }
+
+            // Fetch existing documents for this user
             checkExistingDocuments();
         }
     }, [isOpen, user?.id]);
+
+    // Reset tracked user when modal closes
+    useEffect(() => {
+        if (!isOpen) {
+            previousUserIdRef.current = null;
+        }
+    }, [isOpen]);
 
     // Validate name match
     useEffect(() => {
@@ -89,6 +126,11 @@ const KYCDocumentUploadPage = ({
     }, [taxPayerName, clearedUserName]);
 
     const checkExistingDocuments = async () => {
+        // Guard: Ensure we have a valid user ID
+        if (!user?.id) {
+            return;
+        }
+
         try {
             // Check KRA PIN document
             const kraResponse = await fetch(
@@ -159,9 +201,15 @@ const KYCDocumentUploadPage = ({
     const uploadFile = async (endpoint, file, docType) => {
         if (!file) return;
 
+        // Guard: Ensure we have a valid user ID
+        if (!user?.id) {
+            showToast('No user selected. Please select a user first.', 'error');
+            return;
+        }
+
         const formData = new FormData();
         formData.append('file', file);
-        formData.append('agent_id', user?.id || '');
+        formData.append('agent_id', user.id);
         setLoading(true);
 
         try {
@@ -204,6 +252,18 @@ const KYCDocumentUploadPage = ({
                         ...prev,
                         nameMatch: 'The ID number does not match police clearance form details'
                     }));
+
+                    // Delete the uploaded document since validation failed
+                    if (result.documentId) {
+                        try {
+                            await fetch(`${config.API_URL}/document/delete/${result.documentId}`, {
+                                method: 'DELETE'
+                            });
+                        } catch (deleteErr) {
+                            console.error('Failed to delete invalid document:', deleteErr);
+                        }
+                    }
+
                     resetPoliceClearance();
                     return;
                 }

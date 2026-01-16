@@ -76,14 +76,21 @@ def extract_kra_pin():
             doc_type='kra_pin',
             extract_func=extract_taxpayer_details
         )
-        
+
+        # Get the newly created document ID
+        new_doc = AgentDocuments.query.filter_by(
+            agent_id=agent_id,
+            doc_type='kra_pin'
+        ).order_by(AgentDocuments.uploaded_at.desc()).first()
+
         return jsonify({
             "kraPin": result.get("PIN", ""),
             "taxPayerName": result.get("Taxpayer Name", ""),
             "email": result.get("Email Address", ""),
-            "gcp_url": result.get("gcp_url", "")
+            "gcp_url": result.get("gcp_url", ""),
+            "documentId": new_doc.id if new_doc else None
         }), 200
-        
+
     except Exception as e:
         print(f"KRA PIN extraction error: {str(e)}")
         return jsonify({"error": str(e)}), 400
@@ -206,14 +213,21 @@ def extract_police_clearance():
             doc_type='police_clearance',
             extract_func=extract_clearance_details
         )
-        
+
+        # Get the newly created document ID
+        new_doc = AgentDocuments.query.filter_by(
+            agent_id=agent_id,
+            doc_type='police_clearance'
+        ).order_by(AgentDocuments.uploaded_at.desc()).first()
+
         return jsonify({
             "refNo": result.get("Reference Number", ""),
             "idNo": result.get("ID Number", ""),
             "name": result.get("Name", ""),
-            "gcp_url": result.get("gcp_url", "")
+            "gcp_url": result.get("gcp_url", ""),
+            "documentId": new_doc.id if new_doc else None
         }), 200
-        
+
     except Exception as e:
         print(f"Police clearance extraction error: {str(e)}")
         return jsonify({"error": str(e)}), 400

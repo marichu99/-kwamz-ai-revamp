@@ -10,8 +10,12 @@ services:
     environment:
       - FLASK_ENV=production
       - DATABASE_URL=postgresql://postgres:postgres@db:5432/mpesaglobal
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/0
     depends_on:
       db:
+        condition: service_healthy
+      redis:
         condition: service_healthy
     networks:
       - app-network
@@ -45,8 +49,89 @@ services:
       timeout: 5s
       retries: 5
 
+  # Redis - Message broker for Celery
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    networks:
+      - app-network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # Celery Worker - Fraud Detection
+  celery-worker:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile.celery
+    env_file:
+      - ./backend/.env
+    environment:
+      - FLASK_ENV=production
+      - DATABASE_URL=postgresql://postgres:postgres@db:5432/mpesaglobal
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/0
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - app-network
+    restart: unless-stopped
+
+  # Celery Beat - Scheduler for periodic tasks
+  celery-beat:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile.celery
+    command: celery -A worker:celery beat -l info
+    env_file:
+      - ./backend/.env
+    environment:
+      - FLASK_ENV=production
+      - DATABASE_URL=postgresql://postgres:postgres@db:5432/mpesaglobal
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/0
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - app-network
+    restart: unless-stopped
+
+  # Flower - Celery monitoring dashboard (optional)
+  flower:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile.celery
+    command: celery -A worker:celery flower --port=5555
+    ports:
+      - "5555:5555"
+    env_file:
+      - ./backend/.env
+    environment:
+      - FLASK_ENV=production
+      - DATABASE_URL=postgresql://postgres:postgres@db:5432/mpesaglobal
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/0
+    depends_on:
+      - redis
+      - celery-worker
+    networks:
+      - app-network
+    restart: unless-stopped
+
 volumes:
   postgres_data:
+  redis_data:
 
 networks:
   app-network:

@@ -1,3 +1,4 @@
+from typing import List
 from app.model.company import Company
 from app.model.shareholder import Shareholder
 from app.model.director import Director
@@ -67,6 +68,12 @@ class CompanyService:
             print(f"Error retrieving companies: {str(e)}")
             return None, str(e)
     
+    def get_companies_by_user_id(self, user_id:int) ->List[Company]:
+        try:
+            return Company.query.filter_by(user_id=user_id).all()
+        except Exception as e:
+            print(f"The error on fetching companies is {str(e)}")
+            return []
     def get_companies_by_userid(self,user_id):
         """Retrieve all companies."""
         try:

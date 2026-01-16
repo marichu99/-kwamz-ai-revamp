@@ -1,0 +1,46 @@
+# Dockerfile.celery - Lightweight Celery worker for fraud detection
+FROM python:3.11-slim-bullseye
+
+# Set working directory
+WORKDIR /app
+
+# Install system dependencies (minimal - no Playwright needed for worker)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    gcc \
+    g++ \
+    libpq-dev \
+    && rm -rf /var/lib/apt/lists/* \
+    && apt-get clean
+
+# Copy requirements first for better caching
+COPY requirements.txt .
+
+# Install Python dependencies
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Copy ONLY what Celery needs (not the entire app)
+# Worker entry point
+COPY worker.py .
+
+# App package - copy all necessary modules
+# Due to tight coupling in create_app(), most app modules are required
+COPY app/ app/
+
+# Create a non-root user for security
+RUN useradd -m -u 1000 celeryuser && chown -R celeryuser:celeryuser /app
+
+# Switch to non-root user
+USER celeryuser
+
+# Set environment variables
+ENV FLASK_APP=run.py
+ENV FLASK_ENV=production
+ENV C_FORCE_ROOT=false
+ENV PYTHONUNBUFFERED=1
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
+    CMD celery -A worker:celery inspect ping -d celery@$HOSTNAME || exit 1
+
+# Default command - run celery worker for fraud_detection queue
+CMD ["celery", "-A", "worker:celery", "worker", "-Q", "fraud_detection", "-l", "info", "--concurrency=4"]

@@ -1,0 +1,81 @@
+version: '3.8'
+
+services:
+  # Redis - Message broker for Celery
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # Celery Worker - Fraud Detection
+  celery-worker:
+    build:
+      context: .
+      dockerfile: Dockerfile.celery
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    env_file:
+      - .env
+    environment:
+      - FLASK_ENV=production
+      # Use host.docker.internal to connect to host's PostgreSQL (override .env values)
+      - DATABASE_URL=postgresql://postgres:postgres@host.docker.internal:5432/mpesaglobal
+      # Individual DB vars for connection_pool.py (explicit values for Docker)
+      - DB_HOST=host.docker.internal
+      - DB_PORT=5432
+      - DB_NAME=mpesaglobal
+      - DB_USER=postgres
+      - DB_PASSWORD=postgres
+      - DB_SSLMODE=prefer
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/0
+      - GOOGLE_APPLICATION_CREDENTIALS=/app/credentials/service_account.json
+    volumes:
+      - ./service_account.json:/app/credentials/service_account.json:ro
+    depends_on:
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # Celery Beat - Scheduler for periodic tasks (optional)
+  celery-beat:
+    build:
+      context: .
+      dockerfile: Dockerfile.celery
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    command: celery -A worker:celery beat -l info
+    env_file:
+      - .env
+    environment:
+      - FLASK_ENV=production
+      # Use host.docker.internal to connect to host's PostgreSQL (override .env values)
+      - DATABASE_URL=postgresql://postgres:postgres@host.docker.internal:5432/mpesaglobal
+      # Individual DB vars for connection_pool.py (explicit values for Docker)
+      - DB_HOST=host.docker.internal
+      - DB_PORT=5432
+      - DB_NAME=mpesaglobal
+      - DB_USER=postgres
+      - DB_PASSWORD=postgres
+      - DB_SSLMODE=prefer
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/0
+      - GOOGLE_APPLICATION_CREDENTIALS=/app/credentials/service_account.json
+    volumes:
+      - ./service_account.json:/app/credentials/service_account.json:ro
+    depends_on:
+      redis:
+        condition: service_healthy
+      celery-worker:
+        condition: service_started
+    restart: unless-stopped
+
+volumes:
+  redis_data:

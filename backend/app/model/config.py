@@ -20,13 +20,23 @@ class Config(db.Model):
     time_window_minutes = db.Column(db.Integer, default=5)
     amount_variance = db.Column(db.Float, default=0.1)
     min_transactions_rollover = db.Column(db.Integer, default=3)
-    split_threshold = db.Column(db.Integer, default=2)
+    split_threshold = db.Column(db.Integer, default=5)  # Min number of transactions to flag as split
     rapid_back_forth_threshold = db.Column(db.Integer, default=2)
+
+    # Split Transaction Thresholds
+    split_min_amount = db.Column(db.Float, default=100.0)  # Min amount per transaction to consider (e.g., 100 KES)
+    split_max_amount = db.Column(db.Float, default=50000.0)  # Max amount per transaction to consider (e.g., 50000 KES)
+    split_total_amount_threshold = db.Column(db.Float, default=10000.0)  # Total amount threshold that triggers suspicion
     
     # Risk Thresholds Group
     high_risk_score = db.Column(db.Integer, default=50)
     medium_risk_score = db.Column(db.Integer, default=30)
-    
+
+    # Periodic Check Settings (configurable time intervals for fraud detection)
+    periodic_check_interval_minutes = db.Column(db.Integer, default=30)  # How often to run periodic fraud checks and send notifications (in minutes)
+    analysis_period_days = db.Column(db.Integer, default=30)  # Days to analyze for historical reports
+    max_transactions_per_check = db.Column(db.Integer, default=100)  # Max transactions per shortcode check
+
     # Notification Settings Group
     email_enabled = db.Column(db.Boolean, default=False)
     notify_high_risk = db.Column(db.Boolean, default=True)
@@ -69,11 +79,21 @@ class Config(db.Model):
             'min_transactions_rollover': self.min_transactions_rollover,
             'split_threshold': self.split_threshold,
             'rapid_back_forth_threshold': self.rapid_back_forth_threshold,
+
+            # Split Transaction Thresholds
+            'split_min_amount': self.split_min_amount,
+            'split_max_amount': self.split_max_amount,
+            'split_total_amount_threshold': self.split_total_amount_threshold,
             
             # Risk Thresholds
             'high_risk_score': self.high_risk_score,
             'medium_risk_score': self.medium_risk_score,
-            
+
+            # Periodic Check Settings
+            'periodic_check_interval_minutes': self.periodic_check_interval_minutes,
+            'analysis_period_days': self.analysis_period_days,
+            'max_transactions_per_check': self.max_transactions_per_check,
+
             # Notification Settings
             'email_enabled': self.email_enabled,
             'notify_high_risk': self.notify_high_risk,

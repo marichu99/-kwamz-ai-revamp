@@ -2,6 +2,7 @@ from playwright.sync_api import sync_playwright,Page,Locator,Download, TimeoutEr
 from flask import current_app
 from app.utils.script import fill_login_form, capture_and_solve_captcha
 from app.utils.email_utils import generate_scraping_report_email, send_scraping_report_email,send_session_timeout_email,send_not_active_short_code_
+from app.tasks.fraud_detection_tasks import run_fraud_detection_for_user
 from app.service.transaction_service import TransactionService
 from app.service.agentcompany_service import AgentCompanyService
 from app.service.email_outbox_service import EmailOutboxService
@@ -1477,41 +1478,41 @@ def select_account_dropdown(page: Page, account_name: str, arrow_down_count: int
         return False
 
 def process_float_account_details(page: Page, business_short_code: int, mapped_data: Optional[dict], pass_value: str) -> tuple:
-    # try:
-    print("[INFO] Processing Float Account Details")
+    try:
+        print("[INFO] Processing Float Account Details")
 
-    # Step 1: Select Float Account (usually 2nd or 3rd option)
-    if not select_account_dropdown(page, "Float Account", arrow_down_count=2):
-        return "dropdown",False
-    
-    extract_extra_till_info(page, mapped_data)
-    
-    print("We are checking whether a till is frozen or not")        
-    if is_till_frozen(page):
-        send_alert_on_non_active_(user.email,
-                                    mapped_data.get("company_name","-"),
-                                    business_short_code=business_short_code,
-                                    status="FROZEN")
-        # return "frozen",False
+        # Step 1: Select Float Account (usually 2nd or 3rd option)
+        if not select_account_dropdown(page, "Float Account", arrow_down_count=2):
+            return "dropdown",False
+        
+        extract_extra_till_info(page, mapped_data)
+        
+        print("We are checking whether a till is frozen or not")        
+        if is_till_frozen(page):
+            send_alert_on_non_active_(user.email,
+                                        mapped_data.get("company_name","-"),
+                                        business_short_code=business_short_code,
+                                        status="FROZEN")
+            # return "frozen",False
 
-    print(f"This is the date and time selection")
-    
-    time.sleep(1)  # Wait for table to load
+        print(f"This is the date and time selection")
+        
+        time.sleep(1)  # Wait for table to load
 
-    print("We are trying to save to the dataframe")
-    
-    df,success_value = scrape_180_days_monthly(page,business_short_code=business_short_code,pass_value=pass_value,additional_category="float")
-    if df is not None or success_value:
-        print("[SUCCESS] Float table extracted")
-        return "dataframe",True
-    else:
-        print("[ERROR] Failed to extract float table")
-        return "dataframe",False
+        print("We are trying to save to the dataframe")
+        
+        df,success_value = scrape_180_days_monthly(page,business_short_code=business_short_code,pass_value=pass_value,additional_category="float")
+        if df is not None or success_value:
+            print("[SUCCESS] Float table extracted")
+            return "dataframe",True
+        else:
+            print("[ERROR] Failed to extract float table")
+            return "dataframe",False
 
-    # except Exception as e:
-    #     print(f"[ERROR] process_float_account_details failed: {e}")
-    #     page.screenshot(path="float_error.png")
-    #     return False
+    except Exception as e:
+        print(f"[ERROR] process_float_account_details failed: {e}")
+        page.screenshot(path="float_error.png")
+        return False
 
 def click_search_button(page: Page) -> bool:
     try:
@@ -1720,61 +1721,146 @@ def select_dates_and_submit_monthly(page: Page, month_offset: int = 0) -> bool:
         traceback.print_exc()
         return False
 
-def _get_total_months_by_shortcode_shortfall(business_shortcode:str,till_scraping_shortfall: Dict) -> tuple:
+def _get_total_months_by_shortcode_shortfall(business_shortcode: str, till_scraping_shortfall: Dict, transaction_type: str = None) -> tuple:
     """
-    Calculate the number of months to scrape based on shortfall
+    Calculate the number of months to scrape based on shortfall.
+
+    Args:
+        business_shortcode: The business shortcode to check
+        till_scraping_shortfall: Dict with scraping data, can be:
+            - Simple format: {shortcode: [days, receipt_no]}
+            - Nested format: {shortcode: {'float': [days, receipt_no], 'commission': [days, receipt_no]}}
+        transaction_type: Optional - 'float' or 'commission' for specific type lookup
+
+    Returns:
+        tuple: (number_of_months, days_since_last_scrape)
     """
     if not till_scraping_shortfall:
-        return 6,180
-    
-    if business_shortcode not in  till_scraping_shortfall.keys():
-        return 6,180
-    
-    # Get the maximum number of days since last scrape
-    days = float(till_scraping_shortfall[business_shortcode][0])
+        return 6, 180
 
-    return np.ceil(days/30).astype(int), days
+    if business_shortcode not in till_scraping_shortfall.keys():
+        return 6, 180
+
+    shortcode_data = till_scraping_shortfall[business_shortcode]
+
+    # Check if it's nested format (dict) or simple format (list)
+    if isinstance(shortcode_data, dict):
+        # Nested format: {'float': [days, receipt_no], 'commission': [days, receipt_no]}
+        if transaction_type and transaction_type in shortcode_data:
+            days = float(shortcode_data[transaction_type][0])
+        else:
+            # If no transaction_type specified or not found, get the max days from all types
+            days_list = [float(v[0]) for v in shortcode_data.values() if isinstance(v, list)]
+            days = max(days_list) if days_list else 180
+    else:
+        # Simple format: [days, receipt_no]
+        days = float(shortcode_data[0])
+
+    return np.ceil(days / 30).astype(int), days
+
+
+def get_days_for_transaction_type(business_shortcode: str, till_scraping_shortfall: Dict, transaction_type: str) -> int:
+    """
+    Get the number of days since last scrape for a specific transaction type.
+
+    Args:
+        business_shortcode: The business shortcode to check
+        till_scraping_shortfall: Dict with scraping data (nested format expected)
+        transaction_type: 'float' or 'commission'
+
+    Returns:
+        int: Days since last scrape for the specified type, or 180 if not found
+    """
+    if not till_scraping_shortfall:
+        return 180
+
+    if business_shortcode not in till_scraping_shortfall:
+        return 180
+
+    shortcode_data = till_scraping_shortfall[business_shortcode]
+
+    if isinstance(shortcode_data, dict):
+        if transaction_type in shortcode_data:
+            return int(shortcode_data[transaction_type][0])
+        else:
+            # Transaction type not found - never scraped for this type
+            return 180
+    else:
+        # Simple format - return the days
+        return int(shortcode_data[0])
 
 # Main function to scrape 180 days month by month
 def scrape_180_days_monthly(page:Page, business_short_code:int=0, pass_value:str="",additional_category=None) -> tuple:
     """
-    Scrape data for the last 180 days, divided into 6 monthly chunks
+    Scrape data for the last 180 days, divided into 6 monthly chunks.
+
+    Args:
+        page: Playwright page object
+        business_short_code: The business shortcode to scrape
+        pass_value: 'first' for float transactions, 'second' for commission transactions
+        additional_category: Transaction type - 'float' or 'commission'
+
+    The scraping strategy is determined by the number of days since last scrape for
+    the specific transaction type:
+        - days <= 2: Use save_table_to_dataframe_latest_ (gets just latest transactions)
+        - days > 2: Use save_table_to_dataframe_download (downloads more historical data)
     """
     all_data = []
-    
+
     success_value_ : bool = False
-            
-    # 180 days divided into 6 chunks of 30 days each
-    # if pass value is second, we need to refresh the till_scraping_shortfall
-    total_months,days = None,None
-    if(pass_value == "second"):
+
+    # Determine transaction_type from additional_category or pass_value
+    transaction_type = additional_category
+    if not transaction_type:
+        transaction_type = 'float' if pass_value == 'first' else 'commission'
+
+    # Get scraping shortfall data - now with transaction_type awareness
+    total_months, days = None, None
+    if pass_value == "second":
+        # For commission (second pass), get fresh data with transaction_type filter
         till_scraping_shortfall_ = transaction_service.get_last_scraped_per_shortcode()
-        total_months,days = _get_total_months_by_shortcode_shortfall(str(business_short_code),till_scraping_shortfall_)
+        # Get days specifically for the transaction type being scraped
+        days = get_days_for_transaction_type(str(business_short_code), till_scraping_shortfall_, transaction_type)
+        total_months = np.ceil(days / 30).astype(int) if days > 0 else 1
     else:
-        total_months,days = _get_total_months_by_shortcode_shortfall(str(business_short_code),till_scraping_shortfall)
-    print(f"The pass value is {pass_value} and the days spent are {days}")
-    if(days <=2 and pass_value =="first"):
-        return pd.DataFrame(),True
-    elif days <=2 and pass_value == "second":
+        # For float (first pass)
+        total_months, days = _get_total_months_by_shortcode_shortfall(
+            str(business_short_code),
+            till_scraping_shortfall,
+            transaction_type=transaction_type
+        )
+
+    print(f"[INFO] Transaction type: {transaction_type}, Pass value: {pass_value}, Days since last scrape: {days}")
+
+    # Determine scraping strategy based on days since last scrape
+    if days <= 2 and pass_value == "first":
+        print(f"[INFO] Float transactions recently scraped ({days} days ago). Skipping.")
+        return pd.DataFrame(), True
+    elif days <= 2 and pass_value == "second":
+        # Commission was recently scraped - just get latest
+        print(f"[INFO] Commission transactions recently scraped ({days} days ago). Getting latest only.")
         df, success_value = save_table_to_dataframe_latest_(
-                    page,
-                    business_shortcode=business_short_code,
-                    pass_value=pass_value,
-                    additional_category=additional_category
-                )
-        return df,success_value
+            page,
+            business_shortcode=business_short_code,
+            pass_value=pass_value,
+            additional_category=additional_category
+        )
+        return df, success_value
+    # For both float (first) and commission (second) with days > 2, proceed to monthly scraping
+    print(f"[INFO] Will scrape {total_months} month(s) of {transaction_type} data.")
+
     for month_offset in range(total_months):
         close_irritative_dialog_box(page)
         print(f"\n{'='*60}")
-        print(f"Scraping month chunk {month_offset+1}/{total_months}")
+        print(f"Scraping {transaction_type} - month chunk {month_offset+1}/{total_months}")
         print('='*60)
-        
+
         # Method 1: 30-day chunks
         success = select_dates_and_submit_monthly(page, month_offset=month_offset)
-        
+
         # Method 2: Exact month boundaries (uncomment if preferred)
         # success = select_exact_month_back(page, months_back=month_offset)
-        
+
         if not success:
             close_irritative_dialog_box(page)
             time.sleep(1)
@@ -1784,22 +1870,24 @@ def scrape_180_days_monthly(page:Page, business_short_code:int=0, pass_value:str
                 close_irritative_dialog_box(page)
                 print(f"[ERROR] Failed to select dates for month offset {month_offset}")
                 break
-        
+
         # Wait for table to load
         time.sleep(1)
-        
-        print("Saving data for this period to dataframe...")
-        
+
+        print(f"Saving {transaction_type} data for this period to dataframe...")
+
         # Get data for this period
         try:
-            if pass_value == "first":
-                if not does_transaction_exist_for_period_(page=page):
-                    continue
-                df, success_value = save_table_to_dataframe_download(
-                    page, 
-                    business_shortcode=business_short_code,
-                    additional_category=additional_category
-                )
+            if not does_transaction_exist_for_period_(page=page):
+                print(f"[INFO] No {transaction_type} transactions found for this period. Skipping.")
+                continue
+
+            # Use download method for both float and commission when days > 2
+            df, success_value = save_table_to_dataframe_download(
+                page,
+                business_shortcode=business_short_code,
+                additional_category=additional_category
+            )
             
             if len(df) > 0:
                 # Add period information
@@ -2152,6 +2240,14 @@ def process_organization_rows(page: Page) -> None:
         if total_in_list == 0:
             print("[INFO] No organizations found.")
             break
+
+        # Try to queue fraud detection task, but don't fail if Redis/Celery is unavailable
+        try:
+            task = run_fraud_detection_for_user.delay(user_id)
+            print(f"[INFO] Fraud detection task queued: {task.id}")
+        except Exception as celery_err:
+            print(f"[WARNING] Could not queue fraud detection task (Redis/Celery may be unavailable): {celery_err}")
+            # Continue with the main flow even if Celery task queueing fails
 
         processed_on_this_page = process_page_rows(
             page=page,

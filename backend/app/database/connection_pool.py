@@ -1,5 +1,6 @@
 # database/connection_pool.py
 import psycopg2
+import psycopg2.extras
 from psycopg2.pool import ThreadedConnectionPool
 from contextlib import contextmanager
 import os
@@ -30,17 +31,43 @@ class DatabasePool:
                     self._initialize_pool()
                     self._initialized = True
     
+    def _parse_database_url(self, url: str) -> dict:
+        """Parse DATABASE_URL into connection parameters."""
+        from urllib.parse import urlparse
+        parsed = urlparse(url)
+        return {
+            'host': parsed.hostname or 'localhost',
+            'port': str(parsed.port or 5432),
+            'database': parsed.path.lstrip('/') or 'mpesaglobal',
+            'user': parsed.username or 'postgres',
+            'password': parsed.password or 'postgres',
+        }
+
     def _initialize_pool(self):
         """Initialize the connection pool"""
         try:
-            config = {
-                'host': os.getenv('DB_HOST', 'localhost'),
-                'port': os.getenv('DB_PORT', '5432'),
-                'database': os.getenv('DB_NAME', 'your_database'),
-                'user': os.getenv('DB_USER', 'your_user'),
-                'password': os.getenv('DB_PASSWORD', 'your_password'),
-                'sslmode': os.getenv('DB_SSLMODE', 'prefer'),
-            }
+            # Support both DATABASE_URL and individual DB_* environment variables
+            database_url = os.getenv('DATABASE_URL')
+            if database_url:
+                logger.info("Using DATABASE_URL for connection")
+                url_config = self._parse_database_url(database_url)
+                config = {
+                    'host': url_config['host'],
+                    'port': url_config['port'],
+                    'database': url_config['database'],
+                    'user': url_config['user'],
+                    'password': url_config['password'],
+                    'sslmode': os.getenv('DB_SSLMODE', 'prefer'),
+                }
+            else:
+                config = {
+                    'host': os.getenv('DB_HOST', 'localhost'),
+                    'port': os.getenv('DB_PORT', '5432'),
+                    'database': os.getenv('DB_NAME', 'your_database'),
+                    'user': os.getenv('DB_USER', 'your_user'),
+                    'password': os.getenv('DB_PASSWORD', 'your_password'),
+                    'sslmode': os.getenv('DB_SSLMODE', 'prefer'),
+                }
             
             self._min_conn = int(os.getenv('DB_MIN_CONNECTIONS', '1'))
             self._max_conn = int(os.getenv('DB_MAX_CONNECTIONS', '10'))

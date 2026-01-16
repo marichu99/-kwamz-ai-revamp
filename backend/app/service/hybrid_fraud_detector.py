@@ -28,7 +28,7 @@ class HybridFraudDetection:
         logger.info("Fetching shortcodes...")
         shortcodes = await loop.run_in_executor(
             executor, 
-            transaction_service.get_all_shortcodes_in_txn_tbl
+            transaction_service.get_all_shortcodes_in_txn_tbl(user=user)
         )
         
         logger.info(f"Found {len(shortcodes)} shortcodes")

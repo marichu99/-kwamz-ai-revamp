@@ -188,6 +188,14 @@ class TransactionService:
         except (InvalidOperation, ValueError, TypeError) as e:
             raise ValueError(f"Unable to parse decimal value: '{value}' (cleaned: '{cleaned if 'cleaned' in locals() else 'N/A'}')") from e
     
+    def _parse_decimal_to_float(self, value: Optional[Decimal]) -> Optional[float]:
+        """Convert Decimal to float safely for JSON serialization."""
+        return float(value) if value is not None else None
+
+    def _parse_date_to_string(self, value: Optional[datetime]) -> Optional[str]:
+        """Convert datetime to ISO string for safe JSON/API return."""
+        return value.isoformat() if value else None
+    
     def _parse_date(self, date_string):
         """Parse date string to datetime object, handling multiple formats"""
         if not date_string:
@@ -385,15 +393,15 @@ class TransactionService:
                 
                 # Add commission-specific fields for commission transactions
                 if transaction_type == 'commission':
-                    # Extract commission amount from paid_in or withdrawn
-                    commission_rate = self._parse_decimal(trans_data.get('commission_rate', '0.25'))
-                    # we should not be hard coding the rate here ......
-                    commission_amount = self._parse_decimal(trans_data.get('commission_amount'))*commission_rate
-                    if commission_amount is None:
-                        # Use paid_in or withdrawn to calculate commission
-                        amount = self._parse_decimal(trans_data.get('paid_in')) or self._parse_decimal(trans_data.get('withdrawn'))
-                        commission_amount = amount * commission_rate if amount else Decimal('0')
-                    
+                    # Get commission rate, default to 0.25 if not provided or is 0
+                    commission_rate = self._parse_decimal(trans_data.get('commission_rate', '0'))
+                    if commission_rate is None or commission_rate == Decimal('0'):
+                        commission_rate = Decimal('0.25')
+
+                    # Calculate commission_amount = paid_in * commission_rate
+                    paid_in_amount = self._parse_decimal(trans_data.get('paid_in')) or Decimal('0')
+                    commission_amount = paid_in_amount * commission_rate
+
                     transaction_data.update({
                         'commission_rate': commission_rate,
                         'commission_amount': commission_amount,
@@ -591,10 +599,18 @@ class TransactionService:
                 }
                 
                 if transaction_type == 'commission':
+                    # Get commission rate, default to 0.25 if not provided or is 0
+                    commission_rate = self._parse_decimal(row.get('commission_rate', '0'))
+                    if commission_rate is None or commission_rate == Decimal('0'):
+                        commission_rate = Decimal('0.25')
+
+                    # Calculate commission_amount = paid_in * commission_rate
+                    paid_in_amount = self._parse_decimal(row.get('paid_in')) or Decimal('0')
+                    commission_amount = paid_in_amount * commission_rate
+
                     transaction_data.update({
-                        'commission_rate': self._parse_decimal(row.get('commission_rate', '0.25')),
-                        'commission_amount': self._parse_decimal(row.get('commission_amount', 
-                                                                       row.get('paid_in', row.get('withdrawn'))))*0.25,
+                        'commission_rate': commission_rate,
+                        'commission_amount': commission_amount,
                         'parent_transaction_id': row.get('parent_transaction_id')
                     })
                 
@@ -1167,37 +1183,513 @@ class TransactionService:
                 "error": f"Failed to get transaction statistics: {str(e)}"
             }
     
-    def get_last_scraped_per_shortcode(self) -> Dict[str,int]:
-        """Get the last scraped transaction ID per business shortcode"""
+    def get_last_scraped_per_shortcode(self, transaction_type: str = None) -> Dict[str, int]:
+        """
+        Get the last scraped transaction info per business shortcode.
+
+        Args:
+            transaction_type: Optional - 'float', 'commission', or None for all types with breakdown
+
+        Returns:
+            If transaction_type specified: {shortcode: [days, receipt_no]}
+            If transaction_type is None: {shortcode: {'float': [days, receipt_no], 'commission': [days, receipt_no]}}
+        """
         try:
-            print(f"We are trying to get the last scraped dictionary ")
+            print(f"Getting last scraped dictionary for transaction_type: {transaction_type or 'all'}")
             with db_pool.get_cursor() as cursor:
-                return self._get_last_scraped_per_till(cursor)
-            
+                return self._get_last_scraped_per_till(cursor, transaction_type=transaction_type)
+
         except Exception as e:
             logger.error(f"Error getting last scraped per shortcode: {str(e)}", exc_info=True)
             return {}
         
-    def get_all_shortcodes_in_txn_tbl(self) -> List[str]:
+    # In app/services/transaction_service.py
+    def run_fraud_detection_for_user_sync(self, user_id: int) -> Dict:
+        """
+        Synchronous version of fraud detection.
+        Use this until async issues are resolved.
+        """
+        logger.info(f"Starting SYNC fraud detection for user_id: {user_id}")
+        
+        # Get user
+        user = User.query.get(user_id)
+        if not user:
+            logger.error(f"User {user_id} not found")
+            return {'status': 'error', 'message': 'User not found'}
+        
+        # Initialize fraud detection service
+        fraud_service = FraudDetectionService(user=user)
+        
+        try:
+            # Step 1: Historical analysis (first run only)
+            historical_report, all_transactions = self._run_historical_analysis_sync(fraud_service, user)
+
+            # Step 2: Recent transactions check
+            recent_detections = self._check_recent_transactions_sync(user, fraud_service)
+
+            # Step 3: Send summary to user with transactions for agent info
+            self._send_detection_summary_sync(user, historical_report, recent_detections, transactions=all_transactions)
+
+            logger.info(f"Completed fraud detection for user: {user.email}")
+            
+            return {
+                'status': 'success',
+                'user_id': user_id,
+                'user_email': user.email,
+                'historical_patterns': len(historical_report.get('detections', [])),
+                'recent_detections': len(recent_detections),
+                'timestamp': datetime.now().isoformat()
+            }
+        except Exception as e:
+            logger.error(f"Error in fraud detection: {str(e)}", exc_info=True)
+            return {'status': 'error', 'message': str(e)}
+
+    def _run_historical_analysis_sync(self, fraud_service, user):
+        """Synchronous historical analysis. Returns (result, transactions)."""
+        logger.info(f"Running historical analysis for {user.email}")
+
+        # Check if user has already received historical report
+        report_count = FraudReportHistory.query.filter_by(user_id=user.id).count()
+
+        if report_count > 0:
+            logger.info(f"User {user.email} already received historical report")
+            return {'summary': {}, 'detections': []}, []
+
+        # Get all shortcodes
+        shortcodes = self.get_all_shortcodes_in_txn_tbl(user)
+        all_transactions = []
+
+        # Fetch historical transactions
+        for shortcode in shortcodes:
+            transactions = self.get_recent_transactions_for_shortcode_sync(
+                shortcode,
+                user.id,
+                days=30,
+                limit=100
+            )
+            all_transactions.extend(transactions)
+
+        if all_transactions:
+            # Run detection
+            result = fraud_service.run_detection(all_transactions)
+
+            # Send historical report email with transactions and detections
+            fraud_service.send_historical_report(
+                result['summary'],
+                transactions=all_transactions,
+                detections=result.get('detections', [])
+            )
+
+            # Record in database
+            self._record_report_history_sync(user, result['summary'])
+
+            return result, all_transactions
+
+        return {'summary': {}, 'detections': []}, []
+
+    def _send_detection_summary_sync(self, user, historical_report, recent_detections, transactions=None):
+        """
+        Send lightweight detection summary synchronously.
+        Simple plain-text format to prevent CPU exhaustion.
+        Includes: receipt numbers, amounts, times, parties, and fraud explanations.
+        """
+        from app.utils.email_utils import _send_email
+        from datetime import datetime
+
+        now = datetime.now()
+
+        # Count detections by risk level
+        high_risk_count = sum(1 for d in recent_detections if d.get('risk_level') == 'HIGH')
+        medium_risk_count = sum(1 for d in recent_detections if d.get('risk_level') == 'MEDIUM')
+        low_risk_count = len(recent_detections) - high_risk_count - medium_risk_count
+
+        # Build lightweight plain-text report
+        lines = [
+            "=" * 60,
+            "PERIODIC FRAUD DETECTION ALERT",
+            "=" * 60,
+            f"Report Time: {now.strftime('%Y-%m-%d %H:%M:%S')}",
+            f"User: {user.email}",
+            "",
+            "-" * 60,
+            "SUMMARY",
+            "-" * 60,
+            f"High Risk Alerts:   {high_risk_count}",
+            f"Medium Risk Alerts: {medium_risk_count}",
+            f"Low Risk Alerts:    {low_risk_count}",
+            f"Total Detections:   {len(recent_detections)}",
+            "",
+        ]
+
+        # Add detection details with transaction info
+        if recent_detections:
+            lines.extend([
+                "-" * 60,
+                "FRAUDULENT TRANSACTIONS DETECTED",
+                "-" * 60,
+                ""
+            ])
+
+            for idx, detection in enumerate(recent_detections[:20], 1):  # Limit to 20
+                fraud_type = detection.get('fraud_type', 'Unknown').replace('_', ' ').upper()
+                risk_level = detection.get('risk_level', 'UNKNOWN')
+                account_phone = detection.get('account_phone', 'Unknown')
+                account_name = detection.get('account_name', 'Unknown')
+                total_amount = detection.get('total_amount', 0)
+                receipt_nos = detection.get('receipt_nos', [])
+                explanation = detection.get('explanation', 'No explanation available.')
+                business_shortcode = detection.get('business_shortcode', 'N/A')
+
+                lines.extend([
+                    f"[{idx}] {fraud_type} - {risk_level} RISK",
+                    f"    Account: {account_phone} ({account_name})",
+                    f"    Total Amount: KES {total_amount:,.2f}",
+                    f"    Business Shortcode: {business_shortcode}",
+                    f"    Receipt Numbers: {', '.join(receipt_nos[:5])}{'...' if len(receipt_nos) > 5 else ''}",
+                    ""
+                ])
+
+                # Add transaction details if available
+                txn_details = detection.get('transaction_details', [])
+                if txn_details:
+                    lines.append("    Transactions:")
+                    for txn in txn_details[:5]:  # Limit to 5 per detection
+                        lines.append(
+                            f"      - Receipt: {txn.get('receipt_no', 'N/A')} | "
+                            f"Amount: KES {txn.get('amount', 0):,.2f} | "
+                            f"Type: {txn.get('type', 'N/A')} | "
+                            f"Time: {txn.get('time', 'N/A')}"
+                        )
+                        if txn.get('party_name') or txn.get('party_phone'):
+                            lines.append(
+                                f"        Party: {txn.get('party_name', 'Unknown')} ({txn.get('party_phone', 'N/A')})"
+                            )
+                    if len(txn_details) > 5:
+                        lines.append(f"      ... and {len(txn_details) - 5} more transactions")
+                    lines.append("")
+
+                # Add agent/company info if available
+                agent_info = detection.get('agent_info', {})
+                agent_companies = agent_info.get('agent_companies', [])
+                user_agents = agent_info.get('user_agents', [])
+
+                if agent_companies or user_agents:
+                    lines.append("    RESPONSIBLE AGENT/COMPANY:")
+                    for ac in agent_companies[:3]:
+                        lines.append(f"      Company: {ac.get('company_name', 'N/A')}")
+                        lines.append(f"        - Shortcode: {ac.get('short_code', 'N/A')}")
+                        lines.append(f"        - Location: {ac.get('location', 'N/A')}")
+                        lines.append(f"        - Agent/Store #: {ac.get('agent_number', 'N/A')} / {ac.get('store_number', 'N/A')}")
+                        lines.append(f"        - Risk Level: {ac.get('fraud_risk_level', 'N/A').upper()}")
+
+                    if user_agents:
+                        lines.append("      Associated Personnel:")
+                        for ua in user_agents[:3]:
+                            verified = "✓ Verified" if ua.get('is_authentic') else "✗ Unverified"
+                            lines.append(f"        - {ua.get('name', 'N/A')} (ID: {ua.get('idnumber', 'N/A')}, {verified})")
+                            if ua.get('phone_number'):
+                                lines.append(f"          Phone: {ua.get('phone_number')}")
+
+                    lines.append("")
+
+                # Add explanation
+                lines.extend([
+                    "    REASON:",
+                    f"    {explanation}",
+                    "",
+                    "-" * 40,
+                    ""
+                ])
+
+            if len(recent_detections) > 20:
+                lines.append(f"... and {len(recent_detections) - 20} more detections not shown")
+                lines.append("")
+
+        # Add historical summary
+        historical_patterns = len(historical_report.get('detections', []))
+        if historical_patterns > 0:
+            lines.extend([
+                "-" * 60,
+                "HISTORICAL ANALYSIS",
+                "-" * 60,
+                f"Patterns Found: {historical_patterns}",
+                f"Split Transactions: {historical_report.get('summary', {}).get('split_transactions', 0)}",
+                f"Rollover Fraud: {historical_report.get('summary', {}).get('rollover_fraud', 0)}",
+                f"Rapid Patterns: {historical_report.get('summary', {}).get('rapid_patterns', 0)}",
+                ""
+            ])
+
+        # Add culpable agents section
+        culpable_data = historical_report.get('culpable_agents', {})
+        culpable_agents = culpable_data.get('culpable_agents', [])
+        if culpable_agents:
+            lines.extend([
+                "-" * 60,
+                "CULPABLE AGENTS ANALYSIS",
+                "-" * 60,
+                f"Total Agents Involved: {len(culpable_agents)}",
+                f"Total Amount at Risk: KES {culpable_data.get('total_fraud_amount', 0):,.2f}",
+                ""
+            ])
+
+            for idx, agent in enumerate(culpable_agents[:10], 1):  # Limit to 10 agents
+                lines.extend([
+                    f"[{idx}] {agent.get('company_name', 'Unknown Agent')}",
+                    f"    Shortcode: {agent.get('shortcode', 'N/A')}",
+                    f"    Agent/Store #: {agent.get('agent_number', 'N/A')} / {agent.get('store_number', 'N/A')}",
+                    f"    Location: {agent.get('location', 'N/A')}",
+                    f"    Contact: {agent.get('contact_phone', 'N/A')}",
+                    f"    Fraud Amount: KES {agent.get('total_fraud_amount', 0):,.2f}",
+                    f"    Risk Counts: HIGH={agent.get('high_risk_count', 0)}, MEDIUM={agent.get('medium_risk_count', 0)}, LOW={agent.get('low_risk_count', 0)}",
+                    f"    Fraud Types: {', '.join(agent.get('fraud_types', []))}",
+                ])
+
+                # Add associated personnel
+                user_agents = agent.get('user_agents', [])
+                if user_agents:
+                    lines.append("    Associated Personnel:")
+                    for ua in user_agents[:3]:  # Limit to 3
+                        verified = "Verified" if ua.get('is_verified') else "Unverified"
+                        lines.append(f"      - {ua.get('name', 'N/A')} (ID: {ua.get('id_number', 'N/A')}, {verified})")
+
+                lines.append("")
+
+            if len(culpable_agents) > 10:
+                lines.append(f"... and {len(culpable_agents) - 10} more agents with suspicious activity")
+                lines.append("")
+
+        # Footer
+        lines.extend([
+            "=" * 60,
+            "ACTION REQUIRED: Please review flagged transactions",
+            f"Report ID: PFR-{now.strftime('%Y%m%d%H%M%S')}-{user.id}",
+            "=" * 60,
+        ])
+
+        body = "\n".join(lines)
+
+        # Send email (plain text)
+        try:
+            _send_email(
+                subject=f"[FRAUD ALERT] Periodic Detection Report - {now.strftime('%Y-%m-%d %H:%M')}",
+                body=body,
+                recipient=user.email,
+                is_html=False  # Plain text for lightweight processing
+            )
+            logger.info(f"Sent lightweight fraud detection summary to {user.email}")
+        except Exception as e:
+            logger.error(f"Failed to send summary email: {str(e)}")
+
+    def _get_agent_companies_from_transactions(self, transactions):
+        """Get agent companies from transactions."""
+        from app.model.agentcompany import AgentCompany
+        agent_companies = []
+        seen_ids = set()
+
+        for txn in transactions:
+            agent_id = txn.get('agent_id')
+            shortcode = txn.get('business_shortcode')
+
+            if agent_id and agent_id not in seen_ids:
+                agent = AgentCompany.query.get(agent_id)
+                if agent:
+                    agent_companies.append(agent)
+                    seen_ids.add(agent_id)
+
+            if shortcode:
+                agent = AgentCompany.query.filter(
+                    db.or_(
+                        AgentCompany.short_code == shortcode,
+                        AgentCompany.business_short_code == shortcode
+                    )
+                ).first()
+                if agent and agent.id not in seen_ids:
+                    agent_companies.append(agent)
+                    seen_ids.add(agent.id)
+
+        return agent_companies
+
+    def _get_user_agents_from_agent_companies(self, agent_companies):
+        """Get user agents from agent companies."""
+        user_agents = []
+        seen_ids = set()
+
+        for agent_company in agent_companies:
+            for user_agent in agent_company.user_agents:
+                if user_agent.id not in seen_ids:
+                    user_agents.append(user_agent)
+                    seen_ids.add(user_agent.id)
+
+        return user_agents
+
+    def _format_agent_companies_for_email(self, agent_companies):
+        """Format agent companies for email HTML."""
+        if not agent_companies:
+            return '<p style="color: #757575; font-style: italic; font-size: 13px;">No agent companies identified.</p>'
+
+        html = ''
+        for agent in agent_companies[:5]:  # Limit to 5
+            risk_color = {'high': '#c62828', 'medium': '#e65100', 'low': '#2e7d32'}.get(
+                (agent.fraud_risk_level or 'low').lower(), '#757575')
+            risk_bg = {'high': '#ffcdd2', 'medium': '#fff3e0', 'low': '#e8f5e9'}.get(
+                (agent.fraud_risk_level or 'low').lower(), '#f5f5f5')
+
+            html += f'''
+            <div style="background-color: #ffffff; border: 1px solid #e0e0e0; border-radius: 6px; padding: 12px; margin-bottom: 10px;">
+                <table width="100%" cellpadding="0" cellspacing="0">
+                    <tr>
+                        <td>
+                            <strong style="color: #1a237e; font-size: 14px;">{agent.company_name or 'Unknown'}</strong>
+                            <span style="background-color: {risk_bg}; color: {risk_color}; padding: 2px 8px; border-radius: 10px; font-size: 10px; margin-left: 8px;">{agent.fraud_risk_level or 'Unknown'}</span>
+                        </td>
+                    </tr>
+                    <tr>
+                        <td style="padding-top: 6px; font-size: 12px; color: #616161;">
+                            📍 {agent.location or 'N/A'} | 📞 {agent.contact_phone or 'N/A'} | 🏷️ {agent.short_code or agent.business_short_code or 'N/A'}
+                        </td>
+                    </tr>
+                </table>
+            </div>
+            '''
+        if len(agent_companies) > 5:
+            html += f'<p style="color: #757575; font-size: 12px; text-align: center;">+{len(agent_companies) - 5} more companies</p>'
+        return html
+
+    def _format_user_agents_for_email(self, user_agents):
+        """Format user agents for email HTML."""
+        if not user_agents:
+            return '<p style="color: #757575; font-style: italic; font-size: 13px;">No user agents identified.</p>'
+
+        html = '<table width="100%" cellpadding="0" cellspacing="0" style="font-size: 12px; border: 1px solid #e0e0e0; border-radius: 6px; overflow: hidden;">'
+        html += '''
+            <tr style="background-color: #e8f5e9;">
+                <td style="padding: 10px 12px; font-weight: 600; color: #2e7d32;">Name</td>
+                <td style="padding: 10px 12px; font-weight: 600; color: #2e7d32;">ID Number</td>
+                <td style="padding: 10px 12px; font-weight: 600; color: #2e7d32;">Phone</td>
+                <td style="padding: 10px 12px; font-weight: 600; color: #2e7d32; text-align: center;">Status</td>
+            </tr>
+        '''
+        for i, agent in enumerate(user_agents[:5]):
+            bg = '#ffffff' if i % 2 == 0 else '#fafafa'
+            status = '<span style="color: #2e7d32;">✓</span>' if agent.is_authentic else '<span style="color: #c62828;">✗</span>'
+            html += f'''
+            <tr style="background-color: {bg};">
+                <td style="padding: 10px 12px; color: #424242;"><strong>{agent.firstname} {agent.lastname}</strong></td>
+                <td style="padding: 10px 12px; color: #616161; font-family: monospace;">{agent.idnumber}</td>
+                <td style="padding: 10px 12px; color: #616161;">{agent.phone_number or 'N/A'}</td>
+                <td style="padding: 10px 12px; text-align: center;">{status}</td>
+            </tr>
+            '''
+        html += '</table>'
+        if len(user_agents) > 5:
+            html += f'<p style="color: #757575; font-size: 12px; text-align: center; margin-top: 8px;">+{len(user_agents) - 5} more agents</p>'
+        return html
+
+    def _serialize_for_json(self, obj):
+        """Convert datetime and other non-serializable objects to JSON-safe format."""
+        if isinstance(obj, dict):
+            return {k: self._serialize_for_json(v) for k, v in obj.items()}
+        elif isinstance(obj, list):
+            return [self._serialize_for_json(item) for item in obj]
+        elif isinstance(obj, tuple):
+            return [self._serialize_for_json(item) for item in obj]
+        elif isinstance(obj, datetime):
+            return obj.isoformat()
+        elif isinstance(obj, Decimal):
+            return float(obj)
+        elif hasattr(obj, '__dict__'):
+            return str(obj)
+        return obj
+
+    def _record_report_history_sync(self, user, report_summary):
+        """Record report history synchronously."""
+        try:
+            # Serialize report_summary to handle datetime objects
+            serialized_report = self._serialize_for_json(report_summary)
+
+            history = FraudReportHistory(
+                user_id=user.id,
+                analysis_period_days=30,
+                total_transactions=report_summary.get('total_transactions_analyzed', 0),
+                suspicious_patterns=report_summary.get('suspicious_patterns_found', 0),
+                accounts_flagged=report_summary.get('accounts_flagged', 0),
+                report_data=serialized_report
+            )
+
+            db.session.add(history)
+            db.session.commit()
+
+            logger.info(f"Recorded fraud report history for user {user.email}")
+
+        except Exception as e:
+            db.session.rollback()
+            logger.error(f"Failed to record report history: {str(e)}")
+        
+    def get_all_shortcodes_in_txn_tbl(self, user:User) -> List[str]:
         """Get all shortcodes that have been registered in the transactions table."""
         try:
-            with db_pool.get_cursor() as cursor:
-                return self._get_all_shortcodes_in_txn_tbl(cursor)
+            companies = company_service.get_companies_by_user_id(user.id)
+            company_ids = [company.id for company in companies]
+            with db_pool.get_cursor() as cursor:                
+                return self._get_all_shortcodes_in_txn_tbl(cursor, company_ids)
         except Exception as e:
             logger.error(f"Error getting shortcodes: {str(e)}", exc_info=True)
             return []
     
-    def _get_all_shortcodes_in_txn_tbl(self, cursor) -> List[str]:
+    def _get_all_shortcodes_in_txn_tbl(self, cursor, company_ids=None):
         """Get all shortcodes that have been registered in the transactions table."""
-        query = """
-            SELECT DISTINCT business_shortcode
-            FROM transactions
-            WHERE business_shortcode IS NOT NULL
-            AND business_shortcode != ''
-        """
-        cursor.execute(query)
-        results = cursor.fetchall()
-        return [row[0] for row in results]
+        try:
+            query = """
+                SELECT DISTINCT business_shortcode
+                FROM transactions
+                WHERE business_shortcode IS NOT NULL
+                AND business_shortcode != ''
+            """
+            
+            if company_ids:
+                # Ensure company_ids is a list/tuple
+                if isinstance(company_ids, (list, tuple)):
+                    # Don't wrap in another tuple - just use the tuple directly
+                    query += " AND company_id IN %s"
+                    cursor.execute(query, (tuple(company_ids),))
+                else:
+                    # Single company ID
+                    query += " AND company_id = %s"
+                    cursor.execute(query, (company_ids,))
+            else:
+                cursor.execute(query)
+            
+            results = cursor.fetchall()
+            
+            # Debug logging
+            logger.debug(f"Shortcode query returned {len(results)} rows")
+            if results:
+                logger.debug(f"First row: {results[0]}, type: {type(results[0])}")
+            
+            # Handle both tuple and dict cursor results
+            shortcodes = []
+            for row in results:
+                try:
+                    # Try dict access first
+                    if isinstance(row, dict):
+                        shortcode = row.get('business_shortcode')
+                    else:
+                        # Try tuple access
+                        shortcode = row[0] if len(row) > 0 else None
+                    
+                    if shortcode and shortcode.strip():
+                        shortcodes.append(shortcode.strip())
+                        
+                except Exception as e:
+                    logger.warning(f"Error parsing row {row}: {e}")
+                    continue
+            
+            logger.info(f"Found {len(shortcodes)} shortcodes")
+            return shortcodes
+            
+        except Exception as e:
+            logger.error(f"Failed to fetch shortcodes: {e}", exc_info=True)
+            raise RuntimeError(f"Failed to fetch shortcodes: {e}") from e
     
     def get_recent_transactions_for_shortcode(self, shortcode: str, 
                                             limit: int = 100) -> List[Dict]:
@@ -1252,7 +1744,7 @@ class TransactionService:
             return []
     
     def _get_historical_transactions_for_shortcode(self, cursor, shortcode: str, 
-                                                 days: int) -> List[Dict]:
+                                             days: int) -> List[Dict]:
         """Get historical transactions for fraud analysis."""
         cutoff_date = datetime.now() - timedelta(days=days)
         
@@ -1271,20 +1763,29 @@ class TransactionService:
             ORDER BY completion_time DESC
         """
         cursor.execute(query, (shortcode, cutoff_date))
+        
+        # Use cursor.description to create a row factory that returns dictionaries
         columns = [desc[0] for desc in cursor.description]
         results = cursor.fetchall()
         
-        transactions = []
-        for row in results:
-            txn = dict(zip(columns, row))
-            # Convert datetime objects
-            for date_field in ['completion_time', 'initiation_time', 'created_at', 'updated_at']:
-                if txn.get(date_field) and isinstance(txn[date_field], datetime):
-                    txn[date_field] = txn[date_field]
-            transactions.append(txn)
+        # Direct conversion - this assumes no corruption in DB
+        transactions = [dict(zip(columns, row)) for row in results]
         
+        # Post-processing: convert Decimal to float, handle 'NaN' strings
+        for txn in transactions:
+            # Convert Decimal to float for numeric fields
+            for field in ['paid_in', 'withdrawn', 'balance']:
+                if field in txn and isinstance(txn[field], Decimal):
+                    txn[field] = float(txn[field])
+            
+            # Convert 'NaN' strings to None
+            for field in ['linked_transaction_id', 'account_number']:
+                if field in txn and txn[field] == 'NaN':
+                    txn[field] = None
+        
+        logger.info(f"Retrieved {len(transactions)} transactions for {shortcode}")
         return transactions
-    
+
     async def run_fraud_detection_for_user_async(self, user_id: int) -> Dict:
         """
         Run fraud detection for a user asynchronously.
@@ -1305,7 +1806,7 @@ class TransactionService:
         historical_report = await self._run_historical_analysis(fraud_service, user)
         
         # Step 2: Recent transactions check
-        recent_detections = await self._check_recent_transactions(fraud_service)
+        recent_detections = await self._check_recent_transactions(user,fraud_service)
         
         # Step 3: Send summary to user
         await self._send_detection_summary(user, historical_report, recent_detections)
@@ -1332,7 +1833,7 @@ class TransactionService:
         logger.info(f"Running historical analysis for {user.email}")
         
         # Get all shortcodes
-        shortcodes = self.get_all_shortcodes_in_txn_tbl()
+        shortcodes = self.get_all_shortcodes_in_txn_tbl(user)
         all_transactions = []
         
         # Fetch historical transactions
@@ -1367,11 +1868,11 @@ class TransactionService:
         
         return {'summary': {}, 'detections': []}
     
-    async def _check_recent_transactions(self, fraud_service: FraudDetectionService) -> List[Dict]:
+    async def _check_recent_transactions(self, user:User ,fraud_service: FraudDetectionService) -> List[Dict]:
         """Check recent transactions for fraud patterns."""
         logger.info("Checking recent transactions for fraud patterns")
         
-        shortcodes = self.get_all_shortcodes_in_txn_tbl()
+        shortcodes = self.get_all_shortcodes_in_txn_tbl(user)
         all_detections = []
         
         loop = asyncio.get_event_loop()
@@ -1472,6 +1973,301 @@ class TransactionService:
             )
         )
     
+    def _check_recent_transactions_sync(self, user: User, fraud_service: FraudDetectionService) -> List[Dict]:
+        """Check recent transactions for fraud patterns - Synchronous version."""
+        logger.info(f"Checking recent transactions for fraud patterns for user: {user.email}")
+        
+        try:
+            # Get shortcodes for this user
+            shortcodes = self.get_all_shortcodes_in_txn_tbl(user)
+            logger.info(f"Found {len(shortcodes)} shortcodes to check")
+            
+            if not shortcodes:
+                logger.info("No shortcodes found for user")
+                return []
+            
+            all_detections = []
+            processed_count = 0
+            
+            # Process shortcodes in batches (synchronous version)
+            batch_size = 3
+            for i in range(0, len(shortcodes), batch_size):
+                batch = shortcodes[i:i + batch_size]
+                logger.info(f"Processing batch {i//batch_size + 1}/{(len(shortcodes) + batch_size - 1)//batch_size}: {batch}")
+                
+                # Process each shortcode in the current batch
+                for shortcode in batch:
+                    try:
+                        logger.info(f"Processing shortcode: {shortcode}")
+                        detections = self._process_single_shortcode_sync(fraud_service, shortcode, user)
+                        
+                        if detections:
+                            all_detections.extend(detections)
+                            logger.info(f"Found {len(detections)} suspicious patterns for shortcode {shortcode}")
+                        
+                        processed_count += 1
+                        
+                        # Log progress
+                        if processed_count % 10 == 0:
+                            logger.info(f"Progress: Processed {processed_count}/{len(shortcodes)} shortcodes")
+                            
+                    except Exception as e:
+                        logger.error(f"Error processing shortcode {shortcode}: {str(e)}")
+                        continue
+            
+            logger.info(f"Completed checking recent transactions. Found {len(all_detections)} total suspicious patterns")
+            return all_detections
+            
+        except Exception as e:
+            logger.error(f"Error in _check_recent_transactions_sync: {str(e)}", exc_info=True)
+            return []
+
+    def _process_single_shortcode_sync(self, fraud_service: FraudDetectionService, shortcode: str, user: User = None) -> List[Dict]:
+        """Process a single shortcode for fraud detection - Synchronous version."""
+        try:
+            logger.info(f"Getting recent transactions for shortcode: {shortcode}")
+            
+            # Get recent transactions for this shortcode
+            # Assuming you have a method that takes user_id or company filtering
+            transactions = self.get_recent_transactions_for_shortcode_sync(
+                shortcode=shortcode,
+                user_id=user.id if user else None,
+                days=30,
+                limit=fraud_service.config.get('recent_transactions_limit', 100)
+            )
+            
+            if not transactions:
+                logger.debug(f"No recent transactions found for shortcode: {shortcode}")
+                return []
+            
+            logger.info(f"Found {len(transactions)} recent transactions for shortcode {shortcode}")
+            
+            # Run fraud detection
+            result = fraud_service.run_detection(transactions)
+            detections = result.get('detections', [])
+            
+            if not detections:
+                logger.debug(f"No fraud patterns detected for shortcode: {shortcode}")
+                return []
+            
+            # Send notifications for high-risk detections
+            high_risk_count = 0
+            for detection in detections:
+                if detection.get('risk_level') == 'HIGH':
+                    # Check alert limit before sending
+                    receipt_nos = detection.get('receipt_nos', [])
+                    if not self._should_limit_alerts(receipt_nos):
+                        try:
+                            # Use sync notification method
+                            self._send_fraud_notification_sync(detection, user)
+                            high_risk_count += 1
+                        except Exception as e:
+                            logger.error(f"Failed to send notification for detection: {str(e)}")
+            
+            if high_risk_count > 0:
+                logger.info(f"Sent {high_risk_count} high-risk notifications for shortcode {shortcode}")
+            
+            return detections
+            
+        except Exception as e:
+            logger.error(f"Error processing shortcode {shortcode}: {str(e)}", exc_info=True)
+            return []
+
+
+    def get_recent_transactions_for_shortcode_sync(
+        self,
+        shortcode: str,
+        user_id: Optional[int] = None,
+        days: int = 30,
+        limit: int = 100
+    ) -> List[Dict]:
+        """
+        Get recent completed transactions for a specific shortcode.
+        Filters by last N days (default 30) and optional user/company association.
+        Returns list of dicts ready for JSON serialization.
+        """
+        try:
+            cutoff_date = datetime.now() - timedelta(days=days)
+
+            # Base query (matches your successful test script)
+            base_query = """
+                SELECT 
+                    id, receipt_no, completion_time, initiation_time,
+                    details, transaction_status, paid_in, withdrawn,
+                    balance, balance_confirmed, reason_type, other_party_info,
+                    linked_transaction_id, account_number, currency,
+                    transaction_type, business_shortcode, company_id, agent_id,
+                    created_at, updated_at
+                FROM transactions
+                WHERE business_shortcode = %s
+                AND transaction_status = 'Completed'
+                AND completion_time >= %s
+            """
+
+            params: Tuple = (shortcode, cutoff_date)
+
+            # Optional: filter by user's associated companies
+            if user_id:
+                company_ids = self._get_company_ids_for_user(user_id)
+                if not company_ids:
+                    logger.warning(f"No companies found for user {user_id}")
+                    return []
+
+                base_query += " AND company_id IN %s"
+                params += (tuple(company_ids),)
+
+            # Add ordering and limit
+            query = base_query + """
+                ORDER BY completion_time DESC
+                LIMIT %s
+            """
+            params += (limit,)
+
+            with db_pool.get_cursor() as cursor:
+                logger.debug(f"Executing query:\n{query}\nParams: {params}")
+
+                cursor.execute(query, params)
+                rows = cursor.fetchall()
+
+                transactions = []
+                for row in rows:
+                    # RealDictCursor returns dict-like rows, convert to regular dict
+                    tx_dict = dict(row)
+
+                    # Convert problematic types for safe JSON serialization
+                    for key in ['paid_in', 'withdrawn', 'balance', 'balance_confirmed']:
+                        if key in tx_dict and isinstance(tx_dict[key], Decimal):
+                            tx_dict[key] = self._parse_decimal_to_float(tx_dict[key])
+
+                    for key in ['completion_time', 'initiation_time', 'created_at', 'updated_at']:
+                        if key in tx_dict and isinstance(tx_dict[key], datetime):
+                            tx_dict[key] = self._parse_date_to_string(tx_dict[key])
+
+                    # Optional: handle any NaN strings if they appear (seen in logs)
+                    for key in ['linked_transaction_id', 'account_number']:
+                        if tx_dict.get(key) == 'NaN':
+                            tx_dict[key] = None
+
+                    transactions.append(tx_dict)
+
+                logger.info(f"Retrieved {len(transactions)} recent transactions for shortcode {shortcode}")
+                return transactions
+
+        except Exception as e:
+            logger.error(
+                f"Failed to fetch transactions for shortcode {shortcode} "
+                f"(user={user_id}, days={days}, limit={limit}): {str(e)}",
+                exc_info=True
+            )
+            return []
+    def _send_fraud_notification_sync(self, detection: Dict, user: User = None):
+        """Send fraud notification email synchronously."""
+        if not user or not user.email:
+            logger.warning("No user or email configured for fraud notifications")
+            return
+        
+        from app.utils.email_utils import _send_email
+        
+        fraud_type = detection.get('fraud_type', 'unknown')
+        
+        # Create email content based on fraud type
+        if fraud_type == 'split_transaction':
+            subject = f"[Fraud Alert] Split Transaction Detected - {detection.get('account_phone', 'Unknown')}"
+            body = f"""
+            <html><body>
+            <h2>🚨 Split Transaction Fraud Alert</h2>
+            <p><strong>Account:</strong> {detection.get('account_phone', 'Unknown')}</p>
+            <p><strong>Transactions Found:</strong> {detection.get('transaction_count', 0)}</p>
+            <p><strong>Total Amount:</strong> KES {detection.get('total_amount', 0):,.2f}</p>
+            <p><strong>Risk Level:</strong> {detection.get('risk_level', 'MEDIUM')}</p>
+            <hr>
+            <p>Please review these transactions immediately.</p>
+            </body></html>
+            """
+        elif fraud_type == 'rollover_fraud':
+            subject = f"[Fraud Alert] Roll-over Pattern Detected - {detection.get('account_phone', 'Unknown')}"
+            body = f"""
+            <html><body>
+            <h2>🔄 Roll-over Fraud Alert</h2>
+            <p><strong>Account:</strong> {detection.get('account_phone', 'Unknown')}</p>
+            <p><strong>Pattern Type:</strong> {detection.get('pattern_type', 'Unknown')}</p>
+            <p><strong>Transactions:</strong> {detection.get('transaction_count', 0)}</p>
+            <p><strong>Risk Level:</strong> {detection.get('risk_level', 'MEDIUM')}</p>
+            </body></html>
+            """
+        elif fraud_type == 'rapid_back_forth':
+            subject = f"[Fraud Alert] Rapid Transaction Pattern - {detection.get('account_phone', 'Unknown')}"
+            body = f"""
+            <html><body>
+            <h2>⚡ Rapid Transaction Alert</h2>
+            <p><strong>Account:</strong> {detection.get('account_phone', 'Unknown')}</p>
+            <p><strong>Transactions:</strong> {detection.get('transaction_count', 0)} in {detection.get('time_window', 0)}min</p>
+            <p><strong>Net Flow:</strong> KES {detection.get('net_flow', 0):,.2f}</p>
+            </body></html>
+            """
+        else:
+            subject = f"[Fraud Alert] Suspicious Activity Detected"
+            body = f"""
+            <html><body>
+            <h2>⚠️ Suspicious Activity Alert</h2>
+            <p><strong>Account:</strong> {detection.get('account_phone', 'Unknown')}</p>
+            <p><strong>Details:</strong> {detection}</p>
+            </body></html>
+            """
+        
+        # Send email
+        try:
+            _send_email(
+                subject=subject,
+                body=body,
+                recipient=user.email,
+                is_html=True
+            )
+            logger.info(f"Sent {fraud_type} alert to {user.email}")
+            
+            # Record alert in database
+            self._record_fraud_alert_sync(detection, fraud_type, user)
+            
+        except Exception as e:
+            logger.error(f"Failed to send fraud notification: {str(e)}")
+
+    def _record_fraud_alert_sync(self, detection: Dict, fraud_type: str, user: User):
+        """Record fraud alert in database synchronously."""        
+        try:
+            alert = FraudAlert(
+                user_id=user.id,
+                fraud_type=fraud_type,
+                account_phone=detection.get('account_phone'),
+                account_name=detection.get('account_name'),
+                transaction_count=detection.get('transaction_count', 0),
+                total_amount=Decimal(str(detection.get('total_amount', 0))),
+                fraud_score=detection.get('fraud_score', 0),
+                risk_level=detection.get('risk_level', 'MEDIUM'),
+                receipt_nos=','.join(detection.get('receipt_nos', [])),
+                transaction_ids=','.join(str(id) for id in detection.get('transaction_ids', [])),
+                receipt_hash=hash(tuple(sorted(detection.get('receipt_nos', [])))),
+                detection_details=detection
+            )
+            
+            db.session.add(alert)
+            db.session.commit()
+            logger.info(f"Recorded fraud alert for {fraud_type}")
+            
+        except Exception as e:
+            db.session.rollback()
+            logger.error(f"Failed to record fraud alert: {str(e)}")
+
+    def _get_company_ids_for_user(self, user_id: int) -> List[int]:
+        """Get company IDs associated with a user."""
+        try:            
+            companies = company_service.get_companies_by_user_id(user_id=user_id)
+            
+            return [company.id for company in companies]
+                
+        except Exception as e:
+            logger.error(f"Error getting company IDs for user {user_id}: {str(e)}")
+            return []
+        
     def _should_limit_alerts(self, receipt_nos: List[str]) -> bool:
         """Check if alerts should be limited for this receipt group."""
         if not receipt_nos:
@@ -1493,23 +2289,26 @@ class TransactionService:
     async def _record_report_history(self, user: User, report_summary: Dict):
         """Record report history in database."""
         try:
+            # Serialize report_summary to handle datetime objects
+            serialized_report = self._serialize_for_json(report_summary)
+
             history = FraudReportHistory(
                 user_id=user.id,
                 analysis_period_days=30,
                 total_transactions=report_summary.get('total_transactions_analyzed', 0),
                 suspicious_patterns=report_summary.get('suspicious_patterns_found', 0),
                 accounts_flagged=report_summary.get('accounts_flagged', 0),
-                report_data=report_summary
+                report_data=serialized_report
             )
-            
+
             loop = asyncio.get_event_loop()
             await loop.run_in_executor(
                 executor,
                 lambda: db.session.add(history) or db.session.commit()
             )
-            
+
             logger.info(f"Recorded fraud report history for user {user.email}")
-            
+
         except Exception as e:
             logger.error(f"Failed to record report history: {str(e)}")
     
@@ -1618,7 +2417,7 @@ class TransactionService:
         historical_report = self._generate_historical_report(user, fraud_service)
         
         # Step 2: Check recent transactions per shortcode
-        recent_detections = self._check_recent_transactions(fraud_service)
+        recent_detections = self._check_recent_transactions(user,fraud_service)
         
         # Combine results
         result = {
@@ -1636,7 +2435,7 @@ class TransactionService:
         logger.info("Generating historical fraud analysis report")
         
         # Get all shortcodes
-        shortcodes = self.get_all_shortcodes_in_txn_tbl()
+        shortcodes = self.get_all_shortcodes_in_txn_tbl(user=user)
         all_transactions = []
         
         # Get historical transactions for each shortcode
@@ -1650,20 +2449,24 @@ class TransactionService:
         # Run detection on historical data
         if all_transactions:
             historical_result = fraud_service.run_detection(all_transactions)
-            
-            # Send historical report
-            fraud_service.send_historical_report(historical_result['summary'])
-            
+
+            # Send historical report with transactions and detections
+            fraud_service.send_historical_report(
+                historical_result['summary'],
+                transactions=all_transactions,
+                detections=historical_result.get('detections', [])
+            )
+
             return historical_result
         else:
             logger.info("No historical transactions found for analysis")
             return {'summary': {}, 'detections': [], 'account_summary': {}}
     
-    def _check_recent_transactions(self, fraud_service: FraudDetectionService) -> List[Dict]:
+    def _check_recent_transactions(self, user:User, fraud_service: FraudDetectionService) -> List[Dict]:
         """Check recent transactions for fraud patterns."""
         logger.info("Checking recent transactions for fraud patterns")
         
-        shortcodes = self.get_all_shortcodes_in_txn_tbl()
+        shortcodes = self.get_all_shortcodes_in_txn_tbl(user=user)
         all_detections = []
         
         for shortcode in shortcodes:
@@ -1868,24 +2671,68 @@ class TransactionService:
             "growth_rates": growth_rates
         }
 
-    def _get_last_scraped_per_till(self, cursor:Generator) -> Dict[str, int]:
-        """Get number of days since last scrape for each till (Kenya time)"""
-        query = """
-            SELECT business_shortcode, MAX(receipt_no) AS latest_receipt_no, MAX(updated_at) AS latest_updated_at
-            FROM transactions
-            GROUP BY business_shortcode;
+    def _get_last_scraped_per_till(self, cursor: Generator, transaction_type: str = None) -> Dict[str, int]:
         """
-        cursor.execute(query)
-        results = cursor.fetchall()
+        Get number of days since last scrape for each till (Kenya time).
 
-        now = datetime.now(self.kenya_tz)
+        Args:
+            cursor: Database cursor
+            transaction_type: Optional filter - 'float', 'commission', or None for all types
 
-        return {
-            row['business_shortcode']: [(
-                now - row['latest_updated_at'].replace(tzinfo=self.kenya_tz)
-            ).days,row['latest_receipt_no']]
-            for row in results
-        }
+        Returns:
+            Dict with business_shortcode as key and [days_since_last_scrape, latest_receipt_no] as value
+            If transaction_type is None, returns nested dict: {shortcode: {'float': [...], 'commission': [...]}}
+        """
+        if transaction_type:
+            # Get last scraped for specific transaction type
+            query = """
+                SELECT business_shortcode,
+                       MAX(receipt_no) AS latest_receipt_no,
+                       MAX(updated_at) AS latest_updated_at
+                FROM transactions
+                WHERE transaction_type = %s
+                GROUP BY business_shortcode;
+            """
+            cursor.execute(query, (transaction_type,))
+            results = cursor.fetchall()
+
+            now = datetime.now(self.kenya_tz)
+
+            return {
+                row['business_shortcode']: [
+                    (now - row['latest_updated_at'].replace(tzinfo=self.kenya_tz)).days,
+                    row['latest_receipt_no']
+                ]
+                for row in results
+            }
+        else:
+            # Get last scraped for both transaction types separately
+            query = """
+                SELECT business_shortcode,
+                       transaction_type,
+                       MAX(receipt_no) AS latest_receipt_no,
+                       MAX(updated_at) AS latest_updated_at
+                FROM transactions
+                GROUP BY business_shortcode, transaction_type;
+            """
+            cursor.execute(query)
+            results = cursor.fetchall()
+
+            now = datetime.now(self.kenya_tz)
+
+            # Build nested dictionary: {shortcode: {'float': [...], 'commission': [...]}}
+            shortcode_data = {}
+            for row in results:
+                shortcode = row['business_shortcode']
+                txn_type = row['transaction_type'] or 'float'
+
+                if shortcode not in shortcode_data:
+                    shortcode_data[shortcode] = {}
+
+                days_diff = (now - row['latest_updated_at'].replace(tzinfo=self.kenya_tz)).days
+                shortcode_data[shortcode][txn_type] = [days_diff, row['latest_receipt_no']]
+
+            return shortcode_data
         
     def _get_all_short_codes_in_txn_tbl(self, cursor:Generator) -> List[int]:
         """Get all shortcodes that have been registered in the transactions table"""
@@ -2916,4 +3763,351 @@ class TransactionService:
                 'average_commission_rate': avg_commission_rate
             }
         }
+
+    def get_dashboard_analytics(self, filters: Dict = None) -> Dict:
+        """
+        Get comprehensive analytics data for the dashboard.
+        Provides KPIs, trends, and recent activity based on transaction data.
+
+        Args:
+            filters: Dictionary of filters including:
+                - company_id: Filter by company ID
+                - agent_id: Filter by agent ID
+                - days: Number of days to look back (default 30)
+
+        Returns:
+            Dict with dashboard analytics data
+        """
+        try:
+            filters = filters or {}
+            days = filters.get('days', 30)
+
+            # Calculate date ranges
+            end_date = datetime.now()
+            start_date = end_date - timedelta(days=days)
+            prev_start_date = start_date - timedelta(days=days)
+            prev_end_date = start_date
+
+            with db_pool.get_cursor() as cursor:
+                # Build WHERE conditions
+                conditions = ["1=1"]
+                params = []
+
+                if 'company_id' in filters and filters['company_id']:
+                    conditions.append("company_id = %s")
+                    params.append(filters['company_id'])
+
+                if 'agent_id' in filters and filters['agent_id']:
+                    conditions.append("agent_id = %s")
+                    params.append(filters['agent_id'])
+
+                where_clause = " AND ".join(conditions)
+
+                # ============ KPI STATS ============
+
+                # Current period stats - properly separated by transaction_type
+                kpi_query = f"""
+                    SELECT
+                        COUNT(*) as total_transactions,
+                        -- Float transactions: deposits and withdrawals
+                        COALESCE(SUM(CASE WHEN transaction_type = 'float' OR transaction_type IS NULL
+                            THEN ABS(COALESCE(paid_in, 0)) ELSE 0 END), 0) as total_deposits,
+                        COALESCE(SUM(CASE WHEN transaction_type = 'float' OR transaction_type IS NULL
+                            THEN ABS(COALESCE(withdrawn, 0)) ELSE 0 END), 0) as total_withdrawals,
+                        -- Commission transactions only
+                        COALESCE(SUM(CASE WHEN transaction_type = 'commission'
+                            THEN COALESCE(commission_amount, 0) ELSE 0 END), 0) as total_commissions,
+                        -- Count by type
+                        COUNT(CASE WHEN transaction_type = 'float' OR transaction_type IS NULL THEN 1 END) as float_transactions,
+                        COUNT(CASE WHEN transaction_type = 'commission' THEN 1 END) as commission_transactions,
+                        COUNT(DISTINCT agent_id) as active_agents,
+                        COUNT(DISTINCT company_id) as active_companies
+                    FROM transactions
+                    WHERE {where_clause}
+                    AND completion_time BETWEEN %s AND %s
+                """
+                cursor.execute(kpi_query, params + [start_date, end_date])
+                current_stats = cursor.fetchone()
+
+                # Previous period stats for growth calculation
+                cursor.execute(kpi_query, params + [prev_start_date, prev_end_date])
+                prev_stats = cursor.fetchone()
+
+                # Calculate growth percentages
+                def calc_growth(current, previous):
+                    if previous and previous > 0:
+                        return round(((current - previous) / previous) * 100, 1)
+                    return 0 if current == 0 else 100
+
+                total_volume = float(current_stats['total_deposits'] or 0) + float(current_stats['total_withdrawals'] or 0)
+                prev_volume = float(prev_stats['total_deposits'] or 0) + float(prev_stats['total_withdrawals'] or 0)
+
+                kpi_data = {
+                    'total_volume': {
+                        'value': total_volume,
+                        'change': calc_growth(total_volume, prev_volume),
+                        'trend': 'up' if total_volume >= prev_volume else 'down'
+                    },
+                    'total_transactions': {
+                        'value': int(current_stats['total_transactions'] or 0),
+                        'change': calc_growth(current_stats['total_transactions'] or 0, prev_stats['total_transactions'] or 0),
+                        'trend': 'up' if (current_stats['total_transactions'] or 0) >= (prev_stats['total_transactions'] or 0) else 'down'
+                    },
+                    'total_commissions': {
+                        'value': float(current_stats['total_commissions'] or 0),
+                        'change': calc_growth(current_stats['total_commissions'] or 0, prev_stats['total_commissions'] or 0),
+                        'trend': 'up' if (current_stats['total_commissions'] or 0) >= (prev_stats['total_commissions'] or 0) else 'down'
+                    },
+                    'active_agents': {
+                        'value': int(current_stats['active_agents'] or 0),
+                        'change': calc_growth(current_stats['active_agents'] or 0, prev_stats['active_agents'] or 0),
+                        'trend': 'up' if (current_stats['active_agents'] or 0) >= (prev_stats['active_agents'] or 0) else 'down'
+                    },
+                    'average_transaction': {
+                        'value': round(total_volume / max(current_stats['total_transactions'] or 1, 1), 2),
+                        'change': 0,
+                        'trend': 'up'
+                    }
+                }
+
+                # ============ MONTHLY TRENDS ============
+                # Using PostgreSQL date functions - properly separated by transaction_type
+                trends_query = f"""
+                    SELECT
+                        TO_CHAR(completion_time, 'YYYY-MM') as month,
+                        TO_CHAR(completion_time, 'Mon') as month_name,
+                        COUNT(*) as transactions,
+                        -- Float transactions: deposits and withdrawals
+                        COALESCE(SUM(CASE WHEN transaction_type = 'float' OR transaction_type IS NULL
+                            THEN ABS(COALESCE(paid_in, 0)) ELSE 0 END), 0) as deposits,
+                        COALESCE(SUM(CASE WHEN transaction_type = 'float' OR transaction_type IS NULL
+                            THEN ABS(COALESCE(withdrawn, 0)) ELSE 0 END), 0) as withdrawals,
+                        -- Commission transactions only
+                        COALESCE(SUM(CASE WHEN transaction_type = 'commission'
+                            THEN COALESCE(commission_amount, 0) ELSE 0 END), 0) as commissions,
+                        -- Count by type
+                        COUNT(CASE WHEN transaction_type = 'float' OR transaction_type IS NULL THEN 1 END) as float_count,
+                        COUNT(CASE WHEN transaction_type = 'commission' THEN 1 END) as commission_count
+                    FROM transactions
+                    WHERE {where_clause}
+                    AND completion_time >= NOW() - INTERVAL '12 months'
+                    GROUP BY TO_CHAR(completion_time, 'YYYY-MM'), TO_CHAR(completion_time, 'Mon')
+                    ORDER BY month ASC
+                """
+                cursor.execute(trends_query, params)
+                trends_result = cursor.fetchall()
+
+                monthly_trends = []
+                for row in trends_result:
+                    monthly_trends.append({
+                        'name': row['month_name'],
+                        'month': row['month'],
+                        'transactions': int(row['transactions'] or 0),
+                        'deposits': float(row['deposits'] or 0),
+                        'withdrawals': float(row['withdrawals'] or 0),
+                        'commissions': float(row['commissions'] or 0),
+                        'volume': float(row['deposits'] or 0) + float(row['withdrawals'] or 0)
+                    })
+
+                # ============ TRANSACTION TYPE DISTRIBUTION ============
+                # Shows distribution by reason_type for float transactions
+                distribution_query = f"""
+                    SELECT
+                        reason_type,
+                        COUNT(*) as count,
+                        -- Float transactions volume
+                        COALESCE(SUM(CASE WHEN transaction_type = 'float' OR transaction_type IS NULL
+                            THEN ABS(COALESCE(paid_in, 0)) + ABS(COALESCE(withdrawn, 0)) ELSE 0 END), 0) as float_volume,
+                        -- Commission transactions total
+                        COALESCE(SUM(CASE WHEN transaction_type = 'commission'
+                            THEN COALESCE(commission_amount, 0) ELSE 0 END), 0) as commission_amount
+                    FROM transactions
+                    WHERE {where_clause}
+                    AND completion_time BETWEEN %s AND %s
+                    GROUP BY reason_type
+                    ORDER BY count DESC
+                    LIMIT 5
+                """
+                cursor.execute(distribution_query, params + [start_date, end_date])
+                distribution_result = cursor.fetchall()
+
+                # Color palette for pie chart
+                colors = ['#3B82F6', '#10B981', '#F59E0B', '#8B5CF6', '#EF4444']
+
+                type_distribution = []
+                total_count = sum(row['count'] or 0 for row in distribution_result)
+                for idx, row in enumerate(distribution_result):
+                    percentage = round((row['count'] / total_count * 100), 1) if total_count > 0 else 0
+                    type_distribution.append({
+                        'name': row['reason_type'] or 'Unknown',
+                        'value': percentage,
+                        'count': int(row['count'] or 0),
+                        'float_volume': float(row['float_volume'] or 0),
+                        'commission_amount': float(row['commission_amount'] or 0),
+                        'color': colors[idx % len(colors)]
+                    })
+
+                # ============ RECENT TRANSACTIONS ============
+
+                recent_query = f"""
+                    SELECT
+                        id,
+                        receipt_no,
+                        details,
+                        COALESCE(paid_in, 0) as paid_in,
+                        COALESCE(withdrawn, 0) as withdrawn,
+                        completion_time,
+                        reason_type,
+                        transaction_type
+                    FROM transactions
+                    WHERE {where_clause}
+                    ORDER BY completion_time DESC
+                    LIMIT 10
+                """
+                cursor.execute(recent_query, params)
+                recent_result = cursor.fetchall()
+
+                recent_transactions = []
+                for row in recent_result:
+                    # Determine activity type based on transaction
+                    if float(row['paid_in'] or 0) > 0:
+                        action_type = 'deposit'
+                        action = f"Deposit of KES {float(row['paid_in']):,.2f}"
+                    elif float(row['withdrawn'] or 0) != 0:
+                        action_type = 'withdrawal'
+                        action = f"Withdrawal of KES {abs(float(row['withdrawn'])):,.2f}"
+                    else:
+                        action_type = 'other'
+                        action = row['details'][:50] if row['details'] else 'Transaction processed'
+
+                    # Calculate time ago
+                    completion_time = row['completion_time']
+                    if completion_time:
+                        time_diff = datetime.now() - completion_time
+                        if time_diff.days > 0:
+                            time_ago = f"{time_diff.days} day{'s' if time_diff.days > 1 else ''} ago"
+                        elif time_diff.seconds >= 3600:
+                            hours = time_diff.seconds // 3600
+                            time_ago = f"{hours} hour{'s' if hours > 1 else ''} ago"
+                        elif time_diff.seconds >= 60:
+                            minutes = time_diff.seconds // 60
+                            time_ago = f"{minutes} min ago"
+                        else:
+                            time_ago = "Just now"
+                    else:
+                        time_ago = "Unknown"
+
+                    recent_transactions.append({
+                        'id': row['id'],
+                        'receipt_no': row['receipt_no'],
+                        'action': action,
+                        'time': time_ago,
+                        'type': action_type,
+                        'reason_type': row['reason_type']
+                    })
+
+                # ============ DAILY TRENDS (for detailed chart) ============
+                # Properly separated by transaction_type
+                daily_query = f"""
+                    SELECT
+                        DATE(completion_time) as date,
+                        COUNT(*) as transactions,
+                        -- Float transactions: deposits and withdrawals
+                        COALESCE(SUM(CASE WHEN transaction_type = 'float' OR transaction_type IS NULL
+                            THEN ABS(COALESCE(paid_in, 0)) ELSE 0 END), 0) as deposits,
+                        COALESCE(SUM(CASE WHEN transaction_type = 'float' OR transaction_type IS NULL
+                            THEN ABS(COALESCE(withdrawn, 0)) ELSE 0 END), 0) as withdrawals,
+                        -- Commission transactions only
+                        COALESCE(SUM(CASE WHEN transaction_type = 'commission'
+                            THEN COALESCE(commission_amount, 0) ELSE 0 END), 0) as commissions
+                    FROM transactions
+                    WHERE {where_clause}
+                    AND completion_time BETWEEN %s AND %s
+                    GROUP BY DATE(completion_time)
+                    ORDER BY date ASC
+                """
+                cursor.execute(daily_query, params + [start_date, end_date])
+                daily_result = cursor.fetchall()
+
+                daily_trends = []
+                for row in daily_result:
+                    daily_trends.append({
+                        'date': row['date'].strftime('%Y-%m-%d') if row['date'] else '',
+                        'name': row['date'].strftime('%d %b') if row['date'] else '',
+                        'transactions': int(row['transactions'] or 0),
+                        'deposits': float(row['deposits'] or 0),
+                        'withdrawals': float(row['withdrawals'] or 0),
+                        'commissions': float(row['commissions'] or 0),
+                        'volume': float(row['deposits'] or 0) + float(row['withdrawals'] or 0)
+                    })
+
+                # ============ BUSINESS HEALTH METRICS ============
+
+                # Calculate average daily volume
+                avg_daily_volume = total_volume / max(days, 1)
+
+                # Transaction success rate
+                success_query = f"""
+                    SELECT
+                        COUNT(CASE WHEN transaction_status = 'Completed' THEN 1 END) as completed,
+                        COUNT(*) as total
+                    FROM transactions
+                    WHERE {where_clause}
+                    AND completion_time BETWEEN %s AND %s
+                """
+                cursor.execute(success_query, params + [start_date, end_date])
+                success_result = cursor.fetchone()
+                success_rate = round((success_result['completed'] / max(success_result['total'], 1)) * 100, 1)
+
+                # Growth momentum (comparing recent week to previous week)
+                # Only considers float transactions for volume calculation
+                week_ago = end_date - timedelta(days=7)
+                two_weeks_ago = end_date - timedelta(days=14)
+
+                momentum_query = f"""
+                    SELECT
+                        COALESCE(SUM(CASE WHEN transaction_type = 'float' OR transaction_type IS NULL
+                            THEN ABS(COALESCE(paid_in, 0)) + ABS(COALESCE(withdrawn, 0)) ELSE 0 END), 0) as total_volume
+                    FROM transactions
+                    WHERE {where_clause}
+                    AND completion_time BETWEEN %s AND %s
+                """
+                cursor.execute(momentum_query, params + [week_ago, end_date])
+                recent_week = float(cursor.fetchone()['total_volume'] or 0)
+
+                cursor.execute(momentum_query, params + [two_weeks_ago, week_ago])
+                prev_week = float(cursor.fetchone()['total_volume'] or 0)
+
+                weekly_growth = calc_growth(recent_week, prev_week)
+
+                health_metrics = {
+                    'avg_daily_volume': round(avg_daily_volume, 2),
+                    'success_rate': success_rate,
+                    'weekly_growth': weekly_growth,
+                    'growth_momentum': 'accelerating' if weekly_growth > 5 else 'stable' if weekly_growth >= -5 else 'declining'
+                }
+
+                return {
+                    'success': True,
+                    'data': {
+                        'kpis': kpi_data,
+                        'monthly_trends': monthly_trends,
+                        'daily_trends': daily_trends,
+                        'type_distribution': type_distribution,
+                        'recent_transactions': recent_transactions,
+                        'health_metrics': health_metrics,
+                        'period': {
+                            'start_date': start_date.strftime('%Y-%m-%d'),
+                            'end_date': end_date.strftime('%Y-%m-%d'),
+                            'days': days
+                        }
+                    }
+                }
+
+        except Exception as e:
+            logger.error(f"Error fetching dashboard analytics: {str(e)}", exc_info=True)
+            return {
+                'success': False,
+                'error': f"Failed to fetch dashboard analytics: {str(e)}"
+            }
 

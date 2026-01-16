@@ -1,3 +1,4 @@
+# app/__init__.py
 from flask import Flask
 from flask_sqlalchemy import SQLAlchemy
 from flask_migrate import Migrate
@@ -5,7 +6,6 @@ from flask_cors import CORS
 from flask_bcrypt import Bcrypt
 from flask_jwt_extended import JWTManager
 from google.cloud import storage
-from app.config.celery_config import celery
 import os
 from dotenv import load_dotenv
 
@@ -13,7 +13,6 @@ db = SQLAlchemy()
 migrate = Migrate()
 bcrypt = Bcrypt()
 jwt = JWTManager()
-
 
 def create_app():
     app = Flask(__name__, instance_relative_config=True)
@@ -30,7 +29,14 @@ def create_app():
     app.config['DEBUG']        = False
     app.config['DATABASE_URI']  = os.getenv('DATABASE_URL','postgresql://user:pass@localhost/db')
     app.config['REDIS_URL']    = os.getenv('REDIS_URL','redis://localhost:6379/0')
-    app.config['CELERY_BROKER_URL']  =os.getenv('CELERY_BROKER_URL','redis://localhost:6379/0')
+    app.config['CELERY_BROKER_URL']  = os.getenv('CELERY_BROKER_URL','redis://localhost:6379/0')
+    app.config['CELERY_RESULT_BACKEND'] = os.getenv('CELERY_RESULT_BACKEND','redis://localhost:6379/0')
+    
+    # Initialize Celery AFTER app config is set
+    from app.celery_config import init_celery
+    celery = init_celery(app)  # This configures celery with app settings
+    app.celery = celery
+    
     # Initialize extensions
     db.init_app(app)
     migrate.init_app(app, db)
@@ -59,6 +65,7 @@ def create_app():
     from app.model.transaction import Transaction, TransactionStats
     from app.model.fraud_alert import FraudAlert,FraudReportHistory
     from app.model.config import Config,DetectionLog,SuspiciousAccount
+    from app.model.user_report_config import UserReportConfig
     
     # Initialize Pesapal Client and Payment Service
     from app.utils.pesapalclient import PesapalClient, PesapalConfig, FlaskIPNStorage
@@ -70,13 +77,21 @@ def create_app():
     pesapal_client = PesapalClient(config=pesapal_config,ipn_storage=flaskipn_storage)
     payment_service = PesapalPaymentService(pesapal_client=pesapal_client)
     
-    # initialize Google Cloud Storage client
+    # initialize Google Cloud Storage client (optional - may not be available in all environments)
     from app.service.document_service import DocumentProcessingService
-    storage_client = storage.Client.from_service_account_json(
-                    os.getenv('GOOGLE_APPLICATION_CREDENTIALS')
-                    )
-    bucket_name = os.getenv('GCP_BUCKET', 'trovana-docs')
-    document_service = DocumentProcessingService(storage_client=storage_client, bucket_name=bucket_name)        
+    gcp_credentials_path = os.getenv('GOOGLE_APPLICATION_CREDENTIALS')
+    storage_client = None
+    document_service = None
+    if gcp_credentials_path and os.path.exists(gcp_credentials_path):
+        try:
+            storage_client = storage.Client.from_service_account_json(gcp_credentials_path)
+            bucket_name = os.getenv('GCP_BUCKET', 'trovana-docs')
+            document_service = DocumentProcessingService(storage_client=storage_client, bucket_name=bucket_name)
+        except Exception as e:
+            print(f"Warning: Could not initialize Google Cloud Storage: {e}")
+    else:
+        print("Warning: Google Cloud Storage not configured (GOOGLE_APPLICATION_CREDENTIALS not found)")
+
     transaction_service = TransactionService()
     
     with app.app_context():
@@ -88,6 +103,7 @@ def create_app():
     app.pesapal_client = pesapal_client
     app.document_service = document_service        
     app.transaction_service = transaction_service
+    app.celery = celery  # Make celery available on app instance
 
     # Register blueprints
     from app.controller.user_controller import user_bp
@@ -99,6 +115,8 @@ def create_app():
     from app.controller.agentcompany_controller import agent_company_bp
     from app.controller.company_controller import company_bp
     from app.controller.transaction_controller import transaction_bp
+    from app.controller.user_report_config_controller import user_report_config_bp
+    from app.controller.confg_controller import config_bp
 
     app.register_blueprint(user_bp, url_prefix='/users')
     app.register_blueprint(bank_bp, url_prefix='/banks')
@@ -109,6 +127,7 @@ def create_app():
     app.register_blueprint(agent_company_bp, url_prefix='/agentcompany')
     app.register_blueprint(company_bp, url_prefix='/company')
     app.register_blueprint(transaction_bp, url_prefix='/transactions')
+    app.register_blueprint(user_report_config_bp)
+    app.register_blueprint(config_bp, url_prefix='/fraud')
 
     return app
-

@@ -3,7 +3,7 @@ from app.service.config_service import ConfigService as CS
 from app import db
 import json
 
-config_bp = Blueprint('config', __name__, url_prefix='/api/config')
+config_bp = Blueprint('config', __name__, url_prefix='/config')
 
 @config_bp.route('/', methods=['GET'])
 def get_all_configs():

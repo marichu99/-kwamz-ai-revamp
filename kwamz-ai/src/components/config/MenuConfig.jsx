@@ -9,7 +9,9 @@ import {
     Settings,
     Shield,
     TrendingUp,
-    FileText
+    FileText,
+    Clock,
+    Mail
 } from 'lucide-react';
 
 export const adminMenuItems = [
@@ -37,6 +39,7 @@ export const adminMenuItems = [
         submenu: [
             { id: "bank-list", label: "Bank Details" },
             { id: "configs", label: "System Configs" },
+            { id: "report-schedules", label: "Report Schedules" },
         ]
     },
     
@@ -105,18 +108,14 @@ const userMenuItems = [
         icon: Wallet,
         label: "Transactions",
     },
-    // {
-    //     id: "orders",
-    //     icon: ShoppingCart,
-    //     label: "Orders",
-    //     badge: "3",
-    //     submenu: [
-    //         { id: "all-orders", label: "All Orders" },
-    //         { id: "pending", label: "Pending Orders" },
-    //         { id: "processing", label: "Processing" },
-    //         { id: "shipped", label: "Shipped" }
-    //     ]
-    // },
+    {
+        id: "reports",
+        icon: Clock,
+        label: "Reports",
+        submenu: [
+            { id: "report-schedules", label: "Report Schedules" },
+        ]
+    },
 ];
 
 export const getMenuItems = (role) => {
