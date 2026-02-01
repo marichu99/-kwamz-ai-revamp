@@ -28,3 +28,4 @@ celery
 redis
 flower
 minio
+resend
