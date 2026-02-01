@@ -3,26 +3,21 @@ name: Deploy to Production
 on:
   push:
     branches: [main]
-  workflow_dispatch:  # Allow manual trigger
+  workflow_dispatch:
 
 env:
   REGISTRY: ghcr.io
-  BACKEND_IMAGE: ghcr.io/${{ github.repository }}/backend
   FRONTEND_IMAGE: ghcr.io/${{ github.repository }}/frontend
   CELERY_IMAGE: ghcr.io/${{ github.repository }}/celery
 
 jobs:
-  # Build and push Docker images
+  # Build and push Docker images (frontend + celery)
   build-and-push:
     name: Build & Push Images
     runs-on: ubuntu-latest
     permissions:
       contents: read
       packages: write
-
-    outputs:
-      backend_tag: ${{ steps.meta-backend.outputs.tags }}
-      frontend_tag: ${{ steps.meta-frontend.outputs.tags }}
 
     steps:
       - name: Checkout code
@@ -37,15 +32,6 @@ jobs:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Extract metadata for backend
-        id: meta-backend
-        uses: docker/metadata-action@v5
-        with:
-          images: ${{ env.BACKEND_IMAGE }}
-          tags: |
-            type=sha,prefix=
-            type=raw,value=latest
 
       - name: Extract metadata for frontend
         id: meta-frontend
@@ -64,17 +50,6 @@ jobs:
           tags: |
             type=sha,prefix=
             type=raw,value=latest
-
-      - name: Build and push backend
-        uses: docker/build-push-action@v5
-        with:
-          context: ./backend
-          file: ./backend/Dockerfile
-          push: true
-          tags: ${{ steps.meta-backend.outputs.tags }}
-          labels: ${{ steps.meta-backend.outputs.labels }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
 
       - name: Build and push frontend
         uses: docker/build-push-action@v5
@@ -109,16 +84,16 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Copy files to server
+      - name: Copy backend code and configs to server
         uses: appleboy/scp-action@v0.1.7
         with:
           host: ${{ secrets.DO_HOST }}
           username: ${{ secrets.DO_USERNAME }}
           key: ${{ secrets.DO_SSH_KEY }}
-          source: "docker-compose.prod.yml,nginx/,deploy.sh"
-          target: "~/kwamz-ai"
+          source: "backend/,nginx/"
+          target: "~/projects/-kwamz-ai-revamp"
 
-      - name: Deploy to server
+      - name: Deploy services
         uses: appleboy/ssh-action@v1.0.3
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -130,20 +105,56 @@ jobs:
           script: |
             cd ~/kwamz-ai
 
-            # Login to GitHub Container Registry
-            echo $GITHUB_TOKEN | docker login ghcr.io -u ${{ github.actor }} --password-stdin
+            # --- Docker login ---
+            echo "$GITHUB_TOKEN" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
 
-            # Pull latest images
-            docker compose -f docker-compose.prod.yml pull
+            # --- Frontend (Docker) ---
+            docker pull ${{ env.FRONTEND_IMAGE }}:latest
+            docker stop frontend 2>/dev/null || true
+            docker rm frontend 2>/dev/null || true
+            docker run -d --name frontend \
+              -p 3000:80 \
+              --restart unless-stopped \
+              ${{ env.FRONTEND_IMAGE }}:latest
 
-            # Deploy with zero-downtime
-            docker compose -f docker-compose.prod.yml up -d --remove-orphans
+            # --- Celery Worker (Docker) ---
+            docker pull ${{ env.CELERY_IMAGE }}:latest
+            docker stop celery-worker 2>/dev/null || true
+            docker rm celery-worker 2>/dev/null || true
+            docker run -d --name celery-worker \
+              --network host \
+              --env-file ~/projects/-kwamz-ai-revamp/backend/.env \
+              --restart unless-stopped \
+              ${{ env.CELERY_IMAGE }}:latest
 
-            # Cleanup old images
+            # --- Celery Beat (Docker, same image) ---
+            docker stop celery-beat 2>/dev/null || true
+            docker rm celery-beat 2>/dev/null || true
+            docker run -d --name celery-beat \
+              --network host \
+              --env-file ~/projects/-kwamz-ai-revamp/backend/.env \
+              --restart unless-stopped \
+              ${{ env.CELERY_IMAGE }}:latest \
+              celery -A worker:celery beat --loglevel=info
+
+            # --- Backend (bare metal with conda) ---
+            cd ~/projects/-kwamz-ai-revamp/backend
+
+            source ~/miniconda3/etc/profile.d/conda.sh
+            conda activate kwamz || conda create -n kwamz python=3.11 -y && conda activate kwamz
+            pip install -q -r requirements.txt
+
+            # Run database migrations
+            flask db upgrade
+
+            # Restart gunicorn via supervisor
+            sudo supervisorctl restart kwamz-backend
+
+            # Reload nginx config
+            sudo nginx -t && sudo systemctl reload nginx
+
+            # Cleanup old Docker images
             docker image prune -af --filter "until=24h"
-
-            # Show status
-            docker compose -f docker-compose.prod.yml ps
 
       - name: Health check
         uses: appleboy/ssh-action@v1.0.3
@@ -152,11 +163,10 @@ jobs:
           username: ${{ secrets.DO_USERNAME }}
           key: ${{ secrets.DO_SSH_KEY }}
           script: |
-            # Wait for services to start
             sleep 15
-
-            # Check if services are healthy
             curl -f http://localhost/api/health || echo "Health check endpoint not available"
+            docker ps --format "table {{.Names}}\t{{.Status}}"
+            sudo supervisorctl status kwamz-backend
 
       - name: Notify on success
         if: success()
