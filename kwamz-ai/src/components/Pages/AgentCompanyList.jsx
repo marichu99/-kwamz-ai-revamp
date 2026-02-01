@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
-import { Search, MoreVertical, Edit, Plus, Download, Upload, RefreshCw, Trash2, Power, ChevronRight } from 'lucide-react';
+import { Search, MoreVertical, Edit, Plus, Download, Upload, RefreshCw, Trash2, Power, ChevronRight, Filter, X, AlertTriangle } from 'lucide-react';
 import axios from 'axios';
 import * as XLSX from 'xlsx';
 import config from '../../Config';
@@ -22,9 +22,14 @@ function AgentCompanyList() {
   const [validAgentCompanies, setValidAgentCompanies] = useState([]);
   const [invalidAgentCompanies, setInvalidAgentCompanies] = useState([]);
   const [batchFile, setBatchFile] = useState(null);
+  const [isFilterPanelOpen, setIsFilterPanelOpen] = useState(false);
+  const [floatThreshold, setFloatThreshold] = useState('');
+  const [commissionThreshold, setCommissionThreshold] = useState('');
+  const [fraudFilter, setFraudFilter] = useState('all'); // 'all', 'flagged', 'not_flagged'
   const { showToast } = useToast();
   const fileInputRef = useRef(null);
   const dropdownRef = useRef(null);
+  const filterPanelRef = useRef(null);
 
   // Fetch agent companies from API
   const fetchAgentCompanies = async () => {
@@ -51,18 +56,76 @@ function AgentCompanyList() {
     fetchAgentCompanies();
   }, []);
 
-  // Handle search
+  // Helper function to get balance from account
+  const getAccountBalance = (agentCompany, accountType) => {
+    if (!agentCompany.accounts || !Array.isArray(agentCompany.accounts)) {
+      return 0;
+    }
+    const account = agentCompany.accounts.find(
+      acc => acc.account_type?.toLowerCase().includes(accountType.toLowerCase())
+    );
+    if (account?.balances?.current_balance) {
+      return parseFloat(account.balances.current_balance) || 0;
+    }
+    return 0;
+  };
+
+  // Handle search and filters
   useEffect(() => {
-    const filtered = agentCompanies.filter(
+    let filtered = agentCompanies.filter(
       (ac) =>
         ac.company_name?.toLowerCase().includes(searchTerm.toLowerCase()) ||
         ac.registration_number?.toLowerCase().includes(searchTerm.toLowerCase()) ||
         ac.till_number?.toLowerCase().includes(searchTerm.toLowerCase()) ||
         ac.contact_phone?.toLowerCase().includes(searchTerm.toLowerCase())
     );
+
+    // Filter by float threshold
+    if (floatThreshold !== '' && !isNaN(parseFloat(floatThreshold))) {
+      const threshold = parseFloat(floatThreshold);
+      filtered = filtered.filter((ac) => {
+        const floatBalance = getAccountBalance(ac, 'float');
+        return floatBalance < threshold;
+      });
+    }
+
+    // Filter by commission threshold
+    if (commissionThreshold !== '' && !isNaN(parseFloat(commissionThreshold))) {
+      const threshold = parseFloat(commissionThreshold);
+      filtered = filtered.filter((ac) => {
+        const commissionBalance = getAccountBalance(ac, 'commission');
+        return commissionBalance < threshold;
+      });
+    }
+
+    // Filter by fraud flag
+    if (fraudFilter === 'flagged') {
+      filtered = filtered.filter((ac) =>
+        ac.fraud_risk_level?.toLowerCase() === 'high' ||
+        ac.fraud_risk_level?.toLowerCase() === 'medium' ||
+        ac.fraud_risk_description
+      );
+    } else if (fraudFilter === 'not_flagged') {
+      filtered = filtered.filter((ac) =>
+        (!ac.fraud_risk_level || ac.fraud_risk_level?.toLowerCase() === 'low') &&
+        !ac.fraud_risk_description
+      );
+    }
+
     setFilteredAgentCompanies(filtered);
     setCurrentPage(1);
-  }, [searchTerm, agentCompanies]);
+  }, [searchTerm, agentCompanies, floatThreshold, commissionThreshold, fraudFilter]);
+
+  // Clear all filters
+  const clearFilters = () => {
+    setFloatThreshold('');
+    setCommissionThreshold('');
+    setFraudFilter('all');
+    setSearchTerm('');
+  };
+
+  // Check if any filters are active
+  const hasActiveFilters = floatThreshold !== '' || commissionThreshold !== '' || fraudFilter !== 'all';
 
   // Helper functions to extract account data
   const getAccountByType = (agentCompany, type) => {
@@ -525,18 +588,140 @@ function AgentCompanyList() {
         type="agentCompanies"
       />
 
-      {/* Search Control */}
-      <div className="mb-6">
-        <div className="relative">
-          <Search className="w-4 h-4 absolute left-3 top-1/2 transform -translate-y-1/2 text-slate-400" />
-          <input
-            type="text"
-            placeholder="Search by name, registration, or till number"
-            value={searchTerm}
-            onChange={(e) => setSearchTerm(e.target.value)}
-            className="w-full pl-10 pr-4 py-2.5 bg-slate-100 dark:bg-slate-700 border border-slate-200 dark:border-slate-600 rounded-xl text-slate-800 dark:text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all"
-          />
+      {/* Search and Filter Controls */}
+      <div className="mb-6 space-y-4">
+        <div className="flex gap-3">
+          <div className="relative flex-1">
+            <Search className="w-4 h-4 absolute left-3 top-1/2 transform -translate-y-1/2 text-slate-400" />
+            <input
+              type="text"
+              placeholder="Search by name, registration, or till number"
+              value={searchTerm}
+              onChange={(e) => setSearchTerm(e.target.value)}
+              className="w-full pl-10 pr-4 py-2.5 bg-slate-100 dark:bg-slate-700 border border-slate-200 dark:border-slate-600 rounded-xl text-slate-800 dark:text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all"
+            />
+          </div>
+          <button
+            onClick={() => setIsFilterPanelOpen(!isFilterPanelOpen)}
+            className={`flex items-center space-x-2 py-2.5 px-4 rounded-xl border transition-all ${
+              hasActiveFilters
+                ? 'bg-blue-500 text-white border-blue-500 hover:bg-blue-600'
+                : 'bg-slate-100 dark:bg-slate-700 text-slate-700 dark:text-slate-300 border-slate-200 dark:border-slate-600 hover:bg-slate-200 dark:hover:bg-slate-600'
+            }`}
+          >
+            <Filter className="w-4 h-4" />
+            <span>Filters</span>
+            {hasActiveFilters && (
+              <span className="bg-white text-blue-500 text-xs font-bold px-1.5 py-0.5 rounded-full">
+                {(floatThreshold !== '' ? 1 : 0) + (commissionThreshold !== '' ? 1 : 0) + (fraudFilter !== 'all' ? 1 : 0)}
+              </span>
+            )}
+          </button>
         </div>
+
+        {/* Filter Panel */}
+        {isFilterPanelOpen && (
+          <div ref={filterPanelRef} className="bg-slate-50 dark:bg-slate-700/50 border border-slate-200 dark:border-slate-600 rounded-xl p-4">
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="font-semibold text-slate-700 dark:text-slate-300">Filter Tills</h3>
+              {hasActiveFilters && (
+                <button
+                  onClick={clearFilters}
+                  className="text-sm text-blue-500 hover:text-blue-600 flex items-center space-x-1"
+                >
+                  <X className="w-3 h-3" />
+                  <span>Clear all</span>
+                </button>
+              )}
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              {/* Float Balance Filter */}
+              <div>
+                <label className="block text-sm font-medium text-slate-600 dark:text-slate-400 mb-1.5">
+                  Float Balance Below (KES)
+                </label>
+                <input
+                  type="number"
+                  placeholder="e.g., 10000"
+                  value={floatThreshold}
+                  onChange={(e) => setFloatThreshold(e.target.value)}
+                  className="w-full px-3 py-2 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-600 rounded-lg text-slate-800 dark:text-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all"
+                />
+              </div>
+
+              {/* Commission Balance Filter */}
+              <div>
+                <label className="block text-sm font-medium text-slate-600 dark:text-slate-400 mb-1.5">
+                  Commission Balance Below (KES)
+                </label>
+                <input
+                  type="number"
+                  placeholder="e.g., 5000"
+                  value={commissionThreshold}
+                  onChange={(e) => setCommissionThreshold(e.target.value)}
+                  className="w-full px-3 py-2 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-600 rounded-lg text-slate-800 dark:text-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all"
+                />
+              </div>
+
+              {/* Fraud Flag Filter */}
+              <div>
+                <label className="block text-sm font-medium text-slate-600 dark:text-slate-400 mb-1.5">
+                  Fraud Status
+                </label>
+                <select
+                  value={fraudFilter}
+                  onChange={(e) => setFraudFilter(e.target.value)}
+                  className="w-full px-3 py-2 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-600 rounded-lg text-slate-800 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all"
+                >
+                  <option value="all">All Tills</option>
+                  <option value="flagged">Flagged for Fraud</option>
+                  <option value="not_flagged">Not Flagged</option>
+                </select>
+              </div>
+            </div>
+
+            {/* Active Filters Summary */}
+            {hasActiveFilters && (
+              <div className="mt-4 pt-3 border-t border-slate-200 dark:border-slate-600">
+                <div className="flex items-center flex-wrap gap-2">
+                  <span className="text-sm text-slate-500 dark:text-slate-400">Active filters:</span>
+                  {floatThreshold !== '' && (
+                    <span className="inline-flex items-center px-2 py-1 rounded-full text-xs bg-blue-100 text-blue-700 dark:bg-blue-900/50 dark:text-blue-400">
+                      Float &lt; KES {parseFloat(floatThreshold).toLocaleString()}
+                      <button onClick={() => setFloatThreshold('')} className="ml-1 hover:text-blue-900">
+                        <X className="w-3 h-3" />
+                      </button>
+                    </span>
+                  )}
+                  {commissionThreshold !== '' && (
+                    <span className="inline-flex items-center px-2 py-1 rounded-full text-xs bg-green-100 text-green-700 dark:bg-green-900/50 dark:text-green-400">
+                      Commission &lt; KES {parseFloat(commissionThreshold).toLocaleString()}
+                      <button onClick={() => setCommissionThreshold('')} className="ml-1 hover:text-green-900">
+                        <X className="w-3 h-3" />
+                      </button>
+                    </span>
+                  )}
+                  {fraudFilter !== 'all' && (
+                    <span className={`inline-flex items-center px-2 py-1 rounded-full text-xs ${
+                      fraudFilter === 'flagged'
+                        ? 'bg-red-100 text-red-700 dark:bg-red-900/50 dark:text-red-400'
+                        : 'bg-slate-100 text-slate-700 dark:bg-slate-600 dark:text-slate-300'
+                    }`}>
+                      {fraudFilter === 'flagged' ? 'Flagged for Fraud' : 'Not Flagged'}
+                      <button onClick={() => setFraudFilter('all')} className="ml-1 hover:opacity-75">
+                        <X className="w-3 h-3" />
+                      </button>
+                    </span>
+                  )}
+                </div>
+                <div className="mt-2 text-sm text-slate-500 dark:text-slate-400">
+                  Showing {filteredAgentCompanies.length} of {agentCompanies.length} tills
+                </div>
+              </div>
+            )}
+          </div>
+        )}
       </div>
 
       {/* Agent Companies Grid */}
@@ -554,7 +739,6 @@ function AgentCompanyList() {
               </th>
               <th className="px-4 py-3 font-semibold">ID</th>
               <th className="px-4 py-3 font-semibold">Company Name</th>
-              <th className="px-4 py-3 font-semibold">Reg. Number</th>
               <th className="px-4 py-3 font-semibold">Till Short Code</th>
               <th className="px-4 py-3 font-semibold">Float Account</th>
               <th className="px-4 py-3 font-semibold">Commission Account</th>
@@ -581,19 +765,57 @@ function AgentCompanyList() {
                   </td>
                   <td className="px-4 py-3">{agentCompany.id}</td>
                   <td className="px-4 py-3">
-                    <div className="font-medium">{agentCompany.company_name}</div>
+                    <div className="flex items-center gap-2">
+                      <span className="font-medium">{agentCompany.company_name}</span>
+                      {(agentCompany.fraud_risk_level?.toLowerCase() === 'high' ||
+                        agentCompany.fraud_risk_level?.toLowerCase() === 'medium' ||
+                        agentCompany.fraud_risk_description) && (
+                        <span
+                          className={`inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium ${
+                            agentCompany.fraud_risk_level?.toLowerCase() === 'high'
+                              ? 'bg-red-100 text-red-700 dark:bg-red-900/50 dark:text-red-400'
+                              : 'bg-yellow-100 text-yellow-700 dark:bg-yellow-900/50 dark:text-yellow-400'
+                          }`}
+                          title={agentCompany.fraud_risk_description || `Fraud Risk: ${agentCompany.fraud_risk_level}`}
+                        >
+                          <AlertTriangle className="w-3 h-3 mr-0.5" />
+                          {agentCompany.fraud_risk_level?.toLowerCase() === 'high' ? 'High Risk' : 'Flagged'}
+                        </span>
+                      )}
+                    </div>
                     <div className="text-xs text-slate-500">{agentCompany.location || 'N/A'}</div>
-                  </td>
-                  <td className="px-4 py-3">
-                    <div className="font-medium">{agentCompany.registration_number || 'N/A'}</div>
-                    {agentCompany.till_number && (
-                      <div className="text-xs text-slate-500">Till: {agentCompany.till_number}</div>
+                    {agentCompany.fraud_risk_description && (
+                      <div className="text-xs text-red-500 dark:text-red-400 mt-0.5">
+                        {agentCompany.fraud_risk_description}
+                      </div>
+                    )}
+
+                    {/* User Agents under company name */}
+                    {agentCompany.user_agents && agentCompany.user_agents.length > 0 && (
+                      <div className="mt-2 pt-2 border-t border-slate-200 dark:border-slate-600">
+                        <div className="flex items-center mb-1">
+                          <span className="px-1.5 py-0.5 rounded text-xs bg-blue-100 text-blue-700 dark:bg-blue-900/50 dark:text-blue-400 font-medium">
+                            {agentCompany.user_agents_count} Agent{agentCompany.user_agents_count !== 1 ? 's' : ''}
+                          </span>
+                        </div>
+                        {agentCompany.user_agents.map((ua, idx) => (
+                          <div key={ua.id || idx} className="text-xs py-0.5">
+                            <div className="flex items-center">
+                              <span className={`w-2 h-2 rounded-full mr-1.5 flex-shrink-0 ${ua.is_authentic ? 'bg-green-500' : 'bg-yellow-500'}`}></span>
+                              <span className="font-medium">{ua.fullname}</span>
+                              {ua.phone_number && (
+                                <span className="text-slate-500 dark:text-slate-400 ml-2">{ua.phone_number}</span>
+                              )}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
                     )}
                   </td>
                   <td className="px-4 py-3">
                     <div className="font-medium">{agentCompany.agentcompany_code || 'N/A'}</div>
-                    {agentCompany.contact_phone && (
-                      <div className="text-xs text-slate-500">{agentCompany.contact_phone}</div>
+                    {agentCompany.till_number && (
+                      <div className="text-xs text-slate-500">Till: {agentCompany.till_number}</div>
                     )}
                   </td>
 

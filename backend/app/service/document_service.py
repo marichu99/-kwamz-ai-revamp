@@ -19,18 +19,24 @@ class DocumentProcessingService:
 
     def _get_company_id(self, agent_id):
         """Resolve company_id from agent via AgentCompany relationship"""
-        
+
+        if not agent_id:
+            raise ValueError("Agent ID is required. Please provide a valid agent_id.")
+
         # Get a specific UserAgent by ID
         user_agent = UserAgent.query.filter_by(id=agent_id).first()
 
+        if not user_agent:
+            raise ValueError(f"Agent with ID {agent_id} not found. Please create the agent first.")
+
         # Then access their associated agent companies
         agent_companies = user_agent.agent_companies
-        if len(agent_companies)>0:
+        if len(agent_companies) > 0:
             company = agent_companies[0].company_id
             print(f"The company id is {company}")
             return company
         else:
-            raise ValueError("Agent not associated with any company.")
+            raise ValueError("Agent not associated with any company. Please link the agent to a company first.")
 
     def _upload_to_gcp(self, file_stream, company_id, agent_id, doc_type, filename):
         """Upload file to GCP with structured path"""

@@ -11,6 +11,8 @@ def get_all_configs():
     """Get all report configurations for the current user"""
     try:
         current_user_id = get_jwt_identity()
+        # Ensure user_id is an integer for comparison
+        current_user_id = int(current_user_id) if current_user_id else None
         configs = UserReportConfigService.get_all_configs_for_user(current_user_id)
         return jsonify({
             'success': True,
@@ -29,6 +31,8 @@ def get_config(config_id):
     """Get a specific configuration by ID"""
     try:
         current_user_id = get_jwt_identity()
+        # Ensure user_id is an integer for comparison
+        current_user_id = int(current_user_id) if current_user_id else None
         config = UserReportConfigService.get_config_by_id(config_id)
 
         if not config:
@@ -61,6 +65,8 @@ def create_config():
     """Create a new report configuration"""
     try:
         current_user_id = get_jwt_identity()
+        # Ensure user_id is an integer
+        current_user_id = int(current_user_id) if current_user_id else None
         data = request.get_json()
 
         # Validate data
@@ -93,6 +99,8 @@ def update_config(config_id):
     """Update an existing configuration"""
     try:
         current_user_id = get_jwt_identity()
+        # Ensure user_id is an integer for comparison
+        current_user_id = int(current_user_id) if current_user_id else None
         data = request.get_json()
 
         # Check if config exists and belongs to user
@@ -144,6 +152,8 @@ def delete_config(config_id):
     """Delete a configuration"""
     try:
         current_user_id = get_jwt_identity()
+        # Ensure user_id is an integer for comparison
+        current_user_id = int(current_user_id) if current_user_id else None
 
         # Check if config exists and belongs to user
         existing_config = UserReportConfigService.get_config_by_id(config_id)
@@ -184,6 +194,8 @@ def toggle_config(config_id):
     """Toggle configuration active status"""
     try:
         current_user_id = get_jwt_identity()
+        # Ensure user_id is an integer for comparison
+        current_user_id = int(current_user_id) if current_user_id else None
 
         # Check if config exists and belongs to user
         existing_config = UserReportConfigService.get_config_by_id(config_id)

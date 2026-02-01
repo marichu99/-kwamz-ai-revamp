@@ -14,6 +14,8 @@ import os
 import pandas as pd
 from werkzeug.utils import secure_filename
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
+from flask import current_app
+from datetime import timedelta
 
 class CompanyService:
     def __init__(self, db):
@@ -26,13 +28,111 @@ class CompanyService:
     def allowed_file(self, filename):
         return '.' in filename and filename.rsplit('.', 1)[1].lower() in self.ALLOWED_EXTENSIONS
 
-    def save_file(self, file):
+    def _get_gcp_client(self):
+        """Get GCP storage client from app context"""
+        if hasattr(current_app, 'document_service') and current_app.document_service:
+            return current_app.document_service.storage_client, current_app.document_service.bucket_name
+        return None, None
+
+    def save_file(self, file, company_id=None):
+        """Save file to GCP Cloud Storage"""
         if file and self.allowed_file(file.filename):
-            filename = secure_filename(file.filename)
-            file_path = os.path.join(self.UPLOAD_FOLDER, filename)
-            file.save(file_path)
-            return file_path
+            try:
+                storage_client, bucket_name = self._get_gcp_client()
+                if not storage_client:
+                    print("GCP storage client not available")
+                    return None
+
+                # Generate unique filename
+                filename = secure_filename(file.filename)
+                unique_name = f"{uuid.uuid4().hex}_{filename}"
+
+                # Build path: companies/cr12/{company_id or 'new'}/{unique_name}
+                folder = f"companies/cr12/{company_id or 'pending'}"
+                blob_path = f"{folder}/{unique_name}"
+
+                # Upload to GCP
+                bucket = storage_client.bucket(bucket_name)
+                blob = bucket.blob(blob_path)
+                file.seek(0)
+                blob.upload_from_file(file, content_type=file.content_type or 'application/pdf')
+
+                print(f"File uploaded to GCP: {blob_path}")
+                return blob_path
+
+            except Exception as e:
+                print(f"Error uploading to GCP: {e}")
+                return None
         return None
+
+    def delete_file(self, gcp_path: str) -> bool:
+        """Delete file from GCP Cloud Storage"""
+        if not gcp_path:
+            return False
+        try:
+            storage_client, bucket_name = self._get_gcp_client()
+            if not storage_client:
+                print("GCP storage client not available")
+                return False
+
+            bucket = storage_client.bucket(bucket_name)
+            blob = bucket.blob(gcp_path)
+
+            if blob.exists():
+                blob.delete()
+                print(f"File deleted from GCP: {gcp_path}")
+                return True
+            else:
+                print(f"File not found in GCP: {gcp_path}")
+                return True  # Consider it deleted if not found
+
+        except Exception as e:
+            print(f"Error deleting from GCP: {e}")
+            return False
+
+    def get_file_url(self, gcp_path: str, expires: int = 3600) -> str:
+        """Get signed URL for file download from GCP"""
+        if not gcp_path:
+            return None
+        try:
+            storage_client, bucket_name = self._get_gcp_client()
+            if not storage_client:
+                print("GCP storage client not available")
+                return None
+
+            bucket = storage_client.bucket(bucket_name)
+            blob = bucket.blob(gcp_path)
+
+            # Generate signed URL
+            url = blob.generate_signed_url(
+                version="v4",
+                expiration=timedelta(seconds=expires),
+                method="GET"
+            )
+            return url
+
+        except Exception as e:
+            print(f"Error getting signed URL from GCP: {e}")
+            return None
+
+    def get_file_bytes(self, gcp_path: str) -> bytes:
+        """Get file bytes from GCP Cloud Storage"""
+        if not gcp_path:
+            return None
+        try:
+            storage_client, bucket_name = self._get_gcp_client()
+            if not storage_client:
+                print("GCP storage client not available")
+                return None
+
+            bucket = storage_client.bucket(bucket_name)
+            blob = bucket.blob(gcp_path)
+
+            return blob.download_as_bytes()
+
+        except Exception as e:
+            print(f"Error getting file from GCP: {e}")
+            return None
 
     def get_companies(self):
         """Retrieve all companies."""
@@ -126,14 +226,18 @@ class CompanyService:
         company = self.get_company_by_id(company_id)
         if not company:
             return None, "Company not found"
-        
+
         company.user_id = update_data["user_id"]
         print(f"The shortcode is {update_data['shortcode']}")
 
         try:
-            # Handle file upload
+            # Handle file upload - delete old file if re-uploading
             file_location = company.file_location
             if file and self.allowed_file(file.filename):
+                # Delete old file from MinIO if it exists
+                if company.file_location:
+                    self.delete_file(company.file_location)
+                # Upload new file
                 file_location = self.save_file(file)
 
             # Update basic company fields
@@ -358,6 +462,7 @@ class CompanyService:
                         # Continue without registration date
 
                 company = Company(
+                    id=company_data.get('id') or None,
                     company_name=company_data['company_name'],
                     registration_number=company_data['company_number'],
                     registration_date=registration_date,

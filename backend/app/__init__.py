@@ -93,16 +93,17 @@ def create_app():
         print("Warning: Google Cloud Storage not configured (GOOGLE_APPLICATION_CREDENTIALS not found)")
 
     transaction_service = TransactionService()
-    
+
     with app.app_context():
         db.create_all()
         pesapal_client.initialize()
-        
+
     # Attach to app for access in blueprints
     app.payment_service = payment_service
     app.pesapal_client = pesapal_client
-    app.document_service = document_service        
+    app.document_service = document_service
     app.transaction_service = transaction_service
+    app.storage_client = storage_client  # GCP storage client for direct access
     app.celery = celery  # Make celery available on app instance
 
     # Register blueprints
@@ -117,7 +118,9 @@ def create_app():
     from app.controller.transaction_controller import transaction_bp
     from app.controller.user_report_config_controller import user_report_config_bp
     from app.controller.confg_controller import config_bp
+    from app.controller.health_controller import health_bp
 
+    app.register_blueprint(health_bp, url_prefix='/api')
     app.register_blueprint(user_bp, url_prefix='/users')
     app.register_blueprint(bank_bp, url_prefix='/banks')
     app.register_blueprint(document_bp, url_prefix='/document')

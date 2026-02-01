@@ -27,3 +27,4 @@ xlrd
 celery
 redis
 flower
+minio

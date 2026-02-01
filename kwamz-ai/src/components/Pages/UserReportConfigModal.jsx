@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { X, Clock, Mail, FileText, Calendar, Save, AlertCircle } from 'lucide-react';
+import { X, Clock, Mail, FileText, Calendar, Save, AlertCircle, Shield, Bell, Info } from 'lucide-react';
 
 function UserReportConfigModal({ isOpen, onClose, onSubmit, isLoading, config }) {
   const [formData, setFormData] = useState({
@@ -9,7 +9,32 @@ function UserReportConfigModal({ isOpen, onClose, onSubmit, isLoading, config })
     frequency_value: 1,
     frequency_unit: 'days',
     recipient_emails: '',
-    is_active: true
+    is_active: true,
+
+    // Fraud Detection Parameters
+    time_window_minutes: 5,
+    amount_variance: 0.1,
+    min_transactions_rollover: 3,
+    split_threshold: 5,
+    split_min_amount: 100.0,
+    split_max_amount: 50000.0,
+    split_total_amount_threshold: 10000.0,
+    rapid_back_forth_threshold: 2,
+
+    // Risk Thresholds
+    high_risk_score: 50,
+    medium_risk_score: 30,
+
+    // Analysis Settings
+    analysis_period_days: 30,
+    max_transactions_per_check: 100,
+
+    // Notification Settings
+    notify_high_risk: true,
+    notify_medium_risk: false,
+    notify_split_transactions: true,
+    notify_rollover_fraud: true,
+    notify_rapid_patterns: true
   });
 
   const [errors, setErrors] = useState({});
@@ -59,7 +84,32 @@ function UserReportConfigModal({ isOpen, onClose, onSubmit, isLoading, config })
         frequency_value: config.frequency_value || 1,
         frequency_unit: config.frequency_unit || 'days',
         recipient_emails: config.recipient_emails || '',
-        is_active: config.is_active !== undefined ? config.is_active : true
+        is_active: config.is_active !== undefined ? config.is_active : true,
+
+        // Fraud Detection Parameters
+        time_window_minutes: config.time_window_minutes || 5,
+        amount_variance: config.amount_variance || 0.1,
+        min_transactions_rollover: config.min_transactions_rollover || 3,
+        split_threshold: config.split_threshold || 5,
+        split_min_amount: config.split_min_amount || 100.0,
+        split_max_amount: config.split_max_amount || 50000.0,
+        split_total_amount_threshold: config.split_total_amount_threshold || 10000.0,
+        rapid_back_forth_threshold: config.rapid_back_forth_threshold || 2,
+
+        // Risk Thresholds
+        high_risk_score: config.high_risk_score || 50,
+        medium_risk_score: config.medium_risk_score || 30,
+
+        // Analysis Settings
+        analysis_period_days: config.analysis_period_days || 30,
+        max_transactions_per_check: config.max_transactions_per_check || 100,
+
+        // Notification Settings
+        notify_high_risk: config.notify_high_risk !== undefined ? config.notify_high_risk : true,
+        notify_medium_risk: config.notify_medium_risk !== undefined ? config.notify_medium_risk : false,
+        notify_split_transactions: config.notify_split_transactions !== undefined ? config.notify_split_transactions : true,
+        notify_rollover_fraud: config.notify_rollover_fraud !== undefined ? config.notify_rollover_fraud : true,
+        notify_rapid_patterns: config.notify_rapid_patterns !== undefined ? config.notify_rapid_patterns : true
       });
     } else {
       resetForm();
@@ -74,7 +124,32 @@ function UserReportConfigModal({ isOpen, onClose, onSubmit, isLoading, config })
       frequency_value: 1,
       frequency_unit: 'days',
       recipient_emails: '',
-      is_active: true
+      is_active: true,
+
+      // Fraud Detection Parameters
+      time_window_minutes: 5,
+      amount_variance: 0.1,
+      min_transactions_rollover: 3,
+      split_threshold: 5,
+      split_min_amount: 100.0,
+      split_max_amount: 50000.0,
+      split_total_amount_threshold: 10000.0,
+      rapid_back_forth_threshold: 2,
+
+      // Risk Thresholds
+      high_risk_score: 50,
+      medium_risk_score: 30,
+
+      // Analysis Settings
+      analysis_period_days: 30,
+      max_transactions_per_check: 100,
+
+      // Notification Settings
+      notify_high_risk: true,
+      notify_medium_risk: false,
+      notify_split_transactions: true,
+      notify_rollover_fraud: true,
+      notify_rapid_patterns: true
     });
     setErrors({});
     setActiveSection('general');
@@ -153,6 +228,9 @@ function UserReportConfigModal({ isOpen, onClose, onSubmit, isLoading, config })
   const sections = [
     { id: 'general', label: 'General', icon: <FileText className="w-4 h-4" /> },
     { id: 'schedule', label: 'Schedule', icon: <Clock className="w-4 h-4" /> },
+    { id: 'detection', label: 'Detection', icon: <Shield className="w-4 h-4" /> },
+    { id: 'notifications', label: 'Notifications', icon: <Bell className="w-4 h-4" /> },
+    { id: 'risk', label: 'Risk Thresholds', icon: <Info className="w-4 h-4" /> },
     { id: 'recipients', label: 'Recipients', icon: <Mail className="w-4 h-4" /> }
   ];
 
@@ -383,6 +461,354 @@ function UserReportConfigModal({ isOpen, onClose, onSubmit, isLoading, config })
                           : formData.frequency_unit}
                       </span>
                     </p>
+                  </div>
+                </div>
+              )}
+
+              {/* Detection Parameters Section */}
+              {activeSection === 'detection' && (
+                <div className="space-y-6">
+                  <div>
+                    <h3 className="text-lg font-semibold text-slate-800 dark:text-white mb-2">
+                      Fraud Detection Parameters
+                    </h3>
+                    <p className="text-sm text-slate-600 dark:text-slate-300">
+                      Configure fraud detection sensitivity for this report
+                    </p>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-4">
+                    <div>
+                      <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">
+                        Time Window (minutes)
+                      </label>
+                      <input
+                        type="number"
+                        name="time_window_minutes"
+                        value={formData.time_window_minutes}
+                        onChange={handleChange}
+                        min="1"
+                        max="60"
+                        className="w-full px-4 py-2.5 bg-slate-100 dark:bg-slate-700 border border-slate-200 dark:border-slate-600 rounded-xl text-slate-800 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all"
+                      />
+                      <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+                        Time window for detecting patterns (1-60 min)
+                      </p>
+                    </div>
+
+                    <div>
+                      <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">
+                        Amount Variance
+                      </label>
+                      <input
+                        type="number"
+                        name="amount_variance"
+                        value={formData.amount_variance}
+                        onChange={handleChange}
+                        min="0.01"
+                        max="1.0"
+                        step="0.01"
+                        className="w-full px-4 py-2.5 bg-slate-100 dark:bg-slate-700 border border-slate-200 dark:border-slate-600 rounded-xl text-slate-800 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all"
+                      />
+                      <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+                        Allowed variance between amounts (0.1 = 10%)
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-3 gap-4">
+                    <div>
+                      <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">
+                        Min Roll-over Txns
+                      </label>
+                      <input
+                        type="number"
+                        name="min_transactions_rollover"
+                        value={formData.min_transactions_rollover}
+                        onChange={handleChange}
+                        min="2"
+                        max="20"
+                        className="w-full px-4 py-2.5 bg-slate-100 dark:bg-slate-700 border border-slate-200 dark:border-slate-600 rounded-xl text-slate-800 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">
+                        Split Threshold
+                      </label>
+                      <input
+                        type="number"
+                        name="split_threshold"
+                        value={formData.split_threshold}
+                        onChange={handleChange}
+                        min="2"
+                        max="20"
+                        className="w-full px-4 py-2.5 bg-slate-100 dark:bg-slate-700 border border-slate-200 dark:border-slate-600 rounded-xl text-slate-800 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">
+                        Rapid Pattern Threshold
+                      </label>
+                      <input
+                        type="number"
+                        name="rapid_back_forth_threshold"
+                        value={formData.rapid_back_forth_threshold}
+                        onChange={handleChange}
+                        min="2"
+                        max="10"
+                        className="w-full px-4 py-2.5 bg-slate-100 dark:bg-slate-700 border border-slate-200 dark:border-slate-600 rounded-xl text-slate-800 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all"
+                      />
+                    </div>
+                  </div>
+
+                  <div className="bg-slate-50 dark:bg-slate-800 rounded-xl p-4">
+                    <h4 className="font-medium text-slate-800 dark:text-white mb-3">
+                      Split Transaction Limits
+                    </h4>
+                    <div className="grid grid-cols-3 gap-4">
+                      <div>
+                        <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">
+                          Min Amount (KES)
+                        </label>
+                        <input
+                          type="number"
+                          name="split_min_amount"
+                          value={formData.split_min_amount}
+                          onChange={handleChange}
+                          min="0"
+                          step="100"
+                          className="w-full px-3 py-2 bg-white dark:bg-slate-700 border border-slate-200 dark:border-slate-600 rounded-xl text-slate-800 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">
+                          Max Amount (KES)
+                        </label>
+                        <input
+                          type="number"
+                          name="split_max_amount"
+                          value={formData.split_max_amount}
+                          onChange={handleChange}
+                          min="0"
+                          step="1000"
+                          className="w-full px-3 py-2 bg-white dark:bg-slate-700 border border-slate-200 dark:border-slate-600 rounded-xl text-slate-800 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">
+                          Total Threshold (KES)
+                        </label>
+                        <input
+                          type="number"
+                          name="split_total_amount_threshold"
+                          value={formData.split_total_amount_threshold}
+                          onChange={handleChange}
+                          min="0"
+                          step="1000"
+                          className="w-full px-3 py-2 bg-white dark:bg-slate-700 border border-slate-200 dark:border-slate-600 rounded-xl text-slate-800 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+                        />
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-4">
+                    <div>
+                      <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">
+                        Analysis Period (days)
+                      </label>
+                      <input
+                        type="number"
+                        name="analysis_period_days"
+                        value={formData.analysis_period_days}
+                        onChange={handleChange}
+                        min="1"
+                        max="365"
+                        className="w-full px-4 py-2.5 bg-slate-100 dark:bg-slate-700 border border-slate-200 dark:border-slate-600 rounded-xl text-slate-800 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all"
+                      />
+                      <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+                        Days to analyze for historical reports
+                      </p>
+                    </div>
+
+                    <div>
+                      <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">
+                        Max Transactions Per Check
+                      </label>
+                      <input
+                        type="number"
+                        name="max_transactions_per_check"
+                        value={formData.max_transactions_per_check}
+                        onChange={handleChange}
+                        min="10"
+                        max="1000"
+                        className="w-full px-4 py-2.5 bg-slate-100 dark:bg-slate-700 border border-slate-200 dark:border-slate-600 rounded-xl text-slate-800 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all"
+                      />
+                      <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+                        Max transactions per shortcode check
+                      </p>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* Notifications Section */}
+              {activeSection === 'notifications' && (
+                <div className="space-y-6">
+                  <div>
+                    <h3 className="text-lg font-semibold text-slate-800 dark:text-white mb-2">
+                      Notification Settings
+                    </h3>
+                    <p className="text-sm text-slate-600 dark:text-slate-300">
+                      Configure which fraud types trigger notifications
+                    </p>
+                  </div>
+
+                  <div className="space-y-4">
+                    <div className="flex items-center justify-between p-4 bg-slate-50 dark:bg-slate-700/50 rounded-xl">
+                      <div>
+                        <h4 className="font-medium text-slate-800 dark:text-white">High Risk Transactions</h4>
+                        <p className="text-sm text-slate-600 dark:text-slate-300">Notify for high-risk fraud cases</p>
+                      </div>
+                      <input
+                        type="checkbox"
+                        name="notify_high_risk"
+                        checked={formData.notify_high_risk}
+                        onChange={handleChange}
+                        className="w-4 h-4 text-blue-600 border-slate-300 rounded focus:ring-blue-500 dark:bg-slate-700 dark:border-slate-600"
+                      />
+                    </div>
+
+                    <div className="flex items-center justify-between p-4 bg-slate-50 dark:bg-slate-700/50 rounded-xl">
+                      <div>
+                        <h4 className="font-medium text-slate-800 dark:text-white">Medium Risk Transactions</h4>
+                        <p className="text-sm text-slate-600 dark:text-slate-300">Notify for medium-risk fraud cases</p>
+                      </div>
+                      <input
+                        type="checkbox"
+                        name="notify_medium_risk"
+                        checked={formData.notify_medium_risk}
+                        onChange={handleChange}
+                        className="w-4 h-4 text-blue-600 border-slate-300 rounded focus:ring-blue-500 dark:bg-slate-700 dark:border-slate-600"
+                      />
+                    </div>
+
+                    <div className="flex items-center justify-between p-4 bg-slate-50 dark:bg-slate-700/50 rounded-xl">
+                      <div>
+                        <h4 className="font-medium text-slate-800 dark:text-white">Split Transactions</h4>
+                        <p className="text-sm text-slate-600 dark:text-slate-300">Notify for split transaction fraud</p>
+                      </div>
+                      <input
+                        type="checkbox"
+                        name="notify_split_transactions"
+                        checked={formData.notify_split_transactions}
+                        onChange={handleChange}
+                        className="w-4 h-4 text-blue-600 border-slate-300 rounded focus:ring-blue-500 dark:bg-slate-700 dark:border-slate-600"
+                      />
+                    </div>
+
+                    <div className="flex items-center justify-between p-4 bg-slate-50 dark:bg-slate-700/50 rounded-xl">
+                      <div>
+                        <h4 className="font-medium text-slate-800 dark:text-white">Roll-over Fraud</h4>
+                        <p className="text-sm text-slate-600 dark:text-slate-300">Notify for roll-over fraud patterns</p>
+                      </div>
+                      <input
+                        type="checkbox"
+                        name="notify_rollover_fraud"
+                        checked={formData.notify_rollover_fraud}
+                        onChange={handleChange}
+                        className="w-4 h-4 text-blue-600 border-slate-300 rounded focus:ring-blue-500 dark:bg-slate-700 dark:border-slate-600"
+                      />
+                    </div>
+
+                    <div className="flex items-center justify-between p-4 bg-slate-50 dark:bg-slate-700/50 rounded-xl">
+                      <div>
+                        <h4 className="font-medium text-slate-800 dark:text-white">Rapid Patterns</h4>
+                        <p className="text-sm text-slate-600 dark:text-slate-300">Notify for rapid back-forth patterns</p>
+                      </div>
+                      <input
+                        type="checkbox"
+                        name="notify_rapid_patterns"
+                        checked={formData.notify_rapid_patterns}
+                        onChange={handleChange}
+                        className="w-4 h-4 text-blue-600 border-slate-300 rounded focus:ring-blue-500 dark:bg-slate-700 dark:border-slate-600"
+                      />
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* Risk Thresholds Section */}
+              {activeSection === 'risk' && (
+                <div className="space-y-6">
+                  <div>
+                    <h3 className="text-lg font-semibold text-slate-800 dark:text-white mb-2">
+                      Risk Score Thresholds
+                    </h3>
+                    <p className="text-sm text-slate-600 dark:text-slate-300">
+                      Configure risk scoring thresholds for fraud classification
+                    </p>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-6">
+                    <div>
+                      <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">
+                        High Risk Score
+                      </label>
+                      <input
+                        type="number"
+                        name="high_risk_score"
+                        value={formData.high_risk_score}
+                        onChange={handleChange}
+                        min="0"
+                        max="100"
+                        className="w-full px-4 py-2.5 bg-slate-100 dark:bg-slate-700 border border-slate-200 dark:border-slate-600 rounded-xl text-slate-800 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all"
+                      />
+                      <p className="mt-2 text-xs text-slate-500 dark:text-slate-400">
+                        Minimum score for high-risk classification (0-100)
+                      </p>
+                    </div>
+
+                    <div>
+                      <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">
+                        Medium Risk Score
+                      </label>
+                      <input
+                        type="number"
+                        name="medium_risk_score"
+                        value={formData.medium_risk_score}
+                        onChange={handleChange}
+                        min="0"
+                        max="100"
+                        className="w-full px-4 py-2.5 bg-slate-100 dark:bg-slate-700 border border-slate-200 dark:border-slate-600 rounded-xl text-slate-800 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all"
+                      />
+                      <p className="mt-2 text-xs text-slate-500 dark:text-slate-400">
+                        Minimum score for medium-risk classification (0-100)
+                      </p>
+                    </div>
+                  </div>
+
+                  {/* Risk Level Guide */}
+                  <div className="bg-blue-50 dark:bg-blue-900/20 rounded-xl p-4">
+                    <h4 className="font-medium text-blue-800 dark:text-blue-200 mb-3 flex items-center">
+                      <Info className="w-4 h-4 mr-2" />
+                      Risk Level Guide
+                    </h4>
+                    <div className="space-y-2 text-sm text-blue-700 dark:text-blue-300">
+                      <div className="flex items-center">
+                        <span className="w-3 h-3 rounded-full bg-red-500 mr-2"></span>
+                        <span>High Risk: Score &ge; {formData.high_risk_score}</span>
+                      </div>
+                      <div className="flex items-center">
+                        <span className="w-3 h-3 rounded-full bg-yellow-500 mr-2"></span>
+                        <span>Medium Risk: Score between {formData.medium_risk_score} and {formData.high_risk_score - 1}</span>
+                      </div>
+                      <div className="flex items-center">
+                        <span className="w-3 h-3 rounded-full bg-green-500 mr-2"></span>
+                        <span>Low Risk: Score &lt; {formData.medium_risk_score}</span>
+                      </div>
+                    </div>
                   </div>
                 </div>
               )}

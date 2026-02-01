@@ -213,3 +213,17 @@ cython_debug/
 marimo/_static/
 marimo/_lsp/
 __marimo__/
+
+# Production secrets and data
+.env.prod
+.env.production
+certbot/
+backups/
+
+# MinIO data
+minio_data/
+
+# SSL certificates
+*.pem
+*.key
+*.crt

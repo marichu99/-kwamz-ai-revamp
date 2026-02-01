@@ -638,3 +638,181 @@ def batch_create_company():
     if error:
         return jsonify({'error': error}), 400
     return jsonify(result), 201
+
+
+# =============================================================================
+# CR12 Document Management Endpoints
+# =============================================================================
+
+@company_bp.route('/<int:company_id>/cr12', methods=['GET'])
+@jwt_required()
+def get_cr12_document(company_id):
+    """
+    Get presigned download URL for CR12 document
+
+    Returns:
+        {
+            "success": true,
+            "download_url": "https://...",
+            "filename": "cr12.pdf"
+        }
+    """
+    try:
+        company = company_service.get_company_by_id(company_id)
+        if not company:
+            return jsonify({'error': 'Company not found'}), 404
+
+        if not company.file_location:
+            return jsonify({'error': 'No CR12 document found for this company'}), 404
+
+        # Get presigned URL (valid for 1 hour)
+        download_url = company_service.get_file_url(company.file_location, expires=3600)
+        if not download_url:
+            return jsonify({'error': 'Failed to generate download URL'}), 500
+
+        return jsonify({
+            'success': True,
+            'download_url': download_url,
+            'object_name': company.file_location,
+            'filename': f"CR12_{company.company_name.replace(' ', '_')}.pdf"
+        }), 200
+
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@company_bp.route('/<int:company_id>/cr12', methods=['DELETE'])
+@jwt_required()
+def delete_cr12_document(company_id):
+    """
+    Delete CR12 document from storage
+
+    Returns:
+        {"success": true, "message": "CR12 document deleted successfully"}
+    """
+    try:
+        current_user_id = get_jwt_identity()
+        company = company_service.get_company_by_id(company_id)
+
+        if not company:
+            return jsonify({'error': 'Company not found'}), 404
+
+        # Check ownership
+        if company.user_id != current_user_id:
+            return jsonify({'error': 'Unauthorized: You can only manage your own company documents'}), 403
+
+        if not company.file_location:
+            return jsonify({'error': 'No CR12 document to delete'}), 404
+
+        # Delete from MinIO
+        deleted = company_service.delete_file(company.file_location)
+        if not deleted:
+            return jsonify({'error': 'Failed to delete file from storage'}), 500
+
+        # Update company record
+        company.file_location = None
+        db.session.commit()
+
+        return jsonify({
+            'success': True,
+            'message': 'CR12 document deleted successfully'
+        }), 200
+
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({'error': str(e)}), 500
+
+
+@company_bp.route('/<int:company_id>/cr12', methods=['POST'])
+@jwt_required()
+def upload_cr12_document(company_id):
+    """
+    Upload or re-upload CR12 document
+
+    Request:
+        - file: PDF file (multipart/form-data)
+
+    Returns:
+        {
+            "success": true,
+            "message": "CR12 document uploaded successfully",
+            "file_location": "companies/cr12/abc123.pdf"
+        }
+    """
+    try:
+        current_user_id = get_jwt_identity()
+        company = company_service.get_company_by_id(company_id)
+
+        if not company:
+            return jsonify({'error': 'Company not found'}), 404
+
+        # Check ownership
+        if company.user_id != current_user_id:
+            return jsonify({'error': 'Unauthorized: You can only manage your own company documents'}), 403
+
+        file = request.files.get('file')
+        if not file:
+            return jsonify({'error': 'No file provided'}), 400
+
+        if not company_service.allowed_file(file.filename):
+            return jsonify({'error': 'Invalid file format. Only PDF files are allowed'}), 400
+
+        # Delete old file if exists
+        if company.file_location:
+            company_service.delete_file(company.file_location)
+
+        # Upload new file
+        file_location = company_service.save_file(file)
+        if not file_location:
+            return jsonify({'error': 'Failed to upload file'}), 500
+
+        # Update company record
+        company.file_location = file_location
+        db.session.commit()
+
+        return jsonify({
+            'success': True,
+            'message': 'CR12 document uploaded successfully',
+            'file_location': file_location
+        }), 200
+
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({'error': str(e)}), 500
+
+
+@company_bp.route('/<int:company_id>/cr12/download', methods=['GET'])
+@jwt_required()
+def download_cr12_document(company_id):
+    """
+    Direct download CR12 document (returns file bytes)
+    """
+    try:
+        company = company_service.get_company_by_id(company_id)
+        if not company:
+            return jsonify({'error': 'Company not found'}), 404
+
+        if not company.file_location:
+            return jsonify({'error': 'No CR12 document found'}), 404
+
+        # Get file bytes from MinIO
+        file_bytes = company_service.get_file_bytes(company.file_location)
+        if not file_bytes:
+            return jsonify({'error': 'Failed to retrieve file'}), 500
+
+        # Create response with file
+        from flask import Response
+        filename = f"CR12_{company.company_name.replace(' ', '_')}.pdf"
+
+        response = Response(
+            file_bytes,
+            mimetype='application/pdf',
+            headers={
+                'Content-Disposition': f'attachment; filename="{filename}"',
+                'Content-Length': len(file_bytes)
+            }
+        )
+        return response
+
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500

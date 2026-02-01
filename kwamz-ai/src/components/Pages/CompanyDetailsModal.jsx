@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { X, Building2, Calendar, MapPin, User, Mail, Users, Plus, Trash2, AlertCircle, Upload, FileText, Hash } from 'lucide-react';
+import { X, Building2, Calendar, MapPin, User, Mail, Users, Plus, Trash2, AlertCircle, Upload, FileText, Hash, Download, Eye, RefreshCw } from 'lucide-react';
 import config from '../../Config';
 
 function CompanyDetailsModal({ isOpen, onClose, onSubmit, isLoading, company }) {
@@ -20,6 +20,9 @@ function CompanyDetailsModal({ isOpen, onClose, onSubmit, isLoading, company }) 
   const [errors, setErrors] = useState({});
   const [isUploadingCR12, setIsUploadingCR12] = useState(false);
   const [isCR12Valid, setIsCR12Valid] = useState(false);
+  const [isDeletingCR12, setIsDeletingCR12] = useState(false);
+  const [isDownloadingCR12, setIsDownloadingCR12] = useState(false);
+  const [existingCR12, setExistingCR12] = useState(null); // For existing company CR12
 
   useEffect(() => {
     if (company) {
@@ -37,9 +40,11 @@ function CompanyDetailsModal({ isOpen, onClose, onSubmit, isLoading, company }) 
         secondary_shareholders: company.secondary_shareholders || [],
         directors: company.directors || [],
         cr12_file: null,
-        cr12_preview: company.cr12_file_location || '',
+        cr12_preview: '',
       });
       setIsCR12Valid(true);
+      // Track if company has existing CR12 document
+      setExistingCR12(company.cr12_file_location ? { location: company.cr12_file_location } : null);
     } else {
       setFormData({
         company_name: '',
@@ -55,9 +60,116 @@ function CompanyDetailsModal({ isOpen, onClose, onSubmit, isLoading, company }) 
         cr12_file: null,
         cr12_preview: '',
       });
+      setExistingCR12(null);
+      setIsCR12Valid(false);
     }
     setErrors({});
   }, [company]);
+
+  // CR12 Document Management Functions
+  const handleDownloadCR12 = async () => {
+    if (!company?.id) return;
+
+    setIsDownloadingCR12(true);
+    try {
+      const token = localStorage.getItem('token');
+      const response = await fetch(`${config.API_URL}/company/${company.id}/cr12`, {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+
+      const result = await response.json();
+      if (result.success && result.download_url) {
+        // Open download URL in new tab
+        window.open(result.download_url, '_blank');
+      } else {
+        setErrors((prev) => ({ ...prev, cr12_file: result.error || 'Failed to get download link' }));
+      }
+    } catch (err) {
+      console.error('Download failed:', err);
+      setErrors((prev) => ({ ...prev, cr12_file: 'Failed to download CR12 document' }));
+    } finally {
+      setIsDownloadingCR12(false);
+    }
+  };
+
+  const handleDeleteCR12 = async () => {
+    if (!company?.id) return;
+
+    if (!window.confirm('Are you sure you want to delete the CR12 document? This action cannot be undone.')) {
+      return;
+    }
+
+    setIsDeletingCR12(true);
+    try {
+      const token = localStorage.getItem('token');
+      const response = await fetch(`${config.API_URL}/company/${company.id}/cr12`, {
+        method: 'DELETE',
+        headers: { Authorization: `Bearer ${token}` }
+      });
+
+      const result = await response.json();
+      if (result.success) {
+        setExistingCR12(null);
+        setFormData((prev) => ({ ...prev, company_number: '' }));
+        setIsCR12Valid(false);
+      } else {
+        setErrors((prev) => ({ ...prev, cr12_file: result.error || 'Failed to delete document' }));
+      }
+    } catch (err) {
+      console.error('Delete failed:', err);
+      setErrors((prev) => ({ ...prev, cr12_file: 'Failed to delete CR12 document' }));
+    } finally {
+      setIsDeletingCR12(false);
+    }
+  };
+
+  const handleReuploadCR12 = async (file) => {
+    if (!company?.id || !file) return;
+
+    setIsUploadingCR12(true);
+    try {
+      const token = localStorage.getItem('token');
+
+      // First upload to company endpoint
+      const uploadFormData = new FormData();
+      uploadFormData.append('file', file);
+
+      const uploadResponse = await fetch(`${config.API_URL}/company/${company.id}/cr12`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}` },
+        body: uploadFormData
+      });
+
+      const uploadResult = await uploadResponse.json();
+      if (!uploadResult.success) {
+        throw new Error(uploadResult.error || 'Upload failed');
+      }
+
+      // Now extract company number from the document
+      const extractFormData = new FormData();
+      extractFormData.append('file', file);
+
+      const extractResponse = await fetch(`${config.API_URL}/document/extract_cr12`, {
+        method: 'POST',
+        body: extractFormData
+      });
+
+      const extractResult = await extractResponse.json();
+
+      if (extractResult.error) {
+        setErrors((prev) => ({ ...prev, cr12_file: extractResult.error }));
+      } else if (extractResult.cr12) {
+        setFormData((prev) => ({ ...prev, company_number: extractResult.cr12 }));
+        setExistingCR12({ location: uploadResult.file_location });
+        setIsCR12Valid(true);
+      }
+    } catch (err) {
+      console.error('Re-upload failed:', err);
+      setErrors((prev) => ({ ...prev, cr12_file: err.message || 'Failed to re-upload CR12 document' }));
+    } finally {
+      setIsUploadingCR12(false);
+    }
+  };
 
   const handleChange = (e) => {
     const { name, value } = e.target;
@@ -78,12 +190,20 @@ function CompanyDetailsModal({ isOpen, onClose, onSubmit, isLoading, company }) 
       return;
     }
 
+    setErrors((prev) => ({ ...prev, cr12_file: '', company_number: '' }));
+
+    // If editing existing company, use re-upload function
+    if (company?.id) {
+      await handleReuploadCR12(file);
+      return;
+    }
+
+    // New company - just extract and store file for submission
     setFormData((prev) => ({
       ...prev,
       cr12_file: file,
       cr12_preview: URL.createObjectURL(file),
     }));
-    setErrors((prev) => ({ ...prev, cr12_file: '', company_number: '' }));
 
     // Upload and extract company number
     setIsUploadingCR12(true);
@@ -91,7 +211,6 @@ function CompanyDetailsModal({ isOpen, onClose, onSubmit, isLoading, company }) 
       const uploadFormData = new FormData();
       uploadFormData.append('file', file);
 
-      // Replace with your actual API URL
       const API_URL = config.API_URL;
       const res = await fetch(`${API_URL}/document/extract_cr12`, {
         method: 'POST',
@@ -117,7 +236,6 @@ function CompanyDetailsModal({ isOpen, onClose, onSubmit, isLoading, company }) 
           ...prev,
           company_number: result.cr12,
         }));
-
       }
       setIsCR12Valid(true);
     } catch (err) {
@@ -723,72 +841,129 @@ function CompanyDetailsModal({ isOpen, onClose, onSubmit, isLoading, company }) 
               <span>CR12 Document</span>
             </h3>
 
-            <div className="bg-gradient-to-br from-blue-50 to-indigo-50 dark:from-blue-900/20 dark:to-indigo-900/20 rounded-xl p-6 border-2 border-dashed border-blue-300 dark:border-blue-700">
-              <div className="flex flex-col items-center justify-center space-y-4">
-                <div className="bg-blue-100 dark:bg-blue-900/40 p-4 rounded-full">
-                  <Upload className="w-8 h-8 text-blue-600 dark:text-blue-400" />
-                </div>
-
-                <div className="text-center">
-                  <label htmlFor="cr12-upload" className="cursor-pointer">
-                    <span className="text-blue-600 dark:text-blue-400 font-semibold hover:text-blue-700 dark:hover:text-blue-300 transition-colors">
-                      Click to upload
-                    </span>
-                    <span className="text-slate-600 dark:text-slate-400"> or drag and drop</span>
-                  </label>
-                  <p className="text-sm text-slate-500 dark:text-slate-400 mt-1">
-                    PDF only (max 5MB)
-                  </p>
-                </div>
-
-                <input
-                  id="cr12-upload"
-                  type="file"
-                  accept=".pdf"
-                  onChange={handleFileChange}
-                  className="hidden"
-                  disabled={isLoading || isUploadingCR12}
-                />
-
-                {isUploadingCR12 && (
-                  <div className="flex items-center space-x-2 text-blue-600 dark:text-blue-400">
-                    <svg className="animate-spin h-4 w-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
-                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                    </svg>
-                    <span className="text-sm font-medium">Extracting company number...</span>
+            {/* Existing CR12 Document - Show management options */}
+            {existingCR12 && !isUploadingCR12 && (
+              <div className="bg-emerald-50 dark:bg-emerald-900/20 rounded-xl p-6 border-2 border-emerald-300 dark:border-emerald-700 mb-4">
+                <div className="flex flex-col sm:flex-row items-center justify-between gap-4">
+                  <div className="flex items-center space-x-3">
+                    <div className="bg-emerald-100 dark:bg-emerald-900/40 p-3 rounded-full">
+                      <FileText className="w-6 h-6 text-emerald-600 dark:text-emerald-400" />
+                    </div>
+                    <div>
+                      <p className="font-semibold text-emerald-800 dark:text-emerald-200">CR12 Document Uploaded</p>
+                      <p className="text-sm text-emerald-600 dark:text-emerald-400">Document is stored securely</p>
+                    </div>
                   </div>
-                )}
 
-                {formData.cr12_file && !isUploadingCR12 && (
-                  <div className="flex items-center space-x-2 bg-white dark:bg-slate-800 px-4 py-2 rounded-lg border border-slate-200 dark:border-slate-700">
-                    <FileText className="w-4 h-4 text-emerald-600" />
-                    <span className="text-sm text-slate-700 dark:text-slate-300 font-medium">
-                      {formData.cr12_file.name}
-                    </span>
+                  <div className="flex items-center space-x-2">
+                    {/* Download Button */}
+                    <button
+                      type="button"
+                      onClick={handleDownloadCR12}
+                      disabled={isDownloadingCR12 || isDeletingCR12}
+                      className="flex items-center space-x-1 px-3 py-2 bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-400 rounded-lg hover:bg-blue-200 dark:hover:bg-blue-900/50 transition-all text-sm font-medium disabled:opacity-50"
+                    >
+                      {isDownloadingCR12 ? (
+                        <RefreshCw className="w-4 h-4 animate-spin" />
+                      ) : (
+                        <Download className="w-4 h-4" />
+                      )}
+                      <span>Download</span>
+                    </button>
+
+                    {/* Re-upload Button */}
+                    <label
+                      htmlFor="cr12-reupload"
+                      className={`flex items-center space-x-1 px-3 py-2 bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-400 rounded-lg hover:bg-amber-200 dark:hover:bg-amber-900/50 transition-all text-sm font-medium cursor-pointer ${(isUploadingCR12 || isDeletingCR12) ? 'opacity-50 cursor-not-allowed' : ''}`}
+                    >
+                      <RefreshCw className="w-4 h-4" />
+                      <span>Replace</span>
+                    </label>
+                    <input
+                      id="cr12-reupload"
+                      type="file"
+                      accept=".pdf"
+                      onChange={handleFileChange}
+                      className="hidden"
+                      disabled={isLoading || isUploadingCR12 || isDeletingCR12}
+                    />
+
+                    {/* Delete Button */}
+                    <button
+                      type="button"
+                      onClick={handleDeleteCR12}
+                      disabled={isDownloadingCR12 || isDeletingCR12}
+                      className="flex items-center space-x-1 px-3 py-2 bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-400 rounded-lg hover:bg-red-200 dark:hover:bg-red-900/50 transition-all text-sm font-medium disabled:opacity-50"
+                    >
+                      {isDeletingCR12 ? (
+                        <RefreshCw className="w-4 h-4 animate-spin" />
+                      ) : (
+                        <Trash2 className="w-4 h-4" />
+                      )}
+                      <span>Delete</span>
+                    </button>
                   </div>
-                )}
-
-                {!formData.cr12_file && formData.cr12_preview && !isUploadingCR12 && (
-                  <a
-                    href={formData.cr12_preview}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="flex items-center space-x-2 text-emerald-600 hover:text-emerald-700 dark:text-emerald-400 dark:hover:text-emerald-300 transition-colors"
-                  >
-                    <FileText className="w-4 h-4" />
-                    <span className="text-sm font-medium">View Current CR12</span>
-                  </a>
-                )}
+                </div>
               </div>
+            )}
 
-              {errors.cr12_file && (
-                <p className="text-red-500 text-sm mt-4 flex items-center justify-center">
-                  <AlertCircle className="w-4 h-4 mr-2" />
-                  {errors.cr12_file}
-                </p>
-              )}
-            </div>
+            {/* Upload Area - Show when no existing CR12 or when creating new company */}
+            {(!existingCR12 || !company) && (
+              <div className="bg-gradient-to-br from-blue-50 to-indigo-50 dark:from-blue-900/20 dark:to-indigo-900/20 rounded-xl p-6 border-2 border-dashed border-blue-300 dark:border-blue-700">
+                <div className="flex flex-col items-center justify-center space-y-4">
+                  <div className="bg-blue-100 dark:bg-blue-900/40 p-4 rounded-full">
+                    <Upload className="w-8 h-8 text-blue-600 dark:text-blue-400" />
+                  </div>
+
+                  <div className="text-center">
+                    <label htmlFor="cr12-upload" className="cursor-pointer">
+                      <span className="text-blue-600 dark:text-blue-400 font-semibold hover:text-blue-700 dark:hover:text-blue-300 transition-colors">
+                        Click to upload
+                      </span>
+                      <span className="text-slate-600 dark:text-slate-400"> or drag and drop</span>
+                    </label>
+                    <p className="text-sm text-slate-500 dark:text-slate-400 mt-1">
+                      PDF only (max 5MB)
+                    </p>
+                  </div>
+
+                  <input
+                    id="cr12-upload"
+                    type="file"
+                    accept=".pdf"
+                    onChange={handleFileChange}
+                    className="hidden"
+                    disabled={isLoading || isUploadingCR12}
+                  />
+
+                  {isUploadingCR12 && (
+                    <div className="flex items-center space-x-2 text-blue-600 dark:text-blue-400">
+                      <svg className="animate-spin h-4 w-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                        <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                        <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                      </svg>
+                      <span className="text-sm font-medium">Processing document...</span>
+                    </div>
+                  )}
+
+                  {formData.cr12_file && !isUploadingCR12 && (
+                    <div className="flex items-center space-x-2 bg-white dark:bg-slate-800 px-4 py-2 rounded-lg border border-slate-200 dark:border-slate-700">
+                      <FileText className="w-4 h-4 text-emerald-600" />
+                      <span className="text-sm text-slate-700 dark:text-slate-300 font-medium">
+                        {formData.cr12_file.name}
+                      </span>
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {errors.cr12_file && (
+              <p className="text-red-500 text-sm mt-4 flex items-center justify-center">
+                <AlertCircle className="w-4 h-4 mr-2" />
+                {errors.cr12_file}
+              </p>
+            )}
           </div>
         </div>
 
@@ -805,7 +980,7 @@ function CompanyDetailsModal({ isOpen, onClose, onSubmit, isLoading, company }) 
             <button
               type="button"
               onClick={handleSubmit}
-              disabled={isLoading || sharesInvalid || isUploadingCR12 || !isCR12Valid}
+              disabled={isLoading || sharesInvalid || isUploadingCR12 || isDeletingCR12 || (!isCR12Valid && !existingCR12)}
               className="flex-1 py-3 px-4 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-700 hover:to-teal-700 text-white font-semibold rounded-xl transition-all focus:outline-none focus:ring-2 focus:ring-emerald-500 disabled:opacity-50 disabled:cursor-not-allowed shadow-lg shadow-emerald-500/30"
             >
               {isLoading ? (

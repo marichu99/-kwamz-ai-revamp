@@ -43,9 +43,9 @@ def extract_kra_pin():
         }
     """
     file = request.files.get('file')
-    agent_id = request.form.get('agent_id')
+    agent_id = request.form.get('agent_id') or None
     
-    if not file or not agent_id:
+    if not file:
         return jsonify({"error": "File and agent_id are required"}), 400
 
     try:
@@ -100,32 +100,61 @@ def extract_kra_pin():
 def extract_cr12():
     """
     Upload/Re-upload CR12 document and extract company details
-    
+
     Request:
         - file: PDF file (multipart/form-data)
-        - agent_id: ID of the agent
-        
+        - agent_id: (Optional) ID of the agent - if provided, document is saved
+
     Response:
         {
             "cr12": "PVT-XXXXXX",
-            "gcp_url": "https://storage.googleapis.com/..."
+            "gcp_url": "https://storage.googleapis.com/..." (only if agent_id provided)
         }
     """
     import re
-    
+    import tempfile
+
     file = request.files.get('file')
-    agent_id = request.form.get('agent_id')
-    
-    if not file or not agent_id:
-        return jsonify({"error": "File and agent_id are required"}), 400
-    
+    agent_id = request.form.get('agent_id') or None
+
+    if not file:
+        return jsonify({"error": "File is required"}), 400
+
     try:
+        # If no agent_id, just extract data without saving (for company creation)
+        if not agent_id:
+            # Save to temp file for extraction
+            with tempfile.NamedTemporaryFile(delete=False, suffix='.pdf') as temp_file:
+                file.save(temp_file.name)
+                temp_path = temp_file.name
+
+            try:
+                # Extract company number from document
+                extracted = extract_company_number(temp_path)
+
+                if extracted.get("error"):
+                    return jsonify({"error": extracted["error"]}), 400
+
+                # Validate CR12 extraction
+                if re.search("Not Found", extracted.get("PIN", ""), re.IGNORECASE):
+                    return jsonify({"error": "Kindly upload a valid CR12 document."}), 400
+
+                return jsonify({
+                    "cr12": extracted.get("PIN", ""),
+                    "gcp_url": None
+                }), 200
+            finally:
+                # Cleanup temp file
+                if os.path.exists(temp_path):
+                    os.remove(temp_path)
+
+        # With agent_id - full processing with document storage
         # Check if document already exists (for re-upload)
         existing_doc = AgentDocuments.query.filter_by(
             agent_id=agent_id,
             doc_type='cr12'
         ).first()
-        
+
         # If re-uploading, delete old file from GCP
         if existing_doc:
             try:
@@ -135,19 +164,19 @@ def extract_cr12():
                     blob.delete()
             except Exception as e:
                 print(f"Warning: Failed to delete old file: {str(e)}")
-            
+
             # Delete old database record
             db.session.delete(existing_doc)
             db.session.commit()
-        
-        # Process the document
+
+        # Process the document (extract + save)
         result = current_app.document_service.process(
             file=file,
             agent_id=agent_id,
             doc_type='cr12',
             extract_func=extract_company_number
         )
-        
+
         # Validate CR12 extraction
         if re.search("Not Found", result.get("PIN", ""), re.IGNORECASE):
             return jsonify({"error": "Kindly upload a valid CR12 document."}), 400
@@ -156,7 +185,7 @@ def extract_cr12():
             "cr12": result.get("PIN", ""),
             "gcp_url": result.get("gcp_url", "")
         }), 200
-        
+
     except Exception as e:
         print(f"CR12 extraction error: {str(e)}")
         return jsonify({"error": str(e)}), 400
@@ -180,9 +209,9 @@ def extract_police_clearance():
         }
     """
     file = request.files.get('file')
-    agent_id = request.form.get('agent_id')
+    agent_id = request.form.get('agent_id') or None
     
-    if not file or not agent_id:
+    if not file:
         return jsonify({"error": "File and agent_id are required"}), 400
     
     try:
@@ -250,9 +279,9 @@ def extract_mpesa_agreement():
         }
     """
     file = request.files.get('file')
-    agent_id = request.form.get('agent_id')
+    agent_id = request.form.get('agent_id') or None
     
-    if not file or not agent_id:
+    if not file :
         return jsonify({"error": "File and agent_id are required"}), 400
     
     try:

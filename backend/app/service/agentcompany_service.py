@@ -106,6 +106,24 @@ class AgentCompanyService:
                     })
 
                 # -------------------------------------------------
+                # Fetch user agents linked to this agent company
+                # -------------------------------------------------
+                user_agents_list = []
+                for ua in ac.user_agents:
+                    user_agents_list.append({
+                        'id': ua.id,
+                        'firstname': ua.firstname,
+                        'lastname': ua.lastname,
+                        'fullname': f"{ua.firstname} {ua.lastname}",
+                        'idnumber': ua.idnumber,
+                        'phone_number': ua.phone_number,
+                        'is_authentic': ua.is_authentic,
+                        'authenticity_desc': ua.authenticity_desc,
+                        'image_loc': ua.image_loc,
+                        'date_of_birth': ua.date_of_birth.isoformat() if ua.date_of_birth else None
+                    })
+
+                # -------------------------------------------------
                 # Agent company payload
                 # -------------------------------------------------
                 results.append({
@@ -139,7 +157,11 @@ class AgentCompanyService:
                         if ac.last_audit_date else None,
 
                     #  Normalized account data
-                    'accounts': account_list
+                    'accounts': account_list,
+
+                    # User agents linked to this agent company
+                    'user_agents': user_agents_list,
+                    'user_agents_count': len(user_agents_list)
                 })
 
             return results, None
