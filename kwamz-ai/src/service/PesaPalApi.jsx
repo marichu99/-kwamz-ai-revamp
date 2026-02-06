@@ -39,7 +39,11 @@ export const pesapalApi = {
     method: 'GET',
   }),
 
-  getLatestPayment: () => pesapalApi.request('/get-latest-payment', {
+  getLatestPayment: () => pesapalApi.request('/payment/get-latest-payment', {
+    method: 'GET',
+  }),
+
+  getBillingSummary: () => pesapalApi.request('/payment/billing-summary', {
     method: 'GET',
   }),
 

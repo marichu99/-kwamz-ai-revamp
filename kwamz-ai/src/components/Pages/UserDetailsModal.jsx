@@ -204,17 +204,17 @@ function UserDetailsModal({ isOpen, onClose, onSubmit, isLoading, user }) {
 
   return (
     <div className="fixed inset-0 bg-gradient-to-br from-black/60 via-black/50 to-black/40 backdrop-blur-sm flex items-center justify-center z-50 p-4">
-      <div className="bg-white/95 dark:bg-slate-900/95 backdrop-blur-lg rounded-2xl shadow-2xl border border-white/20 dark:border-slate-700/50 w-full max-w-3xl transform transition-all duration-300 max-h-[90vh] overflow-hidden flex flex-col">
+      <div className="bg-white/95 dark:bg-slate-900/95 backdrop-blur-lg rounded-2xl shadow-2xl border border-white/20 dark:border-slate-700/50 w-full max-w-[95vw] sm:max-w-3xl transform transition-all duration-300 max-h-[90vh] overflow-hidden flex flex-col">
         {/* Header */}
-        <div className="relative bg-gradient-to-r from-blue-600 via-cyan-600 to-blue-700 dark:from-blue-700 dark:via-cyan-700 dark:to-blue-800 p-8">
+        <div className="relative bg-gradient-to-r from-blue-600 via-cyan-600 to-blue-700 dark:from-blue-700 dark:via-cyan-700 dark:to-blue-800 p-4 sm:p-6 md:p-8">
           <div className="absolute inset-0 bg-black/10"></div>
           <div className="relative flex items-center justify-between">
-            <div className="flex items-center space-x-4">
-              <div className="bg-white/20 p-3 rounded-xl backdrop-blur-sm shadow-lg">
-                <UserIcon className="w-7 h-7 text-white" />
+            <div className="flex items-center space-x-3 sm:space-x-4">
+              <div className="bg-white/20 p-2 sm:p-3 rounded-xl backdrop-blur-sm shadow-lg">
+                <UserIcon className="w-5 h-5 sm:w-7 sm:h-7 text-white" />
               </div>
               <div>
-                <h2 className="text-3xl font-bold text-white tracking-tight">
+                <h2 className="text-xl sm:text-2xl md:text-3xl font-bold text-white tracking-tight">
                   {isEditMode ? 'Edit User Details' : 'Create New Agent User'}
                 </h2>
                 <p className="text-blue-100 text-sm mt-1.5 font-medium">

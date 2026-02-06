@@ -66,6 +66,7 @@ def create_app():
     from app.model.fraud_alert import FraudAlert,FraudReportHistory
     from app.model.config import Config,DetectionLog,SuspiciousAccount
     from app.model.user_report_config import UserReportConfig
+    from app.model.subscription import Subscription
     
     # Initialize Pesapal Client and Payment Service
     from app.utils.pesapalclient import PesapalClient, PesapalConfig, FlaskIPNStorage

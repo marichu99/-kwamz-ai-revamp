@@ -1,14 +1,14 @@
-import { Bell, ChevronDown, Filter, Menu, Plus, Search, Settings, Sun } from 'lucide-react';
+import { Bell, ChevronDown, Clock, CheckCircle, Filter, Menu, Plus, Search, Settings, Sun } from 'lucide-react';
 import React from 'react';
 import UserDropdown from '../Dashboard/UserDropdown';
 import { useNavigate } from 'react-router-dom';
 
-function Header({ sideBarCollapsed, onToggleSideBar, currentPage, setCurrentPage }) {
+function Header({ sideBarCollapsed, onToggleSideBar, currentPage, setCurrentPage, billingStatus }) {
     const navigate = useNavigate();
     const user = JSON.parse(localStorage.getItem("user"));
 
     return (
-        <div className='bg-white/80 dark:bg-slate-900/80 backdrop-blur-xl border-b border-slate-200/50 dark:border-slate-700/50 px-6 py-4'>
+        <div className='bg-white/80 dark:bg-slate-900/80 backdrop-blur-xl border-b border-slate-200/50 dark:border-slate-700/50 px-3 py-3 sm:px-6 sm:py-4'>
             <div className='flex items-center justify-between'>
                 {/* Left section */}
                 <div className='flex items-center space-x-4'>
@@ -32,7 +32,23 @@ function Header({ sideBarCollapsed, onToggleSideBar, currentPage, setCurrentPage
 
                 {/* Right */}
                 <div className='flex items-center space-x-3'>
-                    <button className='hidden lg:flex items-center space-x-2 py-2 px-4 bg-gradient-to-r 
+                    {/* Billing status badge */}
+                    {billingStatus?.status === 'TRIAL' && (
+                        <button
+                            onClick={() => navigate('/checkout')}
+                            className='hidden sm:flex items-center space-x-1.5 py-1.5 px-3 bg-amber-50 border border-amber-200 text-amber-700 rounded-lg hover:bg-amber-100 transition-all'
+                        >
+                            <Clock className='w-3.5 h-3.5' />
+                            <span className='text-xs font-medium'>Trial: {billingStatus.trial_days_remaining}d left</span>
+                        </button>
+                    )}
+                    {billingStatus?.status === 'PAID' && (
+                        <div className='hidden sm:flex items-center space-x-1.5 py-1.5 px-3 bg-green-50 border border-green-200 text-green-700 rounded-lg'>
+                            <CheckCircle className='w-3.5 h-3.5' />
+                            <span className='text-xs font-medium'>Active</span>
+                        </div>
+                    )}
+                    <button className='hidden lg:flex items-center space-x-2 py-2 px-4 bg-gradient-to-r
                 from-blue-500 to-purple-600 text-white rounded-xl hover:shadow transition-all'>
                         <Plus className='w-4 h-4' />
                         <span className='text-sm font-medium'>New</span>

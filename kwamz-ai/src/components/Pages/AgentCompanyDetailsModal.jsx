@@ -221,8 +221,8 @@ function AgentCompanyDetailsModal({ isOpen, onClose, onSubmit, isLoading, agentC
 
   return (
     <div className="fixed inset-0 flex items-center justify-center bg-black/60 backdrop-blur-sm z-50 p-4">
-      <div className="bg-white dark:bg-slate-900 rounded-2xl shadow-2xl w-full max-w-3xl transform transition-all max-h-[90vh] overflow-y-auto">
-        <div className="sticky top-0 z-10 bg-gradient-to-r from-violet-600 via-purple-600 to-indigo-600 dark:from-violet-700 dark:via-purple-700 dark:to-indigo-700 rounded-t-2xl p-8">
+      <div className="bg-white dark:bg-slate-900 rounded-2xl shadow-2xl w-full max-w-[95vw] sm:max-w-3xl transform transition-all max-h-[90vh] overflow-y-auto">
+        <div className="sticky top-0 z-10 bg-gradient-to-r from-violet-600 via-purple-600 to-indigo-600 dark:from-violet-700 dark:via-purple-700 dark:to-indigo-700 rounded-t-2xl p-4 sm:p-6 md:p-8">
           <div className="absolute inset-0 bg-black/10 rounded-t-2xl"></div>
           <div className="relative flex items-center justify-between">
             <div className="flex items-center space-x-4">

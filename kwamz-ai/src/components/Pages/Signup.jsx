@@ -339,17 +339,103 @@ const SignUpForm = ({ onSuccess,user_role }) => {
     { name: 'confirmPassword', type: 'password', label: 'Confirm Password', placeholder: 'Confirm your password' },
   ];
 
+  const renderField = ({ name, type, label, placeholder }) => {
+    const Icon = getFieldIcon(name);
+    const hasError = errors[name];
+    const hasValue = formData[name];
+    const isFocused = focusedField === name;
+
+    return (
+      <div key={name}>
+        <label htmlFor={name} className="block text-xs font-medium text-gray-700 mb-1">
+          {label}
+        </label>
+        <div className="relative">
+          <div className="absolute inset-y-0 left-0 pl-2.5 flex items-center pointer-events-none">
+            <Icon className={`w-4 h-4 transition-all duration-200 ${hasError ? 'text-red-400' :
+              hasValue && !hasError ? 'text-green-500' :
+                isFocused ? 'text-indigo-500' : 'text-gray-400'
+              }`} />
+          </div>
+          <input
+            type={
+              name === 'password' ? (showPassword ? 'text' : 'password') :
+                name === 'confirmPassword' ? (showConfirmPassword ? 'text' : 'password') :
+                  type
+            }
+            name={name}
+            id={name}
+            value={formData[name]}
+            onChange={handleChange}
+            onFocus={() => setFocusedField(name)}
+            onBlur={() => setFocusedField('')}
+            placeholder={placeholder}
+            required
+            disabled={isSubmitting}
+            className={`w-full pl-8 pr-${(name === 'password' || name === 'confirmPassword') ? '10' : '3'} py-2 text-sm border rounded-lg bg-white/50 backdrop-blur-sm transition-all duration-200 ${hasError ?
+              'border-red-300 focus:border-red-500 focus:ring-red-200' :
+              hasValue && !hasError ?
+                'border-green-300 focus:border-green-500 focus:ring-green-200' :
+                'border-gray-200 focus:border-indigo-500 focus:ring-indigo-200'
+              } focus:ring-2 focus:ring-opacity-20 focus:outline-none disabled:opacity-50 disabled:cursor-not-allowed placeholder:text-gray-400`}
+          />
+
+          {name === 'password' && (
+            <button
+              type="button"
+              onClick={() => setShowPassword(!showPassword)}
+              className="absolute inset-y-0 right-0 pr-2.5 flex items-center"
+              disabled={isSubmitting}
+            >
+              {showPassword ?
+                <EyeOff className="w-4 h-4 text-gray-400 hover:text-gray-600" /> :
+                <Eye className="w-4 h-4 text-gray-400 hover:text-gray-600" />
+              }
+            </button>
+          )}
+
+          {name === 'confirmPassword' && (
+            <button
+              type="button"
+              onClick={() => setShowConfirmPassword(!showConfirmPassword)}
+              className="absolute inset-y-0 right-0 pr-2.5 flex items-center"
+              disabled={isSubmitting}
+            >
+              {showConfirmPassword ?
+                <EyeOff className="w-4 h-4 text-gray-400 hover:text-gray-600" /> :
+                <Eye className="w-4 h-4 text-gray-400 hover:text-gray-600" />
+              }
+            </button>
+          )}
+
+          {hasValue && !hasError && (name !== 'password' && name !== 'confirmPassword') && (
+            <div className="absolute inset-y-0 right-0 pr-2.5 flex items-center">
+              <CheckCircle className="w-4 h-4 text-green-500" />
+            </div>
+          )}
+        </div>
+
+        {hasError && (
+          <div className="flex items-start gap-1 mt-0.5">
+            <AlertCircle className="w-3.5 h-3.5 text-red-500 flex-shrink-0 mt-0.5" />
+            <span className="text-red-600 text-xs">{hasError}</span>
+          </div>
+        )}
+      </div>
+    );
+  };
+
   if (showSuccess) {
     return (
       <div className="min-h-screen bg-gradient-to-br from-indigo-50 via-white to-cyan-50 flex items-center justify-center p-4">
-        <div className="w-full max-w-md">
-          <div className="bg-white/80 backdrop-blur-xl rounded-3xl shadow-2xl border border-white/20 p-8 text-center space-y-6">
-            <div className="w-16 h-16 bg-gradient-to-r from-green-500 to-emerald-600 rounded-2xl flex items-center justify-center mx-auto">
-              <CheckCircle className="w-8 h-8 text-white" />
+        <div className="w-full max-w-sm">
+          <div className="bg-white/80 backdrop-blur-xl rounded-2xl shadow-2xl border border-white/20 p-6 text-center space-y-4">
+            <div className="w-12 h-12 bg-gradient-to-r from-green-500 to-emerald-600 rounded-xl flex items-center justify-center mx-auto">
+              <CheckCircle className="w-6 h-6 text-white" />
             </div>
-            <h2 className="text-2xl font-bold text-gray-900">Account Created!</h2>
-            <p className="text-gray-600">Welcome aboard! Your account has been successfully created.</p>
-            <div className="animate-pulse text-sm text-gray-500">Redirecting you shortly...</div>
+            <h2 className="text-xl font-bold text-gray-900">Account Created!</h2>
+            <p className="text-gray-600 text-sm">Welcome aboard! Your account has been successfully created.</p>
+            <div className="animate-pulse text-xs text-gray-500">Redirecting you shortly...</div>
           </div>
         </div>
       </div>
@@ -359,158 +445,74 @@ const SignUpForm = ({ onSuccess,user_role }) => {
   return (
     <div className="min-h-screen bg-gradient-to-br from-indigo-50 via-white to-cyan-50 flex items-center justify-center p-4">
       <div className="w-full max-w-md">
-        <div className="bg-white/80 backdrop-blur-xl rounded-3xl shadow-2xl border border-white/20 p-8 space-y-6">
+        <div className="bg-white/80 backdrop-blur-xl rounded-2xl shadow-2xl border border-white/20 px-6 py-5 space-y-4">
           {/* Header */}
-          <div className="text-center space-y-2">
-            <div className="w-16 h-16 bg-gradient-to-r from-indigo-500 to-purple-600 rounded-2xl flex items-center justify-center mx-auto mb-4 transform hover:scale-105 transition-transform duration-200">
-              <User className="w-8 h-8 text-white" />
+          <div className="text-center">
+            <div className="w-10 h-10 bg-gradient-to-r from-indigo-500 to-purple-600 rounded-xl flex items-center justify-center mx-auto mb-2">
+              <User className="w-5 h-5 text-white" />
             </div>
-            <h1 className="text-2xl font-bold text-gray-900">Create Account</h1>
-            <p className="text-gray-600">Join us and start your journey</p>
+            <h1 className="text-xl font-bold text-gray-900">Create Account</h1>
+            <p className="text-gray-500 text-sm">Join us and start your journey</p>
           </div>
 
           {/* General Error */}
           {errors.general && (
-            <div className="bg-red-50 border border-red-200 rounded-lg p-3 flex items-start gap-2 animate-shake">
-              <AlertCircle className="w-5 h-5 text-red-500 flex-shrink-0 mt-0.5" />
-              <span className="text-red-700 text-sm">{errors.general}</span>
+            <div className="bg-red-50 border border-red-200 rounded-lg p-2.5 flex items-start gap-2 animate-shake">
+              <AlertCircle className="w-4 h-4 text-red-500 flex-shrink-0 mt-0.5" />
+              <span className="text-red-700 text-xs">{errors.general}</span>
             </div>
           )}
 
-          <div className="space-y-5">
-            {fields.map(({ name, type, label, placeholder }) => {
-              const Icon = getFieldIcon(name);
-              const hasError = errors[name];
-              const hasValue = formData[name];
-              const isFocused = focusedField === name;
+          {/* Fields in 2-column grid */}
+          <div className="grid grid-cols-2 gap-x-3 gap-y-3">
+            {renderField(fields[0])}
+            {renderField(fields[1])}
+            {renderField(fields[2])}
+            {renderField(fields[3])}
+            {renderField(fields[4])}
+            {renderField(fields[5])}
+          </div>
 
-              return (
-                <div key={name} className="space-y-1">
-                  <label
-                    htmlFor={name}
-                    className="block text-sm font-medium text-gray-700 mb-2"
-                  >
-                    {label}
-                  </label>
-                  <div className="relative">
-                    <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
-                      <Icon className={`w-5 h-5 transition-all duration-200 ${hasError ? 'text-red-400' :
-                        hasValue && !hasError ? 'text-green-500' :
-                          isFocused ? 'text-indigo-500' : 'text-gray-400'
-                        }`} />
-                    </div>
-                    <input
-                      type={
-                        name === 'password' ? (showPassword ? 'text' : 'password') :
-                          name === 'confirmPassword' ? (showConfirmPassword ? 'text' : 'password') :
-                            type
-                      }
-                      name={name}
-                      id={name}
-                      value={formData[name]}
-                      onChange={handleChange}
-                      onFocus={() => setFocusedField(name)}
-                      onBlur={() => setFocusedField('')}
-                      placeholder={placeholder}
-                      required
-                      disabled={isSubmitting}
-                      className={`w-full pl-10 pr-${(name === 'password' || name === 'confirmPassword') ? '12' : '4'} py-3 border rounded-xl bg-white/50 backdrop-blur-sm transition-all duration-200 ${hasError ?
-                        'border-red-300 focus:border-red-500 focus:ring-red-200 shadow-red-100' :
-                        hasValue && !hasError ?
-                          'border-green-300 focus:border-green-500 focus:ring-green-200 shadow-green-100' :
-                          'border-gray-200 focus:border-indigo-500 focus:ring-indigo-200'
-                        } focus:ring-4 focus:ring-opacity-20 focus:outline-none disabled:opacity-50 disabled:cursor-not-allowed placeholder:text-gray-400 shadow-sm hover:shadow-md`}
-                    />
+          <div className="flex gap-2 pt-1">
+            <button
+              onClick={handleRequestOtp}
+              disabled={isSubmitting}
+              className="flex-1 bg-gradient-to-r from-indigo-500 to-purple-600 hover:from-indigo-600 hover:to-purple-700 text-white font-semibold py-2.5 px-4 rounded-lg text-sm transition-all duration-200 transform hover:scale-[1.02] active:scale-[0.98] disabled:opacity-50 disabled:cursor-not-allowed disabled:transform-none shadow-lg hover:shadow-xl flex items-center justify-center gap-2"
+            >
+              {isSubmitting ? (
+                <>
+                  <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin"></div>
+                  Signing Up...
+                </>
+              ) : (
+                'Create Account'
+              )}
+            </button>
 
-                    {/* Password toggle buttons */}
-                    {name === 'password' && (
-                      <button
-                        type="button"
-                        onClick={() => setShowPassword(!showPassword)}
-                        className="absolute inset-y-0 right-0 pr-3 flex items-center hover:bg-gray-50 rounded-r-xl transition-colors duration-200"
-                        disabled={isSubmitting}
-                      >
-                        {showPassword ?
-                          <EyeOff className="w-5 h-5 text-gray-400 hover:text-gray-600" /> :
-                          <Eye className="w-5 h-5 text-gray-400 hover:text-gray-600" />
-                        }
-                      </button>
-                    )}
-
-                    {name === 'confirmPassword' && (
-                      <button
-                        type="button"
-                        onClick={() => setShowConfirmPassword(!showConfirmPassword)}
-                        className="absolute inset-y-0 right-0 pr-3 flex items-center hover:bg-gray-50 rounded-r-xl transition-colors duration-200"
-                        disabled={isSubmitting}
-                      >
-                        {showConfirmPassword ?
-                          <EyeOff className="w-5 h-5 text-gray-400 hover:text-gray-600" /> :
-                          <Eye className="w-5 h-5 text-gray-400 hover:text-gray-600" />
-                        }
-                      </button>
-                    )}
-
-                    {/* Success indicator */}
-                    {hasValue && !hasError && (name !== 'password' && name !== 'confirmPassword') && (
-                      <div className="absolute inset-y-0 right-0 pr-3 flex items-center">
-                        <CheckCircle className="w-5 h-5 text-green-500 animate-pulse" />
-                      </div>
-                    )}
-                  </div>
-
-                  {/* Error message */}
-                  {hasError && (
-                    <div className="flex items-start gap-1 mt-1 animate-fadeIn">
-                      <AlertCircle className="w-4 h-4 text-red-500 flex-shrink-0 mt-0.5" />
-                      <span className="text-red-600 text-xs">{hasError}</span>
-                    </div>
-                  )}
-                </div>
-              );
-            })}
-
-            <div className="flex gap-3 pt-4">
-              <button
-                onClick={handleRequestOtp}
-                disabled={isSubmitting}
-                className="flex-1 bg-gradient-to-r from-indigo-500 to-purple-600 hover:from-indigo-600 hover:to-purple-700 text-white font-semibold py-3 px-6 rounded-xl transition-all duration-200 transform hover:scale-[1.02] active:scale-[0.98] disabled:opacity-50 disabled:cursor-not-allowed disabled:transform-none shadow-lg hover:shadow-xl flex items-center justify-center gap-2"
-              >
-                {isSubmitting ? (
-                  <>
-                    <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin"></div>
-                    Signing Up...
-                  </>
-                ) : (
-                  'Create Account'
-                )}
-              </button>
-
-              <button
-                type="button"
-                onClick={() => {
-                  setFormData({
-                    username: '',
-                    email: '',
-                    phoneNumber: '',
-                    dateOfBirth: '',
-                    password: '',
-                    confirmPassword: '',
-                  });
-                  setErrors({});
-                }}
-                disabled={isSubmitting}
-                className="px-6 py-3 border border-gray-200 text-gray-700 font-semibold rounded-xl hover:bg-gray-50 transition-all duration-200 transform hover:scale-[1.02] active:scale-[0.98] disabled:opacity-50 disabled:cursor-not-allowed disabled:transform-none"
-              >
-                Cancel
-              </button>
-            </div>
+            <button
+              type="button"
+              onClick={() => {
+                setFormData({
+                  username: '',
+                  email: '',
+                  phoneNumber: '',
+                  dateOfBirth: '',
+                  password: '',
+                  confirmPassword: '',
+                });
+                setErrors({});
+              }}
+              disabled={isSubmitting}
+              className="px-4 py-2.5 border border-gray-200 text-gray-700 font-semibold rounded-lg text-sm hover:bg-gray-50 transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              Cancel
+            </button>
           </div>
 
           {/* Footer */}
-          <div className="text-center text-sm text-gray-600">
+          <div className="text-center text-xs text-gray-600 pt-1">
             Already have an account?
-            <button className="text-indigo-600 hover:text-indigo-700 font-semibold ml-1 hover:underline transition-colors duration-200" onClick={() => navigate('/')}>
+            <button className="text-indigo-600 hover:text-indigo-700 font-semibold ml-1 hover:underline" onClick={() => navigate('/login')}>
               Sign In
             </button>
           </div>
@@ -521,7 +523,7 @@ const SignUpForm = ({ onSuccess,user_role }) => {
         onClose={() => setShowOtpModal(false)}
         onVerify={handleFinalSubmit}
         email={formData.email}
-        resendOtp={handleResendOTP} 
+        resendOtp={handleResendOTP}
       />
     </div>
   );

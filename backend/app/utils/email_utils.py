@@ -1,5 +1,10 @@
 import resend
+import smtplib
 import os
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
+from email.mime.base import MIMEBase
+from email import encoders
 from flask import render_template
 from datetime import datetime, timezone
 from dotenv import load_dotenv
@@ -7,16 +12,60 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # Email configuration
+EMAIL_PROVIDER = os.getenv("EMAIL_PROVIDER", "smtp").lower()  # "resend" or "smtp"
 RESEND_API_KEY = os.getenv("RESEND_API_KEY")
 EMAIL_ADDRESS = os.getenv("SMTP_EMAIL", "noreply@kwamz-ai.org")
 DASHBOARD_URL = os.getenv("DASHBOARD_URL")
 
-if RESEND_API_KEY:
+# SMTP configuration
+SMTP_HOST = os.getenv("SMTP_HOST", "smtp.gmail.com")
+SMTP_PORT = int(os.getenv("SMTP_PORT", "587"))
+SMTP_USERNAME = os.getenv("SMTP_USERNAME", os.getenv("SMTP_EMAIL"))
+SMTP_PASSWORD = os.getenv("SMTP_PASSWORD", os.getenv("APP_PASSWORD"))
+
+if EMAIL_PROVIDER == "resend" and RESEND_API_KEY:
     resend.api_key = RESEND_API_KEY
 
 
-def _send_email(subject: str, html: str, recipient: str, attachments=None):
-    """Core email sending function using Resend API."""
+def _send_email_smtp(subject: str, html: str, recipient: str, attachments=None):
+    """Send email using SMTP."""
+    try:
+        msg = MIMEMultipart('alternative')
+        msg['Subject'] = subject
+        msg['From'] = EMAIL_ADDRESS
+        msg['To'] = recipient
+
+        html_part = MIMEText(html, 'html')
+        msg.attach(html_part)
+
+        if attachments:
+            for attachment in attachments:
+                part = MIMEBase('application', 'octet-stream')
+                content = attachment.get('content', [])
+                if isinstance(content, list):
+                    content = bytes(content)
+                part.set_payload(content)
+                encoders.encode_base64(part)
+                part.add_header(
+                    'Content-Disposition',
+                    f'attachment; filename="{attachment.get("filename", "attachment")}"'
+                )
+                msg.attach(part)
+
+        with smtplib.SMTP(SMTP_HOST, SMTP_PORT) as server:
+            server.starttls()
+            server.login(SMTP_USERNAME, SMTP_PASSWORD)
+            server.sendmail(EMAIL_ADDRESS, recipient, msg.as_string())
+
+        print(f"Email sent via SMTP: {subject} -> {recipient}")
+        return True
+    except Exception as e:
+        print(f"Failed to send email via SMTP: {e}")
+        return False
+
+
+def _send_email_resend(subject: str, html: str, recipient: str, attachments=None):
+    """Send email using Resend API."""
     try:
         params = {
             "from": EMAIL_ADDRESS,
@@ -28,11 +77,19 @@ def _send_email(subject: str, html: str, recipient: str, attachments=None):
             params["attachments"] = attachments
 
         result = resend.Emails.send(params)
-        print(f"Email sent: {subject} -> {recipient} (id: {result.get('id', 'unknown')})")
+        print(f"Email sent via Resend: {subject} -> {recipient} (id: {result.get('id', 'unknown')})")
         return True
     except Exception as e:
-        print(f"Failed to send email: {e}")
+        print(f"Failed to send email via Resend: {e}")
         return False
+
+
+def _send_email(subject: str, html: str, recipient: str, attachments=None):
+    """Core email sending function. Uses EMAIL_PROVIDER env to choose between Resend and SMTP."""
+    if EMAIL_PROVIDER == "resend":
+        return _send_email_resend(subject, html, recipient, attachments)
+    else:
+        return _send_email_smtp(subject, html, recipient, attachments)
 
 
 def send_otp_email(recipient_email, otp):
@@ -262,4 +319,22 @@ System Administration Team"""
         return _send_email(subject, f"<pre>{body}</pre>", recipient_email)
     except Exception as e:
         print(f"Failed to send notification email: {str(e)}")
+        return False
+
+
+def send_password_reset_otp_email(recipient_email, otp):
+    """Send OTP email for password reset."""
+    try:
+        html_content = render_template(
+            'password_reset_otp_email.html',
+            otp=otp,
+            year=datetime.now(timezone.utc).year
+        )
+        return _send_email(
+            "Reset Your Kwamz-AI Password",
+            html_content,
+            recipient_email
+        )
+    except Exception as e:
+        print(f"Failed to send password reset OTP email: {e}")
         return False

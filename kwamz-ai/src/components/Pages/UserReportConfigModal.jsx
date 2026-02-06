@@ -238,9 +238,9 @@ function UserReportConfigModal({ isOpen, onClose, onSubmit, isLoading, config })
 
   return (
     <div className="fixed inset-0 flex items-center justify-center bg-black/60 backdrop-blur-sm z-50 p-4">
-      <div className="bg-white dark:bg-slate-900 rounded-2xl shadow-2xl w-full max-w-4xl max-h-[90vh] overflow-hidden flex flex-col">
+      <div className="bg-white dark:bg-slate-900 rounded-2xl shadow-2xl w-full max-w-[95vw] sm:max-w-4xl max-h-[90vh] overflow-hidden flex flex-col">
         {/* Header */}
-        <div className="flex items-center justify-between p-6 border-b border-slate-200 dark:border-slate-700">
+        <div className="flex items-center justify-between p-4 sm:p-6 border-b border-slate-200 dark:border-slate-700">
           <div>
             <h2 className="text-xl font-bold text-slate-800 dark:text-white">
               {config ? 'Edit Report Schedule' : 'Create New Report Schedule'}
@@ -257,28 +257,28 @@ function UserReportConfigModal({ isOpen, onClose, onSubmit, isLoading, config })
           </button>
         </div>
 
-        <div className="flex h-[calc(90vh-8rem)]">
+        <div className="flex flex-col md:flex-row h-[calc(90vh-8rem)]">
           {/* Sidebar Navigation */}
-          <div className="w-56 border-r border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/50 p-4">
-            <div className="space-y-1">
+          <div className="w-full md:w-56 border-b md:border-b-0 md:border-r border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/50 p-3 md:p-4 overflow-x-auto md:overflow-x-visible">
+            <div className="flex md:flex-col gap-1 md:space-y-1 overflow-x-auto md:overflow-x-visible">
               {sections.map((section) => (
                 <button
                   key={section.id}
                   onClick={() => setActiveSection(section.id)}
-                  className={`w-full flex items-center space-x-3 px-4 py-3 rounded-lg transition-colors ${activeSection === section.id
+                  className={`flex items-center space-x-2 md:space-x-3 px-3 md:px-4 py-2 md:py-3 rounded-lg transition-colors whitespace-nowrap md:w-full ${activeSection === section.id
                       ? 'bg-blue-500 text-white'
                       : 'text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-700'
                     }`}
                 >
                   {section.icon}
-                  <span className="font-medium">{section.label}</span>
+                  <span className="font-medium text-sm md:text-base">{section.label}</span>
                 </button>
               ))}
             </div>
           </div>
 
           {/* Main Form Content */}
-          <div className="flex-1 overflow-y-auto p-6">
+          <div className="flex-1 overflow-y-auto p-4 sm:p-6">
             <form onSubmit={handleSubmit} className="space-y-6">
               {/* General Section */}
               {activeSection === 'general' && (
@@ -322,7 +322,7 @@ function UserReportConfigModal({ isOpen, onClose, onSubmit, isLoading, config })
                     <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-3">
                       Report Type *
                     </label>
-                    <div className="grid grid-cols-2 gap-4">
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                       {reportTypes.map((type) => (
                         <label
                           key={type.value}
@@ -477,7 +477,7 @@ function UserReportConfigModal({ isOpen, onClose, onSubmit, isLoading, config })
                     </p>
                   </div>
 
-                  <div className="grid grid-cols-2 gap-4">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                     <div>
                       <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">
                         Time Window (minutes)
@@ -516,7 +516,7 @@ function UserReportConfigModal({ isOpen, onClose, onSubmit, isLoading, config })
                     </div>
                   </div>
 
-                  <div className="grid grid-cols-3 gap-4">
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
                     <div>
                       <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">
                         Min Roll-over Txns
@@ -567,7 +567,7 @@ function UserReportConfigModal({ isOpen, onClose, onSubmit, isLoading, config })
                     <h4 className="font-medium text-slate-800 dark:text-white mb-3">
                       Split Transaction Limits
                     </h4>
-                    <div className="grid grid-cols-3 gap-4">
+                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
                       <div>
                         <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">
                           Min Amount (KES)
@@ -613,7 +613,7 @@ function UserReportConfigModal({ isOpen, onClose, onSubmit, isLoading, config })
                     </div>
                   </div>
 
-                  <div className="grid grid-cols-2 gap-4">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                     <div>
                       <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">
                         Analysis Period (days)
@@ -751,7 +751,7 @@ function UserReportConfigModal({ isOpen, onClose, onSubmit, isLoading, config })
                     </p>
                   </div>
 
-                  <div className="grid grid-cols-2 gap-6">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
                     <div>
                       <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">
                         High Risk Score

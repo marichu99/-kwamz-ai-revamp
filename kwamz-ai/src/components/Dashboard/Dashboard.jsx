@@ -9,8 +9,6 @@ import Transactions from '../Layout/Transactions';
 import UserAgentList from '../Pages/UserAgentList';
 import AgentCompanyList from '../Pages/AgentCompanyList';
 import CompanyList from '../Pages/CompanyList';
-import Checkout from '../Pages/Checkout';
-import PaymentForm from '../Pages/PaymentForm';
 import CompanyHierarchy from '../Pages/CompanyHierachy';
 import SystemUsersList from '../Pages/SystemUsersList';
 import AgentCompanyPaymentsGrid from '../Pages/AgentCompanyPaymentsGrid';
@@ -120,8 +118,8 @@ function Dashboard({ currentPage, setCurrentPage }) {
   };
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-slate-50 via-blue-50 to-purple-50 dark:from-slate-900 dark:via-slate-800 dark:to-slate-900 p-6">
-      <div className="max-w-7xl mx-auto space-y-8">
+    <div className="min-h-screen bg-gradient-to-br from-slate-50 via-blue-50 to-purple-50 dark:from-slate-900 dark:via-slate-800 dark:to-slate-900 p-2 sm:p-4 md:p-6">
+      <div className="max-w-7xl mx-auto space-y-4 sm:space-y-6 md:space-y-8">
         {currentPage === 'dashboard' && renderDashboardContent()}
         {currentPage === 'transactions' && <Transactions />}
         {currentPage === 'user-list' && <UserAgentList />}
@@ -134,8 +132,6 @@ function Dashboard({ currentPage, setCurrentPage }) {
         {currentPage === 'bank-list' && <BankList />}
         {currentPage === 'configs' && <ConfigGrid />}
         {currentPage === 'report-schedules' && <UserReportConfigGrid />}
-        {currentPage === 'checkout' && <Checkout />}
-        {currentPage === 'pesapal' && <PaymentForm />}
       </div>
     </div>
   );

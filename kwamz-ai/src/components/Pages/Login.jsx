@@ -88,8 +88,11 @@ const LoginForm = ({ onSuccess }) => {
 
     setIsSubmitting(true);
     try {
-      // Ask the backend to send an OTP to the user's email
-      await axios.post(`${config.API_URL}/users/request-otp`, { email: formData.username });
+      // Ask the backend to send an OTP to the user's email (with password verification)
+      await axios.post(`${config.API_URL}/users/request-otp`, {
+        email: formData.username,
+        password: formData.password
+      });
       setShowOtpModal(true); // Open the modal on success
     } catch (error) {
       console.error('OTP Request error:', error);
@@ -342,6 +345,7 @@ const LoginForm = ({ onSuccess }) => {
           <div className="text-right">
             <button
               type="button"
+              onClick={() => navigate('/forgot-password')}
               className="text-sm text-blue-600 hover:text-blue-700 hover:underline transition-colors duration-200"
             >
               Forgot your password?

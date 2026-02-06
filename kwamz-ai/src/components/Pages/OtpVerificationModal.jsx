@@ -37,11 +37,11 @@ const OtpVerificationModal = ({ isOpen, onClose, onVerify, email, resendOtp }) =
   if (!isOpen) return null;
 
   return (
-    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-      <div className="bg-white rounded-xl shadow-2xl p-8 w-full max-w-md text-center">
-        <h2 className="text-2xl font-bold mb-2">Verify Your Account</h2>
-        <p className="text-gray-600 mb-4">An OTP has been generated for {email}.</p>
-        <p className="text-sm text-red-500 mb-4 font-semibold">
+    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+      <div className="bg-white rounded-xl shadow-2xl p-5 sm:p-8 w-full max-w-sm sm:max-w-md text-center">
+        <h2 className="text-xl sm:text-2xl font-bold mb-2">Verify Your Account</h2>
+        <p className="text-gray-600 text-sm sm:text-base mb-4">An OTP has been generated for {email}.</p>
+        <p className="text-xs sm:text-sm text-red-500 mb-4 font-semibold">
           This OTP will be invalidated in 5 minutes.
         </p>
 
@@ -50,7 +50,7 @@ const OtpVerificationModal = ({ isOpen, onClose, onVerify, email, resendOtp }) =
           value={otp}
           onChange={(e) => setOtp(e.target.value)}
           maxLength="6"
-          className="w-full text-center text-2xl tracking-[0.5em] font-mono p-3 border-2 border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none"
+          className="w-full text-center text-xl sm:text-2xl tracking-[0.3em] sm:tracking-[0.5em] font-mono p-3 border-2 border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none"
           placeholder="------"
         />
 
@@ -58,7 +58,7 @@ const OtpVerificationModal = ({ isOpen, onClose, onVerify, email, resendOtp }) =
 
         <button
           onClick={handleVerifyClick}
-          className="w-full mt-6 bg-gradient-to-r from-indigo-500 to-purple-600 text-white font-semibold py-3 px-6 rounded-xl transition-all duration-200 transform hover:scale-105"
+          className="w-full mt-5 sm:mt-6 bg-gradient-to-r from-indigo-500 to-purple-600 text-white font-semibold py-3 px-6 rounded-xl transition-all duration-200 transform hover:scale-105"
         >
           Validate
         </button>
