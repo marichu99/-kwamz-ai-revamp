@@ -703,7 +703,7 @@ const UserSettingsModal = ({ isOpen, onClose, userData, onUpdateUser }) => {
 
     return (
         <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-            <div className="bg-white dark:bg-slate-800 rounded-2xl shadow-2xl w-full max-w-md">
+            <div className="bg-white dark:bg-slate-800 rounded-2xl shadow-2xl w-full max-w-[95vw] sm:max-w-md">
                 {/* Modal Header */}
                 <div className="flex justify-between p-6 border-b">
                     <h2 className="text-xl font-semibold">Settings</h2>

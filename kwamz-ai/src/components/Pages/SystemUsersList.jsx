@@ -1,6 +1,6 @@
 // components/UserList.jsx
 import { useState, useEffect, useRef } from 'react';
-import { Search, Filter, MoreVertical, Edit, Plus, Download, Upload, RefreshCw, ChevronRight, User, Shield, Briefcase, Mail, Phone, Calendar, IdCard, Crown, Building, Link, Unlink, Check } from 'lucide-react';
+import { Search, Filter, MoreVertical, Edit, Plus, Download, Upload, RefreshCw, ChevronRight, User, Shield, Briefcase, Mail, Phone, Calendar, IdCard, Crown, Building, Link, Unlink, Check, CreditCard } from 'lucide-react';
 import axios from 'axios';
 import * as XLSX from 'xlsx';
 import config from '../../Config';
@@ -8,6 +8,7 @@ import { useToast } from './ToastProvider';
 import UserDetailsModal from './UserDetailsModal';
 import BatchUploadModal from './BatchUploadModal';
 import CompanyAssignmentModal from './CompanyAssignmentModal';
+import PaymentStatusModal from './PaymentStatusModal';
 
 function SystemUsersList() {
   const [users, setUsers] = useState([]);
@@ -33,6 +34,8 @@ function SystemUsersList() {
   const dropdownRef = useRef(null);
   const [assignedCompaniesData, setAssignedCompaniesData] = useState({}); // { companyId: {company, agents: [...]}, ... }
   const [loadingAssignments, setLoadingAssignments] = useState(false);
+  const [isPaymentModalOpen, setIsPaymentModalOpen] = useState(false);
+  const [paymentModalUser, setPaymentModalUser] = useState(null);
 
   const fetchAssignedCompaniesForAgents = async (agentIds) => {
     if (agentIds.length === 0) {
@@ -449,6 +452,23 @@ function SystemUsersList() {
                   <Plus className="w-4 h-4 mr-3" />
                   Create User
                 </button>
+                <button
+                  onClick={() => {
+                    if (selectedUserIds.length === 1) {
+                      const selectedUser = users.find((u) => u.id === selectedUserIds[0]);
+                      setPaymentModalUser(selectedUser);
+                      setIsPaymentModalOpen(true);
+                    } else {
+                      showToast('Please select one user to manage payment', 'error');
+                    }
+                    setIsDropdownOpen(false);
+                  }}
+                  disabled={selectedUserIds.length !== 1}
+                  className="w-full flex items-center px-4 py-2 text-sm text-slate-800 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-600 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                >
+                  <CreditCard className="w-4 h-4 mr-3" />
+                  Manage Payment
+                </button>
               </div>
             </div>
           )}
@@ -697,6 +717,17 @@ function SystemUsersList() {
         onSubmit={handleCreateOrUpdateUser}
         isLoading={isLoading}
         user={selectedUserIds.length === 1 ? users.find((user) => user.id === selectedUserIds[0]) : null}
+      />
+
+      {/* Payment Status Modal */}
+      <PaymentStatusModal
+        isOpen={isPaymentModalOpen}
+        onClose={() => {
+          setIsPaymentModalOpen(false);
+          setPaymentModalUser(null);
+          setSelectedUserIds([]);
+        }}
+        user={paymentModalUser}
       />
     </div>
   );

@@ -75,7 +75,7 @@ function FraudDetailsModal({ isOpen, onClose, agentCompany }) {
         {/* Content */}
         <div className="p-6 overflow-y-auto max-h-[calc(90vh-180px)]">
           {/* Summary Stats */}
-          <div className="grid grid-cols-3 gap-4 mb-6">
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-6">
             <div className="bg-slate-50 dark:bg-slate-700/50 rounded-xl p-4 text-center">
               <div className="text-2xl font-bold text-red-600 dark:text-red-400">
                 {agentCompany.fraud_alerts_count || 0}
@@ -203,8 +203,8 @@ function FraudDetailsModal({ isOpen, onClose, agentCompany }) {
                       {alert.detection_details?.transaction_details && (
                         <div>
                           <div className="text-xs text-slate-500 uppercase tracking-wide mb-2">Transaction Breakdown</div>
-                          <div className="bg-slate-50 dark:bg-slate-900/50 rounded-lg overflow-hidden">
-                            <table className="w-full text-sm">
+                          <div className="bg-slate-50 dark:bg-slate-900/50 rounded-lg overflow-x-auto">
+                            <table className="w-full text-sm min-w-[500px]">
                               <thead>
                                 <tr className="border-b border-slate-200 dark:border-slate-700">
                                   <th className="px-3 py-2 text-left text-xs font-medium text-slate-500">Receipt</th>

@@ -45,233 +45,65 @@ const MpesaModal = ({ onSucess }) => {
     // }, 2000);
   };
 
-  const styles = {
-    overlay: {
-      position: 'fixed',
-      top: 0,
-      left: 0,
-      right: 0,
-      bottom: 0,
-      backgroundColor: 'rgba(0, 0, 0, 0.6)',
-      display: 'flex',
-      alignItems: 'center',
-      justifyContent: 'center',
-      zIndex: 1000,
-      backdropFilter: 'blur(4px)',
-      animation: 'fadeIn 0.3s ease-out'
-    },
-    modal: {
-      backgroundColor: '#ffffff',
-      borderRadius: '20px',
-      padding: '40px',
-      maxWidth: '450px',
-      width: '90%',
-      boxShadow: '0 20px 60px rgba(0, 0, 0, 0.3)',
-      position: 'relative',
-      animation: 'slideUp 0.3s ease-out'
-    },
-    header: {
-      textAlign: 'center',
-      marginBottom: '30px'
-    },
-    logo: {
-      width: '80px',
-      height: '80px',
-      margin: '0 auto 20px',
-      background: 'linear-gradient(135deg, #00d13f 0%, #00a832 100%)',
-      borderRadius: '50%',
-      display: 'flex',
-      alignItems: 'center',
-      justifyContent: 'center',
-      fontSize: '40px',
-      color: 'white',
-      fontWeight: 'bold',
-      boxShadow: '0 8px 20px rgba(0, 209, 63, 0.3)'
-    },
-    title: {
-      fontSize: '24px',
-      fontWeight: '700',
-      color: '#1a1a1a',
-      margin: '0 0 8px 0'
-    },
-    subtitle: {
-      fontSize: '14px',
-      color: '#666',
-      margin: 0
-    },
-    formGroup: {
-      marginBottom: '24px'
-    },
-    label: {
-      display: 'block',
-      fontSize: '14px',
-      fontWeight: '600',
-      color: '#333',
-      marginBottom: '8px',
-      paddingLeft: '4px'
-    },
-    input: {
-      width: '100%',
-      padding: '14px 16px',
-      fontSize: '16px',
-      border: '2px solid #e0e0e0',
-      borderRadius: '12px',
-      outline: 'none',
-      transition: 'all 0.3s ease',
-      fontFamily: 'inherit',
-      boxSizing: 'border-box'
-    },
-    inputFocus: {
-      border: '2px solid #00d13f',
-      boxShadow: '0 0 0 4px rgba(0, 209, 63, 0.1)'
-    },
-    error: {
-      backgroundColor: '#fee',
-      color: '#c33',
-      padding: '12px 16px',
-      borderRadius: '10px',
-      marginBottom: '20px',
-      fontSize: '14px',
-      border: '1px solid #fcc',
-      display: 'flex',
-      alignItems: 'center',
-      gap: '8px'
-    },
-    buttonGroup: {
-      display: 'flex',
-      gap: '12px',
-      marginTop: '30px'
-    },
-    submitButton: {
-      width: '100%',
-      padding: '14px 24px',
-      fontSize: '16px',
-      fontWeight: '600',
-      color: 'white',
-      background: 'linear-gradient(135deg, #00d13f 0%, #00a832 100%)',
-      border: 'none',
-      borderRadius: '12px',
-      cursor: 'pointer',
-      transition: 'all 0.3s ease',
-      boxShadow: '0 4px 12px rgba(0, 209, 63, 0.3)'
-    },
-    spinnerOverlay: {
-      position: 'absolute',
-      top: 0,
-      left: 0,
-      right: 0,
-      bottom: 0,
-      backgroundColor: 'rgba(255, 255, 255, 0.95)',
-      display: 'flex',
-      flexDirection: 'column',
-      alignItems: 'center',
-      justifyContent: 'center',
-      borderRadius: '20px',
-      zIndex: 10
-    },
-    spinner: {
-      width: '50px',
-      height: '50px',
-      border: '4px solid #e0e0e0',
-      borderTop: '4px solid #00d13f',
-      borderRadius: '50%',
-      animation: 'spin 1s linear infinite'
-    },
-    loadingText: {
-      marginTop: '16px',
-      color: '#00a832',
-      fontSize: '16px',
-      fontWeight: '600'
-    }
-  };
-
   return (
-    <>
-      <style>
-        {`
-          @keyframes fadeIn {
-            from { opacity: 0; }
-            to { opacity: 1; }
-          }
-          @keyframes slideUp {
-            from { 
-              opacity: 0;
-              transform: translateY(20px);
-            }
-            to { 
-              opacity: 1;
-              transform: translateY(0);
-            }
-          }
-          @keyframes spin {
-            0% { transform: rotate(0deg); }
-            100% { transform: rotate(360deg); }
-          }
-          button:hover {
-            transform: translateY(-2px);
-          }
-          button:active {
-            transform: translateY(0);
-          }
-        `}
-      </style>
-      <div style={styles.overlay}>
-        <div style={styles.modal}>
-          <div style={styles.header}>
-            <div style={styles.logo}>M</div>
-            <h3 style={styles.title}>M-Pesa Payment</h3>
-            <p style={styles.subtitle}>Enter your phone number to complete payment</p>
+    <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+      <div className="bg-white rounded-2xl p-6 sm:p-10 w-full max-w-sm sm:max-w-md shadow-2xl relative">
+        {/* Header */}
+        <div className="text-center mb-6 sm:mb-8">
+          <div className="w-16 h-16 sm:w-20 sm:h-20 mx-auto mb-4 bg-gradient-to-br from-green-400 to-green-600 rounded-full flex items-center justify-center text-3xl sm:text-4xl text-white font-bold shadow-lg shadow-green-500/30">
+            M
+          </div>
+          <h3 className="text-xl sm:text-2xl font-bold text-gray-900 mb-1">M-Pesa Payment</h3>
+          <p className="text-sm text-gray-500">Enter your phone number to complete payment</p>
+        </div>
+
+        {error && (
+          <div className="bg-red-50 border border-red-200 rounded-lg p-3 mb-5 flex items-center gap-2 text-sm text-red-700">
+            <span>⚠️</span>
+            <span>{error}</span>
+          </div>
+        )}
+
+        {loading && (
+          <div className="absolute inset-0 bg-white/95 flex flex-col items-center justify-center rounded-2xl z-10">
+            <div className="w-12 h-12 border-4 border-gray-200 border-t-green-500 rounded-full animate-spin"></div>
+            <p className="mt-4 text-green-600 font-semibold">Processing payment...</p>
+          </div>
+        )}
+
+        <div>
+          <div className="mb-6">
+            <label className="block text-sm font-semibold text-gray-700 mb-2 pl-1">Phone Number</label>
+            <input
+              type="text"
+              value={phoneNumber}
+              onChange={(e) => setPhoneNumber(e.target.value)}
+              onFocus={() => setIsFocused(true)}
+              onBlur={() => setIsFocused(false)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') {
+                  handleSubmit(e);
+                }
+              }}
+              placeholder="e.g., 0712345678 or +254712345678"
+              className={`w-full px-4 py-3 text-base border-2 rounded-xl outline-none transition-all ${
+                isFocused
+                  ? 'border-green-500 ring-4 ring-green-500/10'
+                  : 'border-gray-200'
+              }`}
+            />
           </div>
 
-          {error && (
-            <div style={styles.error}>
-              <span>⚠️</span>
-              <span>{error}</span>
-            </div>
-          )}
-
-          {loading && (
-            <div style={styles.spinnerOverlay}>
-              <div style={styles.spinner}></div>
-              <div style={styles.loadingText}>Processing payment...</div>
-            </div>
-          )}
-
-          <div>
-            <div style={styles.formGroup}>
-              <label style={styles.label}>Phone Number</label>
-              <input
-                type="text"
-                value={phoneNumber}
-                onChange={(e) => setPhoneNumber(e.target.value)}
-                onFocus={() => setIsFocused(true)}
-                onBlur={() => setIsFocused(false)}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter') {
-                    handleSubmit(e);
-                  }
-                }}
-                placeholder="e.g., 0712345678 or +254712345678"
-                style={{
-                  ...styles.input,
-                  ...(isFocused ? styles.inputFocus : {})
-                }}
-              />
-            </div>
-
-            <div style={styles.buttonGroup}>
-              <button 
-                onClick={handleSubmit}
-                style={styles.submitButton}
-                disabled={loading}
-              >
-                {loading ? 'Processing...' : 'Send STK Push'}
-              </button>
-            </div>
-          </div>
+          <button
+            onClick={handleSubmit}
+            disabled={loading}
+            className="w-full py-3 px-6 text-base font-semibold text-white bg-gradient-to-r from-green-500 to-green-600 rounded-xl shadow-lg shadow-green-500/30 hover:from-green-400 hover:to-green-500 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            {loading ? 'Processing...' : 'Send STK Push'}
+          </button>
         </div>
       </div>
-    </>
+    </div>
   );
 };
 

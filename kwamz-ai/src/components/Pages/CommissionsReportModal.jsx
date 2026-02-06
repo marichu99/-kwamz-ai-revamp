@@ -701,7 +701,7 @@ function CommissionsReportModal({ isOpen, onClose, filters, transactionType = 'c
                 </div>
             )}
 
-            <div className="bg-white dark:bg-slate-800 rounded-xl shadow-2xl w-full max-w-6xl mx-4">
+            <div className="bg-white dark:bg-slate-800 rounded-xl shadow-2xl w-full max-w-[95vw] md:max-w-6xl mx-2 sm:mx-4">
                 {/* Header */}
                 <div className="sticky top-0 z-10 bg-gradient-to-r from-emerald-600 to-green-600 p-6">
                     <div className="flex justify-between items-center">

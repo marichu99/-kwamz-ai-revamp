@@ -358,9 +358,9 @@ function UserAgentList() {
   };
 
   return (
-    <div className="bg-white dark:bg-slate-800 rounded-xl shadow-lg p-6">
+    <div className="bg-white dark:bg-slate-800 rounded-xl shadow-lg p-3 sm:p-4 md:p-6">
       {/* Action Buttons */}
-      <div className="flex justify-end mb-4 space-x-4">
+      <div className="flex flex-wrap justify-end mb-4 gap-2 sm:gap-4">
         <button
           onClick={fetchUsers}
           disabled={isLoading}
@@ -512,7 +512,7 @@ function UserAgentList() {
 
       {loadingDownload && (
         <div className="fixed inset-0 bg-gradient-to-br from-black/60 via-black/50 to-black/40 backdrop-blur-sm flex items-center justify-center z-50 p-4">
-          <div className="bg-white backdrop-blur-lg rounded-2xl shadow-2xl border border-white/20 p-8 w-full max-w-2xl transform transition-all duration-300 scale-100 max-h-[90vh] overflow-y-auto">
+          <div className="bg-white backdrop-blur-lg rounded-2xl shadow-2xl border border-white/20 p-6 sm:p-8 w-full max-w-[90vw] sm:max-w-2xl transform transition-all duration-300 scale-100 max-h-[90vh] overflow-y-auto">
             <div className="loader mb-3"></div>
             <p className="text-gray-700 font-medium">Preparing your download...</p>
           </div>

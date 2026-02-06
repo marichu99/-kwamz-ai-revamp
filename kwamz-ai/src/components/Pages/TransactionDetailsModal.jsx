@@ -49,12 +49,12 @@ function TransactionDetailsModal({ isOpen, onClose, transaction, transactionType
   const isDeposit = transaction.reason_type?.includes('Deposit') || transaction.details?.includes('Deposit');
 
   return (
-    <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 overflow-y-auto py-8">
-      <div className="bg-white dark:bg-slate-800 rounded-xl shadow-2xl w-full max-w-3xl mx-4">
-        <div className="p-8">
+    <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 overflow-y-auto p-4 sm:py-8">
+      <div className="bg-white dark:bg-slate-800 rounded-xl shadow-2xl w-full max-w-[95vw] sm:max-w-3xl">
+        <div className="p-4 sm:p-6 md:p-8">
           {/* Header */}
-          <div className="flex justify-between items-center mb-8">
-            <h2 className="text-2xl font-bold text-slate-800 dark:text-white flex items-center gap-3">
+          <div className="flex justify-between items-center mb-6 sm:mb-8">
+            <h2 className="text-lg sm:text-2xl font-bold text-slate-800 dark:text-white flex items-center gap-2 sm:gap-3">
               {transactionType === 'float' ? (
                 <DollarSign className="w-7 h-7 text-blue-600 dark:text-blue-400" />
               ) : (

@@ -107,7 +107,7 @@ function Sidebar({ collapsed, onToggle, currentPage, onPageChange }) {
     // Loading state
     if (isLoadingRole) {
         return (
-            <div className='w-72 transition-all duration-300 ease-in-out bg-white/80 dark:bg-slate-900/80 backdrop-blur-xl border-r border-slate-200/50 dark:border-slate-700/50 flex items-center justify-center'>
+            <div className='hidden md:flex w-72 transition-all duration-300 ease-in-out bg-white/80 dark:bg-slate-900/80 backdrop-blur-xl border-r border-slate-200/50 dark:border-slate-700/50 items-center justify-center'>
                 <div className='flex flex-col items-center space-y-3'>
                     <Loader2 className='w-8 h-8 text-blue-500 animate-spin' />
                     <p className='text-sm text-slate-600 dark:text-slate-400'>Loading menu...</p>
@@ -118,8 +118,8 @@ function Sidebar({ collapsed, onToggle, currentPage, onPageChange }) {
 
     if (collapsed) {
         return (
-            <div className='w-20 transition-all duration-300 ease-in-out bg-white/80 dark:bg-slate-900/80 backdrop-blur-xl border-r 
-            border-slate-200/50 dark:border-slate-700/50 flex flex-col relative z-10'>
+            <div className='hidden md:flex w-20 transition-all duration-300 ease-in-out bg-white/80 dark:bg-slate-900/80 backdrop-blur-xl border-r
+            border-slate-200/50 dark:border-slate-700/50 flex-col relative z-10'>
                 {/* Logo */}
                 <div className='p-4 border-b border-slate-200/50 dark:border-slate-700/50 flex justify-center'>
                     <div className='w-10 h-10 bg-gradient-to-r from-blue-600 to-purple-600 rounded-xl flex items-center justify-center shadow-lg'>
@@ -169,8 +169,13 @@ function Sidebar({ collapsed, onToggle, currentPage, onPageChange }) {
 
     return (
         <>
-            <div className='w-72 transition-all duration-300 ease-in-out bg-white/80 dark:bg-slate-900/80 backdrop-blur-xl border-r 
-              border-slate-200/50 dark:border-slate-700/50 flex flex-col relative z-10'>
+            {/* Mobile overlay backdrop */}
+            <div
+                className='fixed inset-0 bg-black/40 z-20 md:hidden'
+                onClick={onToggle}
+            />
+            <div className='fixed inset-y-0 left-0 z-30 w-72 md:relative md:z-10 transition-all duration-300 ease-in-out bg-white/95 dark:bg-slate-900/95 md:bg-white/80 md:dark:bg-slate-900/80 backdrop-blur-xl border-r
+              border-slate-200/50 dark:border-slate-700/50 flex flex-col'>
                 {/* Logo */}
                 <div className='p-6 border-b border-slate-200/50 dark:border-slate-700/50'>
                     <div className='flex items-center space-x-3'>

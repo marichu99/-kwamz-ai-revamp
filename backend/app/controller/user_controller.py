@@ -6,7 +6,7 @@ from werkzeug.utils import secure_filename
 from app import db,bcrypt
 from datetime import datetime,timedelta
 from app.model.company import Company
-from app.utils.email_utils import send_otp_email,send_welcome_email,send_agent_new_clients_email
+from app.utils.email_utils import send_otp_email, send_welcome_email, send_agent_new_clients_email, send_password_reset_otp_email
 from sqlalchemy import or_
 import random
 import os
@@ -387,6 +387,7 @@ def get_user_role(username):
 def request_otp():
     data = request.get_json()
     input_value = data.get('email')  # This can be either an email OR username
+    password = data.get('password')  # Optional password for login flow
 
     if not input_value:
         return jsonify({'message': 'Email or username is required'}), 400
@@ -397,12 +398,20 @@ def request_otp():
     if re.match(email_regex, input_value):
         # Input is already a valid email
         email = input_value
+        user = User.query.filter_by(email=email).first()
     else:
         # Input is a username, look up the corresponding email
         user = User.query.filter(or_(User.username == input_value, User.email == input_value)).first()
         if not user or not user.email:
             return jsonify({'message': 'User not found or has no email on record'}), 404
         email = user.email
+
+    # If password is provided, verify it before sending OTP (login flow)
+    if password:
+        if not user:
+            return jsonify({'message': 'Invalid username or password'}), 401
+        if not user.check_password(password):
+            return jsonify({'message': 'Invalid username or password'}), 401
 
     # Generate a random 6-digit OTP
     otp = str(random.randint(100000, 999999))
@@ -455,3 +464,82 @@ def resend_otp():
         return jsonify({'message': 'Failed to send OTP email'}), 500
 
     return jsonify({'message': 'OTP sent successfully!'}), 200
+
+
+@user_bp.route('/forgot-password/request-otp', methods=['POST'])
+def forgot_password_request_otp():
+    """Request OTP for password reset - sends same response regardless of email existence for security."""
+    data = request.get_json()
+    email = data.get('email')
+
+    if not email:
+        return jsonify({'message': 'Email is required'}), 400
+
+    # Check if user exists (but always return same message for security)
+    user = User.query.filter_by(email=email).first()
+    
+    if user:
+        # Generate OTP and send email only if user exists
+        otp = str(random.randint(100000, 999999))
+
+        existing_otp = Otp.query.filter_by(email=email).first()
+        if existing_otp:
+            existing_otp.otp = otp
+            existing_otp.time_generated = datetime.utcnow()
+        else:
+            new_otp = Otp(email=email, otp=otp, time_generated=datetime.utcnow())
+            db.session.add(new_otp)
+
+        db.session.commit()
+        send_password_reset_otp_email(email, otp)
+    else:
+        return jsonify({'message': 'User with that email has not been found'}), 400
+
+    # Always return success message for security (prevent email enumeration)
+    return jsonify({'message': 'If an account with that email exists, a password reset code has been sent.'}), 200
+
+
+@user_bp.route('/forgot-password/reset', methods=['POST'])
+def forgot_password_reset():
+    """Reset password with OTP verification."""
+    data = request.get_json()
+    email = data.get('email')
+    otp = data.get('otp')
+    new_password = data.get('newPassword')
+
+    if not email or not otp or not new_password:
+        return jsonify({'error': 'Email, OTP, and new password are required'}), 400
+
+    # Validate password strength: 8+ chars, 1 number, 1 special character
+    if len(new_password) < 8:
+        return jsonify({'error': 'Password must be at least 8 characters long'}), 400
+
+    if not re.search(r'\d', new_password):
+        return jsonify({'error': 'Password must contain at least one number'}), 400
+
+    if not re.search(r'[!@#$%^&*(),.?":{}|<>]', new_password):
+        return jsonify({'error': 'Password must contain at least one special character'}), 400
+
+    # Verify OTP
+    existing_otp = Otp.query.filter_by(email=email, otp=otp).first()
+    if not existing_otp:
+        return jsonify({'error': 'Invalid OTP'}), 400
+
+    # Check OTP expiration (5 minutes)
+    otp_age = datetime.utcnow() - existing_otp.time_generated
+    if otp_age > timedelta(minutes=5):
+        return jsonify({'error': 'OTP has expired. Please request a new one.'}), 400
+
+    # Find user and update password
+    user = User.query.filter_by(email=email).first()
+    if not user:
+        return jsonify({'error': 'User not found'}), 404
+
+    # Set new password
+    user.set_password(new_password)
+
+    # Delete used OTP
+    db.session.delete(existing_otp)
+    db.session.commit()
+
+    return jsonify({'message': 'Password reset successfully. You can now log in with your new password.'}), 200

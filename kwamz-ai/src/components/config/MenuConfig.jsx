@@ -5,13 +5,7 @@ import {
     Package,
     Wallet,
     Wrench,
-    ShoppingCart,
-    Settings,
-    Shield,
-    TrendingUp,
-    FileText,
     Clock,
-    Mail
 } from 'lucide-react';
 
 export const adminMenuItems = [
@@ -57,13 +51,9 @@ export const agentMenuItems = [
         label: "Dashboard",
     },
     {
-        id: "products",
+        id: "agent-companies",
         icon: Package,
-        label: "Products",
-        submenu: [
-            { id: "agent-companies", label: "Companies" },
-            { id: "inventory", label: "Inventory" },
-        ]
+        label: "Companies",
     },
     {
         id: "transactions",
@@ -92,16 +82,9 @@ const userMenuItems = [
         ]
     },
     {
-        id: "products",
-        icon: Package,
-        label: "Products",
-        submenu: [
-            { id: "catalog", label: "Product Catalog" },
-            { id: "inventory", label: "Inventory" },
-            { id: "transactions-list", label: "Transactions" },
-            { id: "checkout", label: "Pricing" },
-            { id: "pesapal", label: "PesaPal" }
-        ]
+        id: "transactions-list",
+        icon: Wallet,
+        label: "Transaction List",
     },
     {
         id: "transactions",

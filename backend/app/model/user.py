@@ -9,8 +9,9 @@ class User(db.Model):
     password = db.Column(db.String(128), nullable=False)  
     role = db.Column(db.String(128), nullable=True)  
     phone_number = db.Column(db.String(20), unique=True, nullable=True)  
-    image_loc = db.Column(db.String(50), nullable=True)  
-    date_of_birth = db.Column(db.Date, nullable=True)  
+    image_loc = db.Column(db.String(50), nullable=True)
+    date_of_birth = db.Column(db.Date, nullable=True)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
 
     # One-to-Many relationship with UserBank (user can have multiple bank accounts)
     # bank_details = db.relationship('UserBank', backref='user', uselist=True, cascade='all, delete-orphan')
@@ -23,6 +24,7 @@ class User(db.Model):
         self.image_loc = image_loc
         self.role = role
         self.date_of_birth = date_of_birth if date_of_birth else None
+        self.created_at = datetime.utcnow()
 
     def check_password(self, password):
         return bcrypt.check_password_hash(self.password, password)

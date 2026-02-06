@@ -51,7 +51,7 @@ function BatchUploadModal({
 
   return (
     <div className="fixed inset-0 bg-gradient-to-br from-black/60 via-black/50 to-black/40 backdrop-blur-sm flex items-center justify-center z-50 p-4">
-      <div className="bg-white backdrop-blur-lg rounded-2xl shadow-2xl border border-white/20 p-8 w-full max-w-4xl transform transition-all duration-300 scale-100 max-h-[90vh] overflow-y-auto">
+      <div className="bg-white backdrop-blur-lg rounded-2xl shadow-2xl border border-white/20 p-4 sm:p-6 md:p-8 w-full max-w-[95vw] sm:max-w-4xl transform transition-all duration-300 scale-100 max-h-[90vh] overflow-y-auto">
         <h2 className="text-xl font-bold mb-4 text-slate-800 dark:text-white">
           Batch Upload Preview - {type === 'users' ? 'Users' : 'Agent Companies'}
         </h2>
@@ -81,8 +81,8 @@ function BatchUploadModal({
         </div>
 
         {/* Table */}
-        <div className="flex-1 overflow-y-auto mb-4">
-          <table className="w-full table-auto">
+        <div className="flex-1 overflow-x-auto overflow-y-auto mb-4">
+          <table className="w-full table-auto min-w-[600px]">
             <thead className="sticky top-0 bg-slate-100 dark:bg-slate-700">
               <tr className="text-left text-slate-600 dark:text-slate-300">
                 <th className="px-4 py-3 font-semibold">{rowLabel}</th>
