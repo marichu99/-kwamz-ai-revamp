@@ -36,11 +36,30 @@ class FraudDetectionService:
             'analysis_period_days': 30,  # Days to analyze for historical report
             'recent_transactions_limit': 100,  # Recent transactions to check per shortcode
             # Split Transaction Thresholds
-            'split_min_amount': 100.0,  # Min amount per transaction to consider
+            'split_min_amount': 50.0,  # Min amount per transaction to consider (lowered to catch micro-splits)
             'split_max_amount': 50000.0,  # Max amount per transaction to consider
-            'split_total_amount_threshold': 10000.0,  # Total amount threshold that triggers suspicion
+            'split_total_amount_threshold': 5000.0,  # Total amount threshold that triggers suspicion
+            'daily_split_threshold': 5,  # Min transactions per day to flag as daily split pattern
+            'daily_time_window_hours': 24,  # Window for daily frequency detection
         }
         self.config = {**self.default_config, **(config or {})}
+
+        # Parse per-fraud-type configs; overlay onto flat config for each detection method
+        from app.model.config import Config as ConfigModel
+        raw_ftc = (config or {}).get('fraud_type_configs')
+        self.fraud_type_configs = {}
+        defaults = ConfigModel.FRAUD_TYPE_DEFAULTS
+        for ft_key in defaults:
+            if raw_ftc and isinstance(raw_ftc, dict) and ft_key in raw_ftc:
+                # Merge defaults with provided values
+                self.fraud_type_configs[ft_key] = {**defaults[ft_key], **raw_ftc[ft_key]}
+            else:
+                # Fall back: build from flat config values
+                self.fraud_type_configs[ft_key] = {**defaults[ft_key]}
+                for param in defaults[ft_key]:
+                    if param != 'enabled' and param in self.config:
+                        self.fraud_type_configs[ft_key][param] = self.config[param]
+
         self.email_templates = self._load_email_templates()
     
     def _load_email_templates(self) -> Dict:
@@ -181,7 +200,7 @@ ACTION REQUIRED: Please review these transactions immediately.
     <title>Fraud Detection Report</title>
 </head>
 <body style="margin: 0; padding: 0; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background-color: #f5f7fa;">
-    <table width="100%" cellpadding="0" cellspacing="0" style="max-width: 800px; margin: 0 auto; background-color: #ffffff;">
+    <table width="100%" cellpadding="0" cellspacing="0" style="max-width: 1100px; margin: 0 auto; background-color: #ffffff;">
         <!-- Header -->
         <tr>
             <td style="background: linear-gradient(135deg, #1a237e 0%, #283593 100%); padding: 30px 40px; text-align: center;">
@@ -923,126 +942,184 @@ ACTION REQUIRED: Please review these transactions immediately.
         return "\n".join(lines)
     
     def detect_split_transactions(self, transactions: List[Dict]) -> List[Dict]:
-        """Detect split transactions with configurable thresholds."""
-        if not transactions or len(transactions) < self.config['split_threshold']:
+        """Detect split transactions with configurable thresholds.
+
+        Uses three detection strategies:
+        1. Short-window similar amounts: rapid identical transactions (highest score)
+        2. Short-window varied amounts: rapid transactions of any amount
+        3. Daily frequency: many transactions from same phone in a day
+        """
+        # Read from per-type config, fall back to flat config
+        ftc = self.fraud_type_configs.get('split_transaction', {})
+        split_threshold = ftc.get('split_threshold', self.config.get('split_threshold', 5))
+        time_window = ftc.get('time_window_minutes', self.config.get('time_window_minutes', 5))
+        split_min_amount = ftc.get('split_min_amount', self.config.get('split_min_amount', 50.0))
+        split_max_amount = ftc.get('split_max_amount', self.config.get('split_max_amount', 50000.0))
+        split_total_threshold = ftc.get('split_total_amount_threshold', self.config.get('split_total_amount_threshold', 5000.0))
+        amount_variance = ftc.get('amount_variance', self.config.get('amount_variance', 0.1))
+        daily_split_threshold = self.config.get('daily_split_threshold', 5)
+        daily_window_hours = self.config.get('daily_time_window_hours', 24)
+
+        if not transactions or len(transactions) < split_threshold:
             return []
 
-        # Get configurable thresholds
-        split_threshold = self.config.get('split_threshold', 5)
-        time_window = self.config.get('time_window_minutes', 5)
-        split_min_amount = self.config.get('split_min_amount', 100.0)
-        split_max_amount = self.config.get('split_max_amount', 50000.0)
-        split_total_threshold = self.config.get('split_total_amount_threshold', 10000.0)
-        amount_variance = self.config.get('amount_variance', 0.1)
-
-        # Sort by time
-        sorted_txns = sorted(transactions, key=lambda x: x['completion_time'])
+        # Pre-group transactions by phone number (fixes break-on-different-phone bug)
+        phone_groups = defaultdict(list)
+        for txn in transactions:
+            phone = txn.get('phone_number')
+            if phone:
+                phone_groups[phone].append(txn)
 
         results = []
-        i = 0
+        seen_receipt_sets = set()  # Track flagged receipt combos to avoid duplicates
 
-        while i < len(sorted_txns) - 1:
-            current = sorted_txns[i]
-            phone = current.get('phone_number')
+        for phone, phone_txns in phone_groups.items():
+            # Sort this phone's transactions by time
+            phone_txns.sort(key=lambda x: x['completion_time'])
 
-            if not phone:
-                i += 1
+            # Filter to valid amount range
+            valid_txns = []
+            for txn in phone_txns:
+                txn_amount = abs(float(txn.get('paid_in') or txn.get('withdrawn') or 0))
+                if split_min_amount <= txn_amount <= split_max_amount:
+                    valid_txns.append(txn)
+
+            if len(valid_txns) < split_threshold:
                 continue
 
-            # Find transactions in time window
-            window_txns = []
-            j = i
-            while j < len(sorted_txns):
-                txn = sorted_txns[j]
-                if txn.get('phone_number') != phone:
-                    break
+            # --- Strategy 1 & 2: Short time-window detection ---
+            for i in range(len(valid_txns)):
+                current = valid_txns[i]
+                window_txns = [current]
 
-                time_diff = (txn['completion_time'] - current['completion_time']).total_seconds() / 60
-                if time_diff <= time_window:
-                    # Filter by amount thresholds
-                    txn_amount = abs(float(txn.get('paid_in') or txn.get('withdrawn') or 0))
-                    if split_min_amount <= txn_amount <= split_max_amount:
-                        window_txns.append((j, txn))
-                j += 1
+                for j in range(i + 1, len(valid_txns)):
+                    time_diff = (valid_txns[j]['completion_time'] - current['completion_time']).total_seconds() / 60
+                    if time_diff <= time_window:
+                        window_txns.append(valid_txns[j])
+                    else:
+                        break
 
-            # Group by similar amounts
-            if len(window_txns) >= split_threshold:
+                if len(window_txns) < split_threshold:
+                    continue
+
+                # Strategy 1: Group by similar amounts
                 amount_groups = defaultdict(list)
-                for idx, txn in window_txns:
+                for txn in window_txns:
                     amount = abs(float(txn.get('paid_in') or txn.get('withdrawn') or 0))
-
-                    # Find similar amount group
                     found = False
-                    for group_amount in amount_groups:
+                    for group_amount in list(amount_groups.keys()):
                         if abs(amount - group_amount) / max(group_amount, 1) <= amount_variance:
-                            amount_groups[group_amount].append((idx, txn))
+                            amount_groups[group_amount].append(txn)
                             found = True
                             break
-
                     if not found:
-                        amount_groups[amount].append((idx, txn))
+                        amount_groups[amount].append(txn)
 
-                # Check each group
                 for amount, group in amount_groups.items():
-                    total_amount = sum(abs(float(txn.get('paid_in') or txn.get('withdrawn') or 0)) for _, txn in group)
-
-                    # Only flag if meets both count AND total amount thresholds
+                    total_amount = sum(abs(float(t.get('paid_in') or t.get('withdrawn') or 0)) for t in group)
                     if len(group) >= split_threshold and total_amount >= split_total_threshold:
-                        # Collect agent/company info from transactions
-                        agent_info = self._extract_agent_info_from_transactions([txn for _, txn in group])
+                        receipt_key = frozenset(t['receipt_no'] for t in group)
+                        if receipt_key in seen_receipt_sets:
+                            continue
+                        seen_receipt_sets.add(receipt_key)
 
-                        # Build transaction details list
-                        transaction_details = []
-                        for _, txn in group:
-                            txn_amount = abs(float(txn.get('paid_in') or txn.get('withdrawn') or 0))
-                            txn_type = 'Deposit' if float(txn.get('paid_in') or 0) > 0 else 'Withdrawal'
-                            txn_time = txn['completion_time'].strftime('%Y-%m-%d %H:%M:%S') if hasattr(txn['completion_time'], 'strftime') else str(txn['completion_time'])
-                            transaction_details.append({
-                                'receipt_no': txn['receipt_no'],
-                                'amount': txn_amount,
-                                'type': txn_type,
-                                'time': txn_time,
-                                'party_phone': txn.get('phone_number'),
-                                'party_name': txn.get('name'),
-                                'other_party_info': txn.get('other_party_info', ''),
-                                'business_shortcode': txn.get('business_shortcode'),
-                                'agent_id': txn.get('agent_id')
-                            })
-
-                        time_span = (group[-1][1]['completion_time'] - group[0][1]['completion_time']).total_seconds() / 60 if len(group) > 1 else 0
-
-                        # Build detailed explanation
-                        explanation = (
-                            f"SPLIT TRANSACTION FRAUD DETECTED: {len(group)} transactions of similar amounts "
-                            f"(~KES {amount:,.2f} each) were made within {time_span:.1f} minutes. "
-                            f"Total amount: KES {total_amount:,.2f}. "
-                            f"This pattern suggests intentional splitting of a larger transaction to avoid detection thresholds."
+                        result = self._build_split_result(
+                            phone, group, amount, total_amount, time_window,
+                            fraud_score=min(40 + len(group) * 10, 100),
+                            label="similar amounts"
                         )
-
-                        # Create detection result with agent info
-                        result = {
-                            'fraud_type': 'split_transaction',
-                            'account_phone': phone,
-                            'account_name': current.get('name'),
-                            'transaction_count': len(group),
-                            'total_amount': total_amount,
-                            'avg_amount': amount,
-                            'time_window': time_window,
-                            'receipt_nos': [txn['receipt_no'] for _, txn in group],
-                            'transaction_ids': [txn['id'] for _, txn in group],
-                            'transaction_details': transaction_details,
-                            'explanation': explanation,
-                            'detection_time': datetime.now(),
-                            'fraud_score': min(30 + len(group) * 10, 100),
-                            # Agent/Company info
-                            'agent_info': agent_info,
-                            'business_shortcode': current.get('business_shortcode'),
-                        }
                         results.append(result)
 
-            i = j  # Move to next account
+                # Strategy 2: Varied amounts — flag entire window regardless of amount similarity
+                total_window_amount = sum(abs(float(t.get('paid_in') or t.get('withdrawn') or 0)) for t in window_txns)
+                if total_window_amount >= split_total_threshold:
+                    receipt_key = frozenset(t['receipt_no'] for t in window_txns)
+                    if receipt_key not in seen_receipt_sets:
+                        seen_receipt_sets.add(receipt_key)
+                        avg_amount = total_window_amount / len(window_txns)
+
+                        result = self._build_split_result(
+                            phone, window_txns, avg_amount, total_window_amount, time_window,
+                            fraud_score=min(25 + len(window_txns) * 8, 90),
+                            label="varied amounts"
+                        )
+                        results.append(result)
+
+            # --- Strategy 3: Daily frequency detection ---
+            day_groups = defaultdict(list)
+            for txn in valid_txns:
+                day_key = txn['completion_time'].date() if hasattr(txn['completion_time'], 'date') else txn['completion_time']
+                day_groups[day_key].append(txn)
+
+            for _day, day_txns in day_groups.items():
+                if len(day_txns) < daily_split_threshold:
+                    continue
+
+                total_amount = sum(abs(float(t.get('paid_in') or t.get('withdrawn') or 0)) for t in day_txns)
+                receipt_key = frozenset(t['receipt_no'] for t in day_txns)
+                if receipt_key in seen_receipt_sets:
+                    continue
+                seen_receipt_sets.add(receipt_key)
+
+                avg_amount = total_amount / len(day_txns)
+                result = self._build_split_result(
+                    phone, day_txns, avg_amount, total_amount, daily_window_hours * 60,
+                    fraud_score=min(20 + len(day_txns) * 5, 80),
+                    label="daily frequency"
+                )
+                results.append(result)
 
         return results
+
+    def _build_split_result(self, phone: str, group: List[Dict], avg_amount: float,
+                            total_amount: float, time_window: float, fraud_score: int,
+                            label: str) -> Dict:
+        """Build a split transaction detection result dict."""
+        agent_info = self._extract_agent_info_from_transactions(group)
+
+        transaction_details = []
+        for txn in group:
+            txn_amount = abs(float(txn.get('paid_in') or txn.get('withdrawn') or 0))
+            txn_type = 'Deposit' if float(txn.get('paid_in') or 0) > 0 else 'Withdrawal'
+            txn_time = txn['completion_time'].strftime('%Y-%m-%d %H:%M:%S') if hasattr(txn['completion_time'], 'strftime') else str(txn['completion_time'])
+            transaction_details.append({
+                'receipt_no': txn['receipt_no'],
+                'amount': txn_amount,
+                'type': txn_type,
+                'time': txn_time,
+                'party_phone': txn.get('phone_number'),
+                'party_name': txn.get('name'),
+                'other_party_info': txn.get('other_party_info', ''),
+                'business_shortcode': txn.get('business_shortcode'),
+                'agent_id': txn.get('agent_id')
+            })
+
+        time_span = (group[-1]['completion_time'] - group[0]['completion_time']).total_seconds() / 60 if len(group) > 1 else 0
+
+        explanation = (
+            f"SPLIT TRANSACTION FRAUD DETECTED ({label}): {len(group)} transactions "
+            f"(~KES {avg_amount:,.2f} avg) were made within {time_span:.1f} minutes. "
+            f"Total amount: KES {total_amount:,.2f}. "
+            f"This pattern suggests intentional splitting of a larger transaction to avoid detection thresholds."
+        )
+
+        return {
+            'fraud_type': 'split_transaction',
+            'account_phone': phone,
+            'account_name': group[0].get('name'),
+            'transaction_count': len(group),
+            'total_amount': total_amount,
+            'avg_amount': avg_amount,
+            'time_window': time_window,
+            'receipt_nos': [txn['receipt_no'] for txn in group],
+            'transaction_ids': [txn['id'] for txn in group],
+            'transaction_details': transaction_details,
+            'explanation': explanation,
+            'detection_time': datetime.now(),
+            'fraud_score': fraud_score,
+            'agent_info': agent_info,
+            'business_shortcode': group[0].get('business_shortcode'),
+        }
 
     def _extract_agent_info_from_transactions(self, transactions: List[Dict]) -> Dict:
         """Extract agent and company information from transactions."""
@@ -1106,40 +1183,51 @@ ACTION REQUIRED: Please review these transactions immediately.
         """Detect roll-over fraud patterns."""
         if not transactions:
             return []
-        
+
+        # Read from per-type config, fall back to flat config
+        ftc = self.fraud_type_configs.get('rollover_fraud', {})
+        min_txns_rollover = ftc.get('min_transactions_rollover', self.config.get('min_transactions_rollover', 3))
+        rollover_time_window = ftc.get('time_window_minutes', self.config.get('time_window_minutes', 5))
+
+        # Temporarily override config for _find_time_cluster usage
+        saved_tw = self.config['time_window_minutes']
+        saved_mtr = self.config['min_transactions_rollover']
+        self.config['time_window_minutes'] = rollover_time_window
+        self.config['min_transactions_rollover'] = min_txns_rollover
+
         # Group by account
         account_txns = defaultdict(list)
         for txn in transactions:
             phone = txn.get('phone_number')
             if phone:
                 account_txns[phone].append(txn)
-        
+
         results = []
-        
+
         for phone, txns in account_txns.items():
-            # Sort by time
             sorted_txns = sorted(txns, key=lambda x: x['completion_time'])
-            
-            # Group by type
+
             deposits = [t for t in sorted_txns if float(t.get('paid_in') or 0) > 0]
             withdrawals = [t for t in sorted_txns if float(t.get('withdrawn') or 0) > 0]
-            
-            # Check deposit patterns
-            if len(deposits) >= self.config['min_transactions_rollover']:
+
+            if len(deposits) >= min_txns_rollover:
                 cluster = self._find_time_cluster(deposits)
-                if cluster and len(cluster) >= self.config['min_transactions_rollover']:
+                if cluster and len(cluster) >= min_txns_rollover:
                     results.append(self._create_rollover_result(
                         phone, cluster, 'DEPOSIT', sorted_txns[0].get('name')
                     ))
-            
-            # Check withdrawal patterns
-            if len(withdrawals) >= self.config['min_transactions_rollover']:
+
+            if len(withdrawals) >= min_txns_rollover:
                 cluster = self._find_time_cluster(withdrawals)
-                if cluster and len(cluster) >= self.config['min_transactions_rollover']:
+                if cluster and len(cluster) >= min_txns_rollover:
                     results.append(self._create_rollover_result(
                         phone, cluster, 'WITHDRAWAL', sorted_txns[0].get('name')
                     ))
-        
+
+        # Restore original config values
+        self.config['time_window_minutes'] = saved_tw
+        self.config['min_transactions_rollover'] = saved_mtr
+
         return results
     
     def _find_time_cluster(self, transactions: List[Dict]) -> List[Dict]:
@@ -1279,32 +1367,36 @@ ACTION REQUIRED: Please review these transactions immediately.
         """Detect rapid deposit-withdrawal patterns."""
         if not transactions:
             return []
-        
+
+        # Read from per-type config, fall back to flat config
+        ftc = self.fraud_type_configs.get('rapid_back_forth', {})
+        rapid_time_window = ftc.get('time_window_minutes', self.config.get('time_window_minutes', 5))
+
         # Sort by time
         sorted_txns = sorted(transactions, key=lambda x: x.get('completion_time'))
-        
+
         results = []
         i = 0
-        
+
         while i < len(sorted_txns) - 1:
             current = sorted_txns[i]
             next_txn = sorted_txns[i + 1]
-            
+
             if current.get('phone_number') != next_txn.get('phone_number'):
                 i += 1
                 continue
-            
+
             # Parse dates safely
             current_time = self.parse_datetime(current.get('completion_time'))
             next_time = self.parse_datetime(next_txn.get('completion_time'))
-            
+
             if not current_time or not next_time:
                 i += 1
                 continue
-            
+
             time_diff = (next_time - current_time).total_seconds() / 60
-            
-            if time_diff <= self.config['time_window_minutes']:
+
+            if time_diff <= rapid_time_window:
                 # Check for opposite types
                 current_type = 'DEPOSIT' if float(current.get('paid_in') or 0) > 0 else 'WITHDRAWAL'
                 next_type = 'DEPOSIT' if float(next_txn.get('paid_in') or 0) > 0 else 'WITHDRAWAL'
@@ -1394,10 +1486,25 @@ ACTION REQUIRED: Please review these transactions immediately.
             txn['phone_number'] = phone
             txn['name'] = name
         
-        # Run detections
-        split_results = self.detect_split_transactions(transactions)
-        rollover_results = self.detect_rollover_fraud(transactions)
-        rapid_results = self.detect_rapid_back_forth(transactions)
+        # Run detections (skip disabled fraud types)
+        split_results = []
+        rollover_results = []
+        rapid_results = []
+
+        if self.fraud_type_configs.get('split_transaction', {}).get('enabled', True):
+            split_results = self.detect_split_transactions(transactions)
+        else:
+            logger.info("Split transaction detection is disabled, skipping")
+
+        if self.fraud_type_configs.get('rollover_fraud', {}).get('enabled', True):
+            rollover_results = self.detect_rollover_fraud(transactions)
+        else:
+            logger.info("Rollover fraud detection is disabled, skipping")
+
+        if self.fraud_type_configs.get('rapid_back_forth', {}).get('enabled', True):
+            rapid_results = self.detect_rapid_back_forth(transactions)
+        else:
+            logger.info("Rapid back-forth detection is disabled, skipping")
         
         # Combine results
         all_results = split_results + rollover_results + rapid_results
@@ -1551,9 +1658,8 @@ ACTION REQUIRED: Please review these transactions immediately.
         try:
             _send_email(
                 subject=f"[Fraud Alert] {template['subject']}",
-                body=body,
+                html=body,
                 recipient=self.user.email,
-                is_html=False  # Plain text for CPU efficiency
             )
             logger.info(f"Sent {fraud_type} alert to {self.user.email}")
 
@@ -1610,9 +1716,8 @@ ACTION REQUIRED: Please review these transactions immediately.
         try:
             _send_email(
                 subject=f"🛡️ Fraud Detection Report - {now.strftime('%Y-%m-%d')}",
-                body=body,
+                html=body,
                 recipient=self.user.email,
-                is_html=True
             )
             logger.info(f"Sent historical report to {self.user.email}")
 

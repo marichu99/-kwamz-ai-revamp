@@ -1,29 +1,38 @@
-import { useState, useEffect } from 'react';
-import { X, Info, Mail, Shield, Bell, Settings, Save, Eye, EyeOff } from 'lucide-react';
+import { useState, useEffect, useCallback } from 'react';
+import { X, Info, Mail, Shield, Bell, Settings, Save, Eye, EyeOff, ChevronRight, ToggleLeft, ToggleRight } from 'lucide-react';
+import config from '../../Config';
 
-function ConfigDetailsModal({ isOpen, onClose, onSubmit, isLoading, config }) {
-  const [formData, setFormData] = useState({
-    name: '',
-    description: '',
-    
-    // SMTP Configuration
+function ConfigDetailsModal({ isOpen, onClose, onSubmit, isLoading, config: configData }) {
+  const userRole = localStorage.getItem('userRole');
+  const isAdmin = userRole === 'admin';
+
+  const [smtpData, setSmtpData] = useState({
     smtp_server: 'smtp.gmail.com',
     smtp_port: 587,
     sender_email: '',
     sender_password: '',
-    recipient_emails: 'fraud-team@company.com',
-    
-    // Detection Parameters
+    recipient_emails: '',
+    email_subject_prefix: '[Fraud Alert] ',
+    email_enabled: false,
+  });
+  const [smtpLoaded, setSmtpLoaded] = useState(false);
+  const [smtpSaving, setSmtpSaving] = useState(false);
+
+  const [formData, setFormData] = useState({
+    name: '',
+    description: '',
+
+    // Detection Parameters (flat — kept for backward compat)
     time_window_minutes: 5,
     amount_variance: 0.1,
     min_transactions_rollover: 3,
     split_threshold: 2,
     rapid_back_forth_threshold: 2,
-    
+
     // Risk Thresholds
     high_risk_score: 50,
     medium_risk_score: 30,
-    
+
     // Notification Settings
     email_enabled: false,
     notify_high_risk: true,
@@ -31,46 +40,133 @@ function ConfigDetailsModal({ isOpen, onClose, onSubmit, isLoading, config }) {
     notify_split_transactions: true,
     notify_rollover_fraud: true,
     notify_rapid_patterns: true,
-    
+
     // Email Settings
     email_subject_prefix: '[Fraud Alert] ',
-    
+
     // System Settings
-    is_active: false
+    is_active: false,
+
+    // Per-fraud-type configs
+    fraud_type_configs: null,
   });
-  
+
   const [errors, setErrors] = useState({});
   const [showPassword, setShowPassword] = useState(false);
   const [activeSection, setActiveSection] = useState('general');
+  const [fraudTypeInfo, setFraudTypeInfo] = useState(null);
+  const [selectedFraudType, setSelectedFraudType] = useState(null);
+
+  // Fetch fraud type metadata from the API
+  useEffect(() => {
+    if (isOpen) {
+      const token = localStorage.getItem('token');
+      fetch(`${config.API_URL}/fraud/config/fraud-types`, {
+        headers: { Authorization: `Bearer ${token}` },
+      })
+        .then((res) => res.json())
+        .then((data) => {
+          if (data.success) {
+            setFraudTypeInfo(data.data);
+          }
+        })
+        .catch((err) => console.error('Failed to fetch fraud type info:', err));
+    }
+  }, [isOpen]);
+
+  // Fetch global SMTP config when admin opens SMTP section
+  useEffect(() => {
+    if (isOpen && isAdmin && activeSection === 'smtp' && !smtpLoaded) {
+      const token = localStorage.getItem('token');
+      fetch(`${config.API_URL}/fraud/config/smtp`, {
+        headers: { Authorization: `Bearer ${token}` },
+      })
+        .then((res) => res.json())
+        .then((data) => {
+          if (data.success) {
+            setSmtpData({
+              smtp_server: data.data.smtp_server || 'smtp.gmail.com',
+              smtp_port: data.data.smtp_port || 587,
+              sender_email: data.data.sender_email || '',
+              sender_password: data.data.sender_password || '',
+              recipient_emails: data.data.recipient_emails || '',
+              email_subject_prefix: data.data.email_subject_prefix || '[Fraud Alert] ',
+              email_enabled: data.data.email_enabled || false,
+            });
+          }
+        })
+        .catch((err) => console.error('Failed to fetch SMTP config:', err))
+        .finally(() => setSmtpLoaded(true));
+    }
+  }, [isOpen, isAdmin, activeSection, smtpLoaded]);
+
+  const handleSmtpChange = (e) => {
+    const { name, value, type, checked } = e.target;
+    setSmtpData(prev => ({
+      ...prev,
+      [name]: type === 'checkbox' ? checked :
+              type === 'number' ? (value === '' ? '' : parseFloat(value)) :
+              value
+    }));
+  };
+
+  const handleSmtpSave = async () => {
+    setSmtpSaving(true);
+    try {
+      const token = localStorage.getItem('token');
+      const res = await fetch(`${config.API_URL}/fraud/config/smtp`, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify(smtpData),
+      });
+      const data = await res.json();
+      if (!data.success) {
+        console.error('Failed to save SMTP config:', data.message);
+      }
+    } catch (err) {
+      console.error('Failed to save SMTP config:', err);
+    } finally {
+      setSmtpSaving(false);
+    }
+  };
+
+  // Build initial fraud_type_configs from info defaults
+  const buildDefaultFraudTypeConfigs = useCallback(() => {
+    if (!fraudTypeInfo) return null;
+    const configs = {};
+    for (const [key, info] of Object.entries(fraudTypeInfo)) {
+      configs[key] = { ...info.defaults };
+    }
+    return configs;
+  }, [fraudTypeInfo]);
 
   useEffect(() => {
-    if (config) {
+    if (configData) {
+      const ftc = configData.fraud_type_configs || buildDefaultFraudTypeConfigs();
       setFormData({
-        name: config.name || '',
-        description: config.description || '',
-        smtp_server: config.smtp_server || 'smtp.gmail.com',
-        smtp_port: config.smtp_port || 587,
-        sender_email: config.sender_email || '',
-        sender_password: config.sender_password || '',
-        recipient_emails: config.recipient_emails || 'fraud-team@company.com',
-        time_window_minutes: config.time_window_minutes || 5,
-        amount_variance: config.amount_variance || 0.1,
-        min_transactions_rollover: config.min_transactions_rollover || 3,
-        split_threshold: config.split_threshold || 2,
-        rapid_back_forth_threshold: config.rapid_back_forth_threshold || 2,
-        high_risk_score: config.high_risk_score || 50,
-        medium_risk_score: config.medium_risk_score || 30,
-        email_enabled: config.email_enabled || false,
-        notify_high_risk: config.notify_high_risk !== undefined ? config.notify_high_risk : true,
-        notify_medium_risk: config.notify_medium_risk || false,
-        notify_split_transactions: config.notify_split_transactions !== undefined ? config.notify_split_transactions : true,
-        notify_rollover_fraud: config.notify_rollover_fraud !== undefined ? config.notify_rollover_fraud : true,
-        notify_rapid_patterns: config.notify_rapid_patterns !== undefined ? config.notify_rapid_patterns : true,
-        email_subject_prefix: config.email_subject_prefix || '[Fraud Alert] ',
-        is_active: config.is_active || false
+        name: configData.name || '',
+        description: configData.description || '',
+        time_window_minutes: configData.time_window_minutes || 5,
+        amount_variance: configData.amount_variance || 0.1,
+        min_transactions_rollover: configData.min_transactions_rollover || 3,
+        split_threshold: configData.split_threshold || 2,
+        rapid_back_forth_threshold: configData.rapid_back_forth_threshold || 2,
+        high_risk_score: configData.high_risk_score || 50,
+        medium_risk_score: configData.medium_risk_score || 30,
+        email_enabled: configData.email_enabled || false,
+        notify_high_risk: configData.notify_high_risk !== undefined ? configData.notify_high_risk : true,
+        notify_medium_risk: configData.notify_medium_risk || false,
+        notify_split_transactions: configData.notify_split_transactions !== undefined ? configData.notify_split_transactions : true,
+        notify_rollover_fraud: configData.notify_rollover_fraud !== undefined ? configData.notify_rollover_fraud : true,
+        notify_rapid_patterns: configData.notify_rapid_patterns !== undefined ? configData.notify_rapid_patterns : true,
+        email_subject_prefix: configData.email_subject_prefix || '[Fraud Alert] ',
+        is_active: configData.is_active || false,
+        fraud_type_configs: ftc,
       });
     } else {
-      // Check for duplicate data from session storage
       const duplicateData = sessionStorage.getItem('duplicateConfig');
       if (duplicateData) {
         setFormData(JSON.parse(duplicateData));
@@ -78,17 +174,13 @@ function ConfigDetailsModal({ isOpen, onClose, onSubmit, isLoading, config }) {
         resetForm();
       }
     }
-  }, [config]);
+  }, [configData, fraudTypeInfo, buildDefaultFraudTypeConfigs]);
 
   const resetForm = () => {
+    setSmtpLoaded(false);
     setFormData({
       name: '',
       description: '',
-      smtp_server: 'smtp.gmail.com',
-      smtp_port: 587,
-      sender_email: '',
-      sender_password: '',
-      recipient_emails: 'fraud-team@company.com',
       time_window_minutes: 5,
       amount_variance: 0.1,
       min_transactions_rollover: 3,
@@ -103,49 +195,25 @@ function ConfigDetailsModal({ isOpen, onClose, onSubmit, isLoading, config }) {
       notify_rollover_fraud: true,
       notify_rapid_patterns: true,
       email_subject_prefix: '[Fraud Alert] ',
-      is_active: false
+      is_active: false,
+      fraud_type_configs: buildDefaultFraudTypeConfigs(),
     });
     setErrors({});
     setActiveSection('general');
+    setSelectedFraudType(null);
   };
 
   const validateForm = () => {
     const newErrors = {};
-    
-    // General validation
+
     if (!formData.name.trim()) {
       newErrors.name = 'Configuration name is required';
     }
-    
-    // SMTP validation when email is enabled
-    if (formData.email_enabled) {
-      if (!formData.smtp_server.trim()) {
-        newErrors.smtp_server = 'SMTP server is required';
-      }
-      if (!formData.sender_email.trim()) {
-        newErrors.sender_email = 'Sender email is required';
-      }
-      if (!formData.recipient_emails.trim()) {
-        newErrors.recipient_emails = 'At least one recipient email is required';
-      }
-    }
-    
-    // Detection parameters validation
-    if (formData.time_window_minutes < 1 || formData.time_window_minutes > 60) {
-      newErrors.time_window_minutes = 'Time window must be between 1 and 60 minutes';
-    }
-    if (formData.amount_variance < 0.01 || formData.amount_variance > 1) {
-      newErrors.amount_variance = 'Amount variance must be between 0.01 and 1.0';
-    }
-    if (formData.min_transactions_rollover < 2) {
-      newErrors.min_transactions_rollover = 'Minimum transactions must be at least 2';
-    }
-    
-    // Risk thresholds validation
+
     if (formData.high_risk_score <= formData.medium_risk_score) {
       newErrors.high_risk_score = 'High risk score must be greater than medium risk score';
     }
-    
+
     setErrors(newErrors);
     return Object.keys(newErrors).length === 0;
   };
@@ -153,7 +221,7 @@ function ConfigDetailsModal({ isOpen, onClose, onSubmit, isLoading, config }) {
   const handleSubmit = (e) => {
     e.preventDefault();
     if (validateForm()) {
-      onSubmit(formData, config?.id, resetForm);
+      onSubmit(formData, configData?.id, resetForm);
     }
   };
 
@@ -161,26 +229,44 @@ function ConfigDetailsModal({ isOpen, onClose, onSubmit, isLoading, config }) {
     const { name, value, type, checked } = e.target;
     setFormData(prev => ({
       ...prev,
-      [name]: type === 'checkbox' ? checked : 
-              type === 'number' ? (value === '' ? '' : parseFloat(value)) : 
+      [name]: type === 'checkbox' ? checked :
+              type === 'number' ? (value === '' ? '' : parseFloat(value)) :
               value
     }));
-    
-    // Clear error when user starts typing
+
     if (errors[name]) {
       setErrors(prev => ({ ...prev, [name]: undefined }));
     }
   };
 
+  const handleFraudTypeToggle = (fraudType) => {
+    setFormData(prev => {
+      const ftc = { ...(prev.fraud_type_configs || {}) };
+      ftc[fraudType] = { ...ftc[fraudType], enabled: !ftc[fraudType]?.enabled };
+      return { ...prev, fraud_type_configs: ftc };
+    });
+  };
+
+  const handleFraudTypeParamChange = (fraudType, param, value) => {
+    setFormData(prev => {
+      const ftc = { ...(prev.fraud_type_configs || {}) };
+      ftc[fraudType] = { ...ftc[fraudType], [param]: value };
+      return { ...prev, fraud_type_configs: ftc };
+    });
+  };
+
   const sections = [
     { id: 'general', label: 'General', icon: <Settings className="w-4 h-4" /> },
-    { id: 'smtp', label: 'SMTP Configuration', icon: <Mail className="w-4 h-4" /> },
-    { id: 'detection', label: 'Detection Parameters', icon: <Shield className="w-4 h-4" /> },
+    ...(isAdmin ? [{ id: 'smtp', label: 'SMTP Configuration', icon: <Mail className="w-4 h-4" /> }] : []),
+    { id: 'detection', label: 'Fraud Type Config', icon: <Shield className="w-4 h-4" /> },
     { id: 'notifications', label: 'Notifications', icon: <Bell className="w-4 h-4" /> },
     { id: 'risk', label: 'Risk Thresholds', icon: <Info className="w-4 h-4" /> }
   ];
 
   if (!isOpen) return null;
+
+  const fraudTypes = fraudTypeInfo ? Object.keys(fraudTypeInfo) : [];
+  const currentFtc = formData.fraud_type_configs || {};
 
   return (
     <div className="fixed inset-0 flex items-center justify-center bg-black/60 backdrop-blur-sm z-50 p-4">
@@ -189,7 +275,7 @@ function ConfigDetailsModal({ isOpen, onClose, onSubmit, isLoading, config }) {
         <div className="flex items-center justify-between p-4 sm:p-6 border-b border-slate-200 dark:border-slate-700">
           <div>
             <h2 className="text-xl font-bold text-slate-800 dark:text-white">
-              {config ? 'Edit Configuration' : 'Create New Configuration'}
+              {configData ? 'Edit Configuration' : 'Create New Configuration'}
             </h2>
             <p className="text-sm text-slate-600 dark:text-slate-300 mt-1">
               Configure fraud detection parameters and settings
@@ -210,7 +296,7 @@ function ConfigDetailsModal({ isOpen, onClose, onSubmit, isLoading, config }) {
               {sections.map((section) => (
                 <button
                   key={section.id}
-                  onClick={() => setActiveSection(section.id)}
+                  onClick={() => { setActiveSection(section.id); if (section.id !== 'detection') setSelectedFraudType(null); }}
                   className={`flex items-center space-x-2 md:space-x-3 px-3 md:px-4 py-2 md:py-3 rounded-lg transition-colors whitespace-nowrap md:w-full ${activeSection === section.id
                       ? 'bg-blue-500 text-white'
                       : 'text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-700'
@@ -261,7 +347,7 @@ function ConfigDetailsModal({ isOpen, onClose, onSubmit, isLoading, config }) {
                     />
                   </div>
 
-                  {!config && (
+                  {!configData && (
                     <div className="flex items-center space-x-3">
                       <input
                         type="checkbox"
@@ -279,58 +365,59 @@ function ConfigDetailsModal({ isOpen, onClose, onSubmit, isLoading, config }) {
                 </div>
               )}
 
-              {/* SMTP Configuration Section */}
-              {activeSection === 'smtp' && (
+              {/* SMTP Configuration Section — Admin Only */}
+              {activeSection === 'smtp' && isAdmin && (
                 <div className="space-y-6">
                   <div className="flex items-center justify-between">
                     <div>
-                      <h3 className="text-lg font-semibold text-slate-800 dark:text-white">SMTP Settings</h3>
-                      <p className="text-sm text-slate-600 dark:text-slate-300">Configure email notifications</p>
+                      <h3 className="text-lg font-semibold text-slate-800 dark:text-white">Global SMTP Settings</h3>
+                      <p className="text-sm text-slate-600 dark:text-slate-300">System-wide email configuration (admin only)</p>
                     </div>
                     <div className="flex items-center space-x-3">
                       <input
                         type="checkbox"
-                        id="email_enabled"
+                        id="smtp_email_enabled"
                         name="email_enabled"
-                        checked={formData.email_enabled}
-                        onChange={handleChange}
+                        checked={smtpData.email_enabled}
+                        onChange={handleSmtpChange}
                         className="w-4 h-4 text-blue-600 border-slate-300 rounded focus:ring-blue-500 dark:bg-slate-700 dark:border-slate-600"
                       />
-                      <label htmlFor="email_enabled" className="text-sm font-medium text-slate-700 dark:text-slate-300">
-                        Enable email notifications
+                      <label htmlFor="smtp_email_enabled" className="text-sm font-medium text-slate-700 dark:text-slate-300">
+                        Enable SMTP email
                       </label>
                     </div>
                   </div>
 
-                  {formData.email_enabled && (
+                  {!smtpLoaded ? (
+                    <div className="flex items-center justify-center py-12">
+                      <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-500"></div>
+                      <span className="ml-3 text-slate-500 dark:text-slate-400">Loading SMTP settings...</span>
+                    </div>
+                  ) : (
                     <>
                       <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                         <div>
                           <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">
-                            SMTP Server *
+                            SMTP Server
                           </label>
                           <input
                             type="text"
                             name="smtp_server"
-                            value={formData.smtp_server}
-                            onChange={handleChange}
-                            className={`w-full px-4 py-2.5 bg-slate-100 dark:bg-slate-700 border ${errors.smtp_server ? 'border-red-500' : 'border-slate-200 dark:border-slate-600'
-                              } rounded-xl text-slate-800 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all`}
+                            value={smtpData.smtp_server}
+                            onChange={handleSmtpChange}
+                            className="w-full px-4 py-2.5 bg-slate-100 dark:bg-slate-700 border border-slate-200 dark:border-slate-600 rounded-xl text-slate-800 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all"
                             placeholder="smtp.gmail.com"
                           />
-                          {errors.smtp_server && (
-                            <p className="mt-2 text-sm text-red-600 dark:text-red-400">{errors.smtp_server}</p>
-                          )}
                         </div>
                         <div>
                           <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">
-                            SMTP Port *
+                            SMTP Port
                           </label>
                           <input
                             type="number"
                             name="smtp_port"
-                            value={formData.smtp_port}
-                            onChange={handleChange}
+                            value={smtpData.smtp_port}
+                            onChange={handleSmtpChange}
                             min="1"
                             max="65535"
                             className="w-full px-4 py-2.5 bg-slate-100 dark:bg-slate-700 border border-slate-200 dark:border-slate-600 rounded-xl text-slate-800 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all"
@@ -340,20 +427,16 @@ function ConfigDetailsModal({ isOpen, onClose, onSubmit, isLoading, config }) {
 
                       <div>
                         <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">
-                          Sender Email *
+                          Sender Email
                         </label>
                         <input
                           type="email"
                           name="sender_email"
-                          value={formData.sender_email}
-                          onChange={handleChange}
-                          className={`w-full px-4 py-2.5 bg-slate-100 dark:bg-slate-700 border ${errors.sender_email ? 'border-red-500' : 'border-slate-200 dark:border-slate-600'
-                            } rounded-xl text-slate-800 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all`}
+                          value={smtpData.sender_email}
+                          onChange={handleSmtpChange}
+                          className="w-full px-4 py-2.5 bg-slate-100 dark:bg-slate-700 border border-slate-200 dark:border-slate-600 rounded-xl text-slate-800 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all"
                           placeholder="noreply@company.com"
                         />
-                        {errors.sender_email && (
-                          <p className="mt-2 text-sm text-red-600 dark:text-red-400">{errors.sender_email}</p>
-                        )}
                       </div>
 
                       <div>
@@ -364,8 +447,8 @@ function ConfigDetailsModal({ isOpen, onClose, onSubmit, isLoading, config }) {
                           <input
                             type={showPassword ? "text" : "password"}
                             name="sender_password"
-                            value={formData.sender_password}
-                            onChange={handleChange}
+                            value={smtpData.sender_password}
+                            onChange={handleSmtpChange}
                             className="w-full px-4 py-2.5 pr-10 bg-slate-100 dark:bg-slate-700 border border-slate-200 dark:border-slate-600 rounded-xl text-slate-800 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all"
                             placeholder="Enter SMTP password"
                           />
@@ -384,20 +467,16 @@ function ConfigDetailsModal({ isOpen, onClose, onSubmit, isLoading, config }) {
 
                       <div>
                         <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">
-                          Recipient Emails *
+                          Recipient Emails
                         </label>
                         <textarea
                           name="recipient_emails"
-                          value={formData.recipient_emails}
-                          onChange={handleChange}
+                          value={smtpData.recipient_emails}
+                          onChange={handleSmtpChange}
                           rows="2"
-                          className={`w-full px-4 py-2.5 bg-slate-100 dark:bg-slate-700 border ${errors.recipient_emails ? 'border-red-500' : 'border-slate-200 dark:border-slate-600'
-                            } rounded-xl text-slate-800 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all`}
+                          className="w-full px-4 py-2.5 bg-slate-100 dark:bg-slate-700 border border-slate-200 dark:border-slate-600 rounded-xl text-slate-800 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all"
                           placeholder="fraud-team@company.com, manager@company.com"
                         />
-                        {errors.recipient_emails && (
-                          <p className="mt-2 text-sm text-red-600 dark:text-red-400">{errors.recipient_emails}</p>
-                        )}
                         <p className="mt-2 text-xs text-slate-500 dark:text-slate-400">
                           Comma-separated list of email addresses
                         </p>
@@ -410,131 +489,140 @@ function ConfigDetailsModal({ isOpen, onClose, onSubmit, isLoading, config }) {
                         <input
                           type="text"
                           name="email_subject_prefix"
-                          value={formData.email_subject_prefix}
-                          onChange={handleChange}
+                          value={smtpData.email_subject_prefix}
+                          onChange={handleSmtpChange}
                           className="w-full px-4 py-2.5 bg-slate-100 dark:bg-slate-700 border border-slate-200 dark:border-slate-600 rounded-xl text-slate-800 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all"
                           placeholder="[Fraud Alert] "
                         />
+                      </div>
+
+                      <div className="flex justify-end pt-4">
+                        <button
+                          type="button"
+                          onClick={handleSmtpSave}
+                          disabled={smtpSaving}
+                          className="flex items-center space-x-2 px-6 py-2.5 bg-blue-500 text-white rounded-xl hover:bg-blue-600 transition-colors disabled:bg-blue-300 disabled:cursor-not-allowed"
+                        >
+                          <Save className="w-4 h-4" />
+                          <span>{smtpSaving ? 'Saving...' : 'Save SMTP Settings'}</span>
+                        </button>
                       </div>
                     </>
                   )}
                 </div>
               )}
 
-              {/* Detection Parameters Section */}
+              {/* Fraud Type Configuration Section */}
               {activeSection === 'detection' && (
-                <div className="space-y-6">
+                <div className="space-y-4">
                   <div>
-                    <h3 className="text-lg font-semibold text-slate-800 dark:text-white mb-2">Detection Parameters</h3>
-                    <p className="text-sm text-slate-600 dark:text-slate-300">Configure fraud detection sensitivity</p>
+                    <h3 className="text-lg font-semibold text-slate-800 dark:text-white mb-1">Fraud Type Configuration</h3>
+                    <p className="text-sm text-slate-600 dark:text-slate-300">Enable/disable and configure each fraud detection type individually</p>
                   </div>
 
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                    <div>
-                      <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">
-                        Time Window (minutes) *
-                      </label>
-                      <input
-                        type="number"
-                        name="time_window_minutes"
-                        value={formData.time_window_minutes}
-                        onChange={handleChange}
-                        min="1"
-                        max="60"
-                        step="1"
-                        className={`w-full px-4 py-2.5 bg-slate-100 dark:bg-slate-700 border ${errors.time_window_minutes ? 'border-red-500' : 'border-slate-200 dark:border-slate-600'
-                          } rounded-xl text-slate-800 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all`}
-                      />
-                      {errors.time_window_minutes && (
-                        <p className="mt-2 text-sm text-red-600 dark:text-red-400">{errors.time_window_minutes}</p>
-                      )}
-                      <p className="mt-2 text-xs text-slate-500 dark:text-slate-400">
-                        Time window to consider for fraud patterns (1-60 minutes)
-                      </p>
+                  {!fraudTypeInfo ? (
+                    <div className="flex items-center justify-center py-12">
+                      <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-500"></div>
+                      <span className="ml-3 text-slate-500 dark:text-slate-400">Loading fraud types...</span>
                     </div>
+                  ) : (
+                    <div className="space-y-3">
+                      {fraudTypes.map((ftKey) => {
+                        const info = fraudTypeInfo[ftKey];
+                        const ftConfig = currentFtc[ftKey] || info.defaults;
+                        const isEnabled = ftConfig?.enabled !== false;
+                        const isSelected = selectedFraudType === ftKey;
 
-                    <div>
-                      <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">
-                        Amount Variance *
-                      </label>
-                      <div className="relative">
-                        <input
-                          type="number"
-                          name="amount_variance"
-                          value={formData.amount_variance}
-                          onChange={handleChange}
-                          min="0.01"
-                          max="1.0"
-                          step="0.01"
-                          className={`w-full px-4 py-2.5 bg-slate-100 dark:bg-slate-700 border ${errors.amount_variance ? 'border-red-500' : 'border-slate-200 dark:border-slate-600'
-                            } rounded-xl text-slate-800 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all`}
-                        />
-                        <div className="absolute inset-y-0 right-0 flex items-center pr-3 pointer-events-none">
-                          <span className="text-slate-500 dark:text-slate-400">%</span>
-                        </div>
-                      </div>
-                      {errors.amount_variance && (
-                        <p className="mt-2 text-sm text-red-600 dark:text-red-400">{errors.amount_variance}</p>
-                      )}
-                      <p className="mt-2 text-xs text-slate-500 dark:text-slate-400">
-                        Allowed variance between amounts (1-100%)
-                      </p>
-                    </div>
-                  </div>
+                        return (
+                          <div
+                            key={ftKey}
+                            className={`border rounded-xl overflow-hidden transition-all ${
+                              isSelected
+                                ? 'border-blue-400 dark:border-blue-500 ring-1 ring-blue-200 dark:ring-blue-800'
+                                : 'border-slate-200 dark:border-slate-700'
+                            } ${!isEnabled ? 'opacity-60' : ''}`}
+                          >
+                            {/* Fraud type header / card */}
+                            <div
+                              className="flex items-center justify-between p-4 cursor-pointer hover:bg-slate-50 dark:hover:bg-slate-800/50 transition-colors"
+                              onClick={() => setSelectedFraudType(isSelected ? null : ftKey)}
+                            >
+                              <div className="flex items-center space-x-3 flex-1 min-w-0">
+                                <ChevronRight className={`w-4 h-4 text-slate-400 transition-transform flex-shrink-0 ${isSelected ? 'rotate-90' : ''}`} />
+                                <div className="min-w-0">
+                                  <h4 className="font-semibold text-slate-800 dark:text-white text-sm">
+                                    {info.display_name}
+                                  </h4>
+                                  <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5 line-clamp-1">
+                                    {info.description}
+                                  </p>
+                                </div>
+                              </div>
+                              <button
+                                type="button"
+                                onClick={(e) => { e.stopPropagation(); handleFraudTypeToggle(ftKey); }}
+                                className="flex-shrink-0 ml-3"
+                                title={isEnabled ? 'Disable this fraud type' : 'Enable this fraud type'}
+                              >
+                                {isEnabled ? (
+                                  <ToggleRight className="w-8 h-8 text-blue-500" />
+                                ) : (
+                                  <ToggleLeft className="w-8 h-8 text-slate-400" />
+                                )}
+                              </button>
+                            </div>
 
-                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-                    <div>
-                      <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">
-                        Min Split Transactions
-                      </label>
-                      <input
-                        type="number"
-                        name="split_threshold"
-                        value={formData.split_threshold}
-                        onChange={handleChange}
-                        min="2"
-                        max="10"
-                        step="1"
-                        className="w-full px-4 py-2.5 bg-slate-100 dark:bg-slate-700 border border-slate-200 dark:border-slate-600 rounded-xl text-slate-800 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all"
-                      />
-                    </div>
+                            {/* Expanded detail panel */}
+                            {isSelected && (
+                              <div className="border-t border-slate-200 dark:border-slate-700 bg-slate-50/50 dark:bg-slate-800/30 p-4 space-y-4">
+                                {/* Description */}
+                                <div className="flex items-start space-x-2 p-3 bg-blue-50 dark:bg-blue-900/20 rounded-lg">
+                                  <Info className="w-4 h-4 text-blue-500 mt-0.5 flex-shrink-0" />
+                                  <p className="text-xs text-blue-700 dark:text-blue-300 leading-relaxed">
+                                    {info.description}
+                                  </p>
+                                </div>
 
-                    <div>
-                      <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">
-                        Min Roll-over Transactions
-                      </label>
-                      <input
-                        type="number"
-                        name="min_transactions_rollover"
-                        value={formData.min_transactions_rollover}
-                        onChange={handleChange}
-                        min="2"
-                        max="20"
-                        step="1"
-                        className={`w-full px-4 py-2.5 bg-slate-100 dark:bg-slate-700 border ${errors.min_transactions_rollover ? 'border-red-500' : 'border-slate-200 dark:border-slate-600'
-                          } rounded-xl text-slate-800 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all`}
-                      />
-                      {errors.min_transactions_rollover && (
-                        <p className="mt-2 text-sm text-red-600 dark:text-red-400">{errors.min_transactions_rollover}</p>
-                      )}
-                    </div>
+                                {/* Parameters */}
+                                {isEnabled && info.parameters && (
+                                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                                    {Object.entries(info.parameters).map(([paramKey, paramMeta]) => {
+                                      const paramValue = ftConfig[paramKey] ?? info.defaults[paramKey] ?? '';
+                                      return (
+                                        <div key={paramKey}>
+                                          <label className="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1.5">
+                                            {paramMeta.label}
+                                          </label>
+                                          <input
+                                            type="number"
+                                            value={paramValue}
+                                            onChange={(e) => {
+                                              const val = e.target.value === '' ? '' : parseFloat(e.target.value);
+                                              handleFraudTypeParamChange(ftKey, paramKey, val);
+                                            }}
+                                            min={paramMeta.min}
+                                            max={paramMeta.max}
+                                            step={paramMeta.type === 'float' ? '0.01' : '1'}
+                                            className="w-full px-3 py-2 bg-white dark:bg-slate-700 border border-slate-200 dark:border-slate-600 rounded-lg text-sm text-slate-800 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all"
+                                          />
+                                        </div>
+                                      );
+                                    })}
+                                  </div>
+                                )}
 
-                    <div>
-                      <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">
-                        Rapid Pattern Threshold
-                      </label>
-                      <input
-                        type="number"
-                        name="rapid_back_forth_threshold"
-                        value={formData.rapid_back_forth_threshold}
-                        onChange={handleChange}
-                        min="2"
-                        max="10"
-                        step="1"
-                        className="w-full px-4 py-2.5 bg-slate-100 dark:bg-slate-700 border border-slate-200 dark:border-slate-600 rounded-xl text-slate-800 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all"
-                      />
+                                {!isEnabled && (
+                                  <p className="text-sm text-slate-500 dark:text-slate-400 italic">
+                                    This fraud type is disabled. Enable it to configure parameters.
+                                  </p>
+                                )}
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })}
                     </div>
-                  </div>
+                  )}
                 </div>
               )}
 
@@ -690,7 +778,7 @@ function ConfigDetailsModal({ isOpen, onClose, onSubmit, isLoading, config }) {
                   className="flex items-center space-x-2 px-6 py-2.5 bg-blue-500 text-white rounded-xl hover:bg-blue-600 transition-colors disabled:bg-blue-300 disabled:cursor-not-allowed"
                 >
                   <Save className="w-4 h-4" />
-                  <span>{isLoading ? 'Saving...' : config ? 'Update Configuration' : 'Create Configuration'}</span>
+                  <span>{isLoading ? 'Saving...' : configData ? 'Update Configuration' : 'Create Configuration'}</span>
                 </button>
               </div>
             </form>

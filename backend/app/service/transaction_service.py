@@ -25,6 +25,7 @@ from app.service.company_service import CompanyService
 from app.service.agentcompany_service import AgentCompanyService
 from app.model.agentcompany import AgentCompany
 from app.service.fraud_detector import FraudDetectionService
+from app.service.config_service import ConfigService
 from app.model.fraud_alert import FraudAlert, FraudReportHistory
 from app.model.user import User
 
@@ -1217,9 +1218,13 @@ class TransactionService:
             logger.error(f"User {user_id} not found")
             return {'status': 'error', 'message': 'User not found'}
         
-        # Initialize fraud detection service
-        fraud_service = FraudDetectionService(user=user)
-        
+        # Load user's active fraud detection config
+        config_obj = ConfigService.get_active_config(user.id)
+        config_dict = config_obj.to_dict() if config_obj else {}
+
+        # Initialize fraud detection service with user's config
+        fraud_service = FraudDetectionService(user=user, config=config_dict)
+
         try:
             # Step 1: Historical analysis (first run only)
             historical_report, all_transactions = self._run_historical_analysis_sync(fraud_service, user)
@@ -1289,194 +1294,273 @@ class TransactionService:
 
     def _send_detection_summary_sync(self, user, historical_report, recent_detections, transactions=None):
         """
-        Send lightweight detection summary synchronously.
-        Simple plain-text format to prevent CPU exhaustion.
-        Includes: receipt numbers, amounts, times, parties, and fraud explanations.
+        Send fraud detection summary as a formatted HTML email with tables.
+        Includes: summary cards, detections table, culpable agents, historical analysis.
         """
         from app.utils.email_utils import _send_email
         from datetime import datetime
 
         now = datetime.now()
+        report_id = f"PFR-{now.strftime('%Y%m%d%H%M%S')}-{user.id}"
 
         # Count detections by risk level
         high_risk_count = sum(1 for d in recent_detections if d.get('risk_level') == 'HIGH')
         medium_risk_count = sum(1 for d in recent_detections if d.get('risk_level') == 'MEDIUM')
         low_risk_count = len(recent_detections) - high_risk_count - medium_risk_count
+        total_count = len(recent_detections)
 
-        # Build lightweight plain-text report
-        lines = [
-            "=" * 60,
-            "PERIODIC FRAUD DETECTION ALERT",
-            "=" * 60,
-            f"Report Time: {now.strftime('%Y-%m-%d %H:%M:%S')}",
-            f"User: {user.email}",
-            "",
-            "-" * 60,
-            "SUMMARY",
-            "-" * 60,
-            f"High Risk Alerts:   {high_risk_count}",
-            f"Medium Risk Alerts: {medium_risk_count}",
-            f"Low Risk Alerts:    {low_risk_count}",
-            f"Total Detections:   {len(recent_detections)}",
-            "",
-        ]
+        def risk_badge(level):
+            colors = {'HIGH': '#dc2626', 'MEDIUM': '#ea580c', 'LOW': '#ca8a04'}
+            bg = colors.get(level, '#6b7280')
+            return f'<span style="background:{bg};color:#fff;padding:2px 8px;border-radius:4px;font-size:12px;font-weight:600;">{level}</span>'
 
-        # Add detection details with transaction info
+        def fraud_badge(ftype):
+            colors = {'SPLIT TRANSACTION': '#7c3aed', 'ROLLOVER FRAUD': '#0891b2', 'RAPID BACK FORTH': '#be185d'}
+            label = (ftype or 'Unknown').replace('_', ' ').upper()
+            bg = colors.get(label, '#4b5563')
+            return f'<span style="background:{bg};color:#fff;padding:2px 8px;border-radius:4px;font-size:11px;font-weight:600;">{label}</span>'
+
+        # --- Build HTML ---
+        html = f'''
+        <div style="font-family:Arial,Helvetica,sans-serif;max-width:1100px;margin:0 auto;background:#f8fafc;">
+          <!-- Header Banner -->
+          <div style="background:linear-gradient(135deg,#1e293b,#334155);padding:24px 32px;border-radius:8px 8px 0 0;">
+            <h1 style="color:#fff;margin:0;font-size:22px;">&#128680; Periodic Fraud Detection Alert</h1>
+            <p style="color:#94a3b8;margin:8px 0 0;font-size:13px;">
+              Report Time: {now.strftime('%Y-%m-%d %H:%M:%S')} &nbsp;|&nbsp; User: {user.email} &nbsp;|&nbsp; Report ID: {report_id}
+            </p>
+          </div>
+
+          <div style="padding:24px 32px;background:#ffffff;">
+            <!-- Summary Cards -->
+            <table style="width:100%;border-collapse:collapse;margin-bottom:24px;">
+              <tr>
+                <td style="padding:4px;">
+                  <div style="background:#fef2f2;border-left:4px solid #dc2626;padding:12px 16px;border-radius:4px;">
+                    <div style="font-size:11px;color:#991b1b;text-transform:uppercase;font-weight:600;">High Risk</div>
+                    <div style="font-size:28px;font-weight:700;color:#dc2626;">{high_risk_count}</div>
+                  </div>
+                </td>
+                <td style="padding:4px;">
+                  <div style="background:#fff7ed;border-left:4px solid #ea580c;padding:12px 16px;border-radius:4px;">
+                    <div style="font-size:11px;color:#9a3412;text-transform:uppercase;font-weight:600;">Medium Risk</div>
+                    <div style="font-size:28px;font-weight:700;color:#ea580c;">{medium_risk_count}</div>
+                  </div>
+                </td>
+                <td style="padding:4px;">
+                  <div style="background:#fefce8;border-left:4px solid #ca8a04;padding:12px 16px;border-radius:4px;">
+                    <div style="font-size:11px;color:#854d0e;text-transform:uppercase;font-weight:600;">Low Risk</div>
+                    <div style="font-size:28px;font-weight:700;color:#ca8a04;">{low_risk_count}</div>
+                  </div>
+                </td>
+                <td style="padding:4px;">
+                  <div style="background:#eff6ff;border-left:4px solid #2563eb;padding:12px 16px;border-radius:4px;">
+                    <div style="font-size:11px;color:#1e40af;text-transform:uppercase;font-weight:600;">Total</div>
+                    <div style="font-size:28px;font-weight:700;color:#2563eb;">{total_count}</div>
+                  </div>
+                </td>
+              </tr>
+            </table>
+        '''        
+
+        # --- Detections Table ---
         if recent_detections:
-            lines.extend([
-                "-" * 60,
-                "FRAUDULENT TRANSACTIONS DETECTED",
-                "-" * 60,
-                ""
-            ])
+            html += '''
+            <h2 style="font-size:16px;color:#1e293b;margin:24px 0 12px;border-bottom:2px solid #e2e8f0;padding-bottom:8px;">
+            Fraudulent Transactions Detected
+            </h2>
+            <div style="overflow-x:auto;width:100%;">
+            <table style="width:140%;border-collapse:collapse;font-size:12px;border:1px solid #e2e8f0;">
+                <thead>
+                <tr style="background:#f1f5f9;">
+                    <th style="padding:10px;border:1px solid #e2e8f0;text-align:left;width:3%;">#</th>
+                    <th style="padding:10px;border:1px solid #e2e8f0;text-align:left;width:7%;">Fraud Type</th>
+                    <th style="padding:10px;border:1px solid #e2e8f0;text-align:left;width:5%;">Risk</th>
+                    <th style="padding:10px;border:1px solid #e2e8f0;text-align:left;width:10%;">Account</th>
+                    <th style="padding:10px;border:1px solid #e2e8f0;text-align:right;width:8%;">Amount (KES)</th>
+                    <th style="padding:10px;border:1px solid #e2e8f0;text-align:left;width:7%;">Shortcode</th>
+                    <th style="padding:10px;border:1px solid #e2e8f0;text-align:left;width:15%;">Agent Company / Location</th>
+                    <th style="padding:10px;border:1px solid #e2e8f0;text-align:left;width:25%;">Transactions</th>
+                    <th style="padding:10px;border:1px solid #e2e8f0;text-align:left;width:20%;">Reason</th>
+                </tr>
+                </thead>
+                <tbody>
+            '''
 
-            for idx, detection in enumerate(recent_detections[:20], 1):  # Limit to 20
-                fraud_type = detection.get('fraud_type', 'Unknown').replace('_', ' ').upper()
+            for idx, detection in enumerate(recent_detections[:20], 1):
+                fraud_type = detection.get('fraud_type', 'Unknown')
                 risk_level = detection.get('risk_level', 'UNKNOWN')
                 account_phone = detection.get('account_phone', 'Unknown')
                 account_name = detection.get('account_name', 'Unknown')
                 total_amount = detection.get('total_amount', 0)
-                receipt_nos = detection.get('receipt_nos', [])
-                explanation = detection.get('explanation', 'No explanation available.')
                 business_shortcode = detection.get('business_shortcode', 'N/A')
+                explanation = detection.get('explanation', 'No explanation available.')
 
-                lines.extend([
-                    f"[{idx}] {fraud_type} - {risk_level} RISK",
-                    f"    Account: {account_phone} ({account_name})",
-                    f"    Total Amount: KES {total_amount:,.2f}",
-                    f"    Business Shortcode: {business_shortcode}",
-                    f"    Receipt Numbers: {', '.join(receipt_nos[:5])}{'...' if len(receipt_nos) > 5 else ''}",
-                    ""
-                ])
-
-                # Add transaction details if available
-                txn_details = detection.get('transaction_details', [])
-                if txn_details:
-                    lines.append("    Transactions:")
-                    for txn in txn_details[:5]:  # Limit to 5 per detection
-                        lines.append(
-                            f"      - Receipt: {txn.get('receipt_no', 'N/A')} | "
-                            f"Amount: KES {txn.get('amount', 0):,.2f} | "
-                            f"Type: {txn.get('type', 'N/A')} | "
-                            f"Time: {txn.get('time', 'N/A')}"
-                        )
-                        if txn.get('party_name') or txn.get('party_phone'):
-                            lines.append(
-                                f"        Party: {txn.get('party_name', 'Unknown')} ({txn.get('party_phone', 'N/A')})"
-                            )
-                    if len(txn_details) > 5:
-                        lines.append(f"      ... and {len(txn_details) - 5} more transactions")
-                    lines.append("")
-
-                # Add agent/company info if available
+                # Agent company info
                 agent_info = detection.get('agent_info', {})
                 agent_companies = agent_info.get('agent_companies', [])
-                user_agents = agent_info.get('user_agents', [])
+                agent_col = ''
+                if agent_companies:
+                    for ac in agent_companies[:2]:
+                        agent_col += f"<div style='margin-bottom:6px;'><strong>{ac.get('company_name', 'N/A')}</strong><br/>"
+                        agent_col += f"<span style='color:#475569;'>SC: {ac.get('short_code', 'N/A')}</span><br/>"
+                        agent_col += f"<span style='color:#475569;'>Loc: {ac.get('location', 'N/A')}</span><br/>"
+                        agent_col += f"<span style='color:#475569;'>Agent/Store: {ac.get('agent_number', 'N/A')}/{ac.get('store_number', 'N/A')}</span></div>"
+                else:
+                    agent_col = '<span style="color:#64748b;">N/A</span>'
 
-                if agent_companies or user_agents:
-                    lines.append("    RESPONSIBLE AGENT/COMPANY:")
-                    for ac in agent_companies[:3]:
-                        lines.append(f"      Company: {ac.get('company_name', 'N/A')}")
-                        lines.append(f"        - Shortcode: {ac.get('short_code', 'N/A')}")
-                        lines.append(f"        - Location: {ac.get('location', 'N/A')}")
-                        lines.append(f"        - Agent/Store #: {ac.get('agent_number', 'N/A')} / {ac.get('store_number', 'N/A')}")
-                        lines.append(f"        - Risk Level: {ac.get('fraud_risk_level', 'N/A').upper()}")
+                # Transaction details mini-list
+                txn_details = detection.get('transaction_details', [])
+                txn_col = ''
+                if txn_details:
+                    for txn in txn_details[:5]:
+                        party = ''
+                        if txn.get('party_name') or txn.get('party_phone'):
+                            party = f"<span style='color:#475569;'> → {txn.get('party_name', '')} ({txn.get('party_phone', '')})</span>"
+                        txn_col += (
+                            f"<div style='margin-bottom:6px;padding-bottom:4px;border-bottom:1px dashed #e2e8f0;'>"
+                            f"<span style='font-weight:600;'>{txn.get('receipt_no', 'N/A')}</span> "
+                            f"<span style='font-weight:600;color:#0f172a;'>KES {txn.get('amount', 0):,.2f}</span> "
+                            f"<span style='background:#f1f5f9;padding:2px 6px;border-radius:4px;'>{txn.get('type', '')}</span> "
+                            f"<span style='color:#64748b;display:block;margin-top:2px;'>{txn.get('time', '')}</span>"
+                            f"{party}</div>"
+                        )
+                    if len(txn_details) > 5:
+                        txn_col += f"<div style='color:#64748b;font-style:italic;background:#f8fafc;padding:4px;border-radius:4px;'>+{len(txn_details)-5} more transactions</div>"
+                else:
+                    receipt_nos = detection.get('receipt_nos', [])
+                    txn_col = f"<span style='color:#0f172a;'>{', '.join(receipt_nos[:5])}</span>"
+                    if len(receipt_nos) > 5:
+                        txn_col += f'<span style="color:#64748b;display:block;margin-top:4px;">+{len(receipt_nos)-5} more</span>'
 
-                    if user_agents:
-                        lines.append("      Associated Personnel:")
-                        for ua in user_agents[:3]:
-                            verified = "✓ Verified" if ua.get('is_authentic') else "✗ Unverified"
-                            lines.append(f"        - {ua.get('name', 'N/A')} (ID: {ua.get('idnumber', 'N/A')}, {verified})")
-                            if ua.get('phone_number'):
-                                lines.append(f"          Phone: {ua.get('phone_number')}")
+                row_bg = '#ffffff' if idx % 2 == 1 else '#f8fafc'
+                html += f'''
+                <tr style="background:{row_bg};">
+                <td style="padding:12px 10px;border:1px solid #e2e8f0;text-align:center;font-weight:600;">{idx}</td>
+                <td style="padding:12px 10px;border:1px solid #e2e8f0;">{fraud_badge(fraud_type)}</td>
+                <td style="padding:12px 10px;border:1px solid #e2e8f0;">{risk_badge(risk_level)}</td>
+                <td style="padding:12px 10px;border:1px solid #e2e8f0;">
+                    <span style="font-weight:600;">{account_phone}</span><br/>
+                    <span style="color:#475569;font-size:11px;">{account_name}</span>
+                </td>
+                <td style="padding:12px 10px;border:1px solid #e2e8f0;text-align:right;font-weight:700;font-size:13px;">KES {total_amount:,.2f}</td>
+                <td style="padding:12px 10px;border:1px solid #e2e8f0;font-family:monospace;">{business_shortcode}</td>
+                <td style="padding:12px 10px;border:1px solid #e2e8f0;font-size:11px;line-height:1.5;">{agent_col}</td>
+                <td style="padding:12px 10px;border:1px solid #e2e8f0;font-size:11px;line-height:1.5;">{txn_col}</td>
+                <td style="padding:12px 10px;border:1px solid #e2e8f0;font-size:11px;line-height:1.5;word-wrap:break-word;max-width:300px;">{explanation}</td>
+                </tr>
+                '''
 
-                    lines.append("")
-
-                # Add explanation
-                lines.extend([
-                    "    REASON:",
-                    f"    {explanation}",
-                    "",
-                    "-" * 40,
-                    ""
-                ])
+            html += '</tbody></table></div>'
 
             if len(recent_detections) > 20:
-                lines.append(f"... and {len(recent_detections) - 20} more detections not shown")
-                lines.append("")
+                html += f'<p style="color:#64748b;font-size:12px;margin-top:12px;">... and {len(recent_detections) - 20} more detections not shown</p>'
 
-        # Add historical summary
-        historical_patterns = len(historical_report.get('detections', []))
-        if historical_patterns > 0:
-            lines.extend([
-                "-" * 60,
-                "HISTORICAL ANALYSIS",
-                "-" * 60,
-                f"Patterns Found: {historical_patterns}",
-                f"Split Transactions: {historical_report.get('summary', {}).get('split_transactions', 0)}",
-                f"Rollover Fraud: {historical_report.get('summary', {}).get('rollover_fraud', 0)}",
-                f"Rapid Patterns: {historical_report.get('summary', {}).get('rapid_patterns', 0)}",
-                ""
-            ])
 
-        # Add culpable agents section
+        # --- Culpable Agents Table ---
         culpable_data = historical_report.get('culpable_agents', {})
         culpable_agents = culpable_data.get('culpable_agents', [])
         if culpable_agents:
-            lines.extend([
-                "-" * 60,
-                "CULPABLE AGENTS ANALYSIS",
-                "-" * 60,
-                f"Total Agents Involved: {len(culpable_agents)}",
-                f"Total Amount at Risk: KES {culpable_data.get('total_fraud_amount', 0):,.2f}",
-                ""
-            ])
+            html += f'''
+            <h2 style="font-size:16px;color:#1e293b;margin:28px 0 12px;border-bottom:2px solid #e2e8f0;padding-bottom:8px;">
+              Culpable Agents &mdash; {len(culpable_agents)} involved, KES {culpable_data.get('total_fraud_amount', 0):,.2f} at risk
+            </h2>
+            <table style="width:100%;border-collapse:collapse;font-size:12px;border:1px solid #e2e8f0;">
+              <thead>
+                <tr style="background:#f1f5f9;">
+                  <th style="padding:8px;border:1px solid #e2e8f0;text-align:left;">#</th>
+                  <th style="padding:8px;border:1px solid #e2e8f0;text-align:left;">Company</th>
+                  <th style="padding:8px;border:1px solid #e2e8f0;text-align:left;">Shortcode</th>
+                  <th style="padding:8px;border:1px solid #e2e8f0;text-align:left;">Location</th>
+                  <th style="padding:8px;border:1px solid #e2e8f0;text-align:right;">Fraud Amount (KES)</th>
+                  <th style="padding:8px;border:1px solid #e2e8f0;text-align:center;">High/Med/Low</th>
+                  <th style="padding:8px;border:1px solid #e2e8f0;text-align:left;">Fraud Types</th>
+                  <th style="padding:8px;border:1px solid #e2e8f0;text-align:left;">Personnel</th>
+                </tr>
+              </thead>
+              <tbody>
+            '''
 
-            for idx, agent in enumerate(culpable_agents[:10], 1):  # Limit to 10 agents
-                lines.extend([
-                    f"[{idx}] {agent.get('company_name', 'Unknown Agent')}",
-                    f"    Shortcode: {agent.get('shortcode', 'N/A')}",
-                    f"    Agent/Store #: {agent.get('agent_number', 'N/A')} / {agent.get('store_number', 'N/A')}",
-                    f"    Location: {agent.get('location', 'N/A')}",
-                    f"    Contact: {agent.get('contact_phone', 'N/A')}",
-                    f"    Fraud Amount: KES {agent.get('total_fraud_amount', 0):,.2f}",
-                    f"    Risk Counts: HIGH={agent.get('high_risk_count', 0)}, MEDIUM={agent.get('medium_risk_count', 0)}, LOW={agent.get('low_risk_count', 0)}",
-                    f"    Fraud Types: {', '.join(agent.get('fraud_types', []))}",
-                ])
+            for idx, agent in enumerate(culpable_agents[:10], 1):
+                row_bg = '#ffffff' if idx % 2 == 1 else '#f8fafc'
+                fraud_types = ', '.join(agent.get('fraud_types', []))
+                personnel = ''
+                for ua in agent.get('user_agents', [])[:3]:
+                    verified = '&#10003;' if ua.get('is_verified') else '&#10007;'
+                    personnel += f"{ua.get('name', 'N/A')} (ID: {ua.get('id_number', 'N/A')}, {verified})<br/>"
 
-                # Add associated personnel
-                user_agents = agent.get('user_agents', [])
-                if user_agents:
-                    lines.append("    Associated Personnel:")
-                    for ua in user_agents[:3]:  # Limit to 3
-                        verified = "Verified" if ua.get('is_verified') else "Unverified"
-                        lines.append(f"      - {ua.get('name', 'N/A')} (ID: {ua.get('id_number', 'N/A')}, {verified})")
+                html += f'''
+                <tr style="background:{row_bg};">
+                  <td style="padding:8px;border:1px solid #e2e8f0;text-align:center;">{idx}</td>
+                  <td style="padding:8px;border:1px solid #e2e8f0;font-weight:600;">{agent.get('company_name', 'Unknown')}</td>
+                  <td style="padding:8px;border:1px solid #e2e8f0;">{agent.get('shortcode', 'N/A')}</td>
+                  <td style="padding:8px;border:1px solid #e2e8f0;">{agent.get('location', 'N/A')}</td>
+                  <td style="padding:8px;border:1px solid #e2e8f0;text-align:right;font-weight:600;">{agent.get('total_fraud_amount', 0):,.2f}</td>
+                  <td style="padding:8px;border:1px solid #e2e8f0;text-align:center;">
+                    <span style="color:#dc2626;">{agent.get('high_risk_count', 0)}</span> /
+                    <span style="color:#ea580c;">{agent.get('medium_risk_count', 0)}</span> /
+                    <span style="color:#ca8a04;">{agent.get('low_risk_count', 0)}</span>
+                  </td>
+                  <td style="padding:8px;border:1px solid #e2e8f0;font-size:11px;">{fraud_types}</td>
+                  <td style="padding:8px;border:1px solid #e2e8f0;font-size:11px;">{personnel or 'N/A'}</td>
+                </tr>
+                '''
 
-                lines.append("")
+            html += '</tbody></table>'
 
             if len(culpable_agents) > 10:
-                lines.append(f"... and {len(culpable_agents) - 10} more agents with suspicious activity")
-                lines.append("")
+                html += f'<p style="color:#64748b;font-size:12px;margin-top:8px;">... and {len(culpable_agents) - 10} more agents with suspicious activity</p>'
 
-        # Footer
-        lines.extend([
-            "=" * 60,
-            "ACTION REQUIRED: Please review flagged transactions",
-            f"Report ID: PFR-{now.strftime('%Y%m%d%H%M%S')}-{user.id}",
-            "=" * 60,
-        ])
+        # --- Historical Analysis ---
+        historical_patterns = len(historical_report.get('detections', []))
+        if historical_patterns > 0:
+            summary = historical_report.get('summary', {})
+            html += f'''
+            <h2 style="font-size:16px;color:#1e293b;margin:28px 0 12px;border-bottom:2px solid #e2e8f0;padding-bottom:8px;">
+              Historical Analysis
+            </h2>
+            <table style="border-collapse:collapse;font-size:13px;border:1px solid #e2e8f0;">
+              <tr style="background:#f1f5f9;">
+                <td style="padding:8px 16px;border:1px solid #e2e8f0;font-weight:600;">Patterns Found</td>
+                <td style="padding:8px 16px;border:1px solid #e2e8f0;">{historical_patterns}</td>
+              </tr>
+              <tr>
+                <td style="padding:8px 16px;border:1px solid #e2e8f0;font-weight:600;">Split Transactions</td>
+                <td style="padding:8px 16px;border:1px solid #e2e8f0;">{summary.get('split_transactions', 0)}</td>
+              </tr>
+              <tr style="background:#f1f5f9;">
+                <td style="padding:8px 16px;border:1px solid #e2e8f0;font-weight:600;">Rollover Fraud</td>
+                <td style="padding:8px 16px;border:1px solid #e2e8f0;">{summary.get('rollover_fraud', 0)}</td>
+              </tr>
+              <tr>
+                <td style="padding:8px 16px;border:1px solid #e2e8f0;font-weight:600;">Rapid Patterns</td>
+                <td style="padding:8px 16px;border:1px solid #e2e8f0;">{summary.get('rapid_patterns', 0)}</td>
+              </tr>
+            </table>
+            '''
 
-        body = "\n".join(lines)
+        # --- Footer ---
+        html += f'''
+            <div style="margin-top:32px;padding:16px;background:#fef2f2;border:1px solid #fecaca;border-radius:6px;text-align:center;">
+              <strong style="color:#991b1b;font-size:14px;">&#9888; ACTION REQUIRED: Please review flagged transactions</strong><br/>
+              <span style="color:#64748b;font-size:12px;">Report ID: {report_id}</span>
+            </div>
+          </div>
 
-        # Send email (plain text)
+          <div style="background:#1e293b;padding:16px 32px;border-radius:0 0 8px 8px;text-align:center;">
+            <p style="color:#64748b;font-size:11px;margin:0;">Kwamz AI Fraud Detection System &mdash; Automated Report</p>
+          </div>
+        </div>
+        '''
+
+        # Send HTML email
         try:
             _send_email(
                 subject=f"[FRAUD ALERT] Periodic Detection Report - {now.strftime('%Y-%m-%d %H:%M')}",
-                body=body,
+                html=html,
                 recipient=user.email,
-                is_html=False  # Plain text for lightweight processing
             )
-            logger.info(f"Sent lightweight fraud detection summary to {user.email}")
+            logger.info(f"Sent HTML fraud detection summary to {user.email}")
         except Exception as e:
             logger.error(f"Failed to send summary email: {str(e)}")
 
@@ -1799,9 +1883,13 @@ class TransactionService:
             logger.error(f"User {user_id} not found")
             return {'status': 'error', 'message': 'User not found'}
         
-        # Initialize fraud detection service
-        fraud_service = FraudDetectionService(user=user)
-        
+        # Load user's active fraud detection config
+        config_obj = ConfigService.get_active_config(user.id)
+        config_dict = config_obj.to_dict() if config_obj else {}
+
+        # Initialize fraud detection service with user's config
+        fraud_service = FraudDetectionService(user=user, config=config_dict)
+
         # Step 1: Historical analysis (first run only)
         historical_report = await self._run_historical_analysis(fraud_service, user)
         
@@ -1967,12 +2055,11 @@ class TransactionService:
             executor,
             lambda: _send_email(
                 subject=f"Fraud Detection Summary - {datetime.now().strftime('%Y-%m-%d')}",
-                body=body,
+                html=body,
                 recipient=user.email,
-                is_html=True
             )
         )
-    
+
     def _check_recent_transactions_sync(self, user: User, fraud_service: FraudDetectionService) -> List[Dict]:
         """Check recent transactions for fraud patterns - Synchronous version."""
         logger.info(f"Checking recent transactions for fraud patterns for user: {user.email}")
@@ -2219,12 +2306,11 @@ class TransactionService:
         try:
             _send_email(
                 subject=subject,
-                body=body,
+                html=body,
                 recipient=user.email,
-                is_html=True
             )
             logger.info(f"Sent {fraud_type} alert to {user.email}")
-            
+
             # Record alert in database
             self._record_fraud_alert_sync(detection, fraud_type, user)
             
@@ -2401,18 +2487,21 @@ class TransactionService:
         # Send email
         _send_email(
             subject=f"Daily Fraud Report - {today.strftime('%Y-%m-%d')}",
-            body=body,
+            html=body,
             recipient=admin.email,
-            is_html=True
         )
     
     def run_fraud_detection_for_user(self, user) -> Dict:
         """Run fraud detection for a specific user."""
         logger.info(f"Starting fraud detection for user: {user.email}")
         
-        # Initialize fraud detection service
-        fraud_service = FraudDetectionService(user=user)
-        
+        # Load user's active fraud detection config
+        config_obj = ConfigService.get_active_config(user.id)
+        config_dict = config_obj.to_dict() if config_obj else {}
+
+        # Initialize fraud detection service with user's config
+        fraud_service = FraudDetectionService(user=user, config=config_dict)
+
         # Step 1: Get historical report (first run)
         historical_report = self._generate_historical_report(user, fraud_service)
         

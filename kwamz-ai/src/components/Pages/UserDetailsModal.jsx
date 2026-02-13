@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import axios from 'axios';
-import { X, User as UserIcon, Phone, IdCard, Calendar, Shield, FileText, Camera, Briefcase, AlertCircle, Search, Check } from 'lucide-react';
+import { X, User as UserIcon, Phone, IdCard, Calendar, Shield, FileText, Camera, Briefcase, AlertCircle, Search, Check, Database, Clock } from 'lucide-react';
 import { useToast } from './ToastProvider';
 import config from '../../Config';
 
@@ -17,6 +17,7 @@ function UserDetailsModal({ isOpen, onClose, onSubmit, isLoading, user }) {
     image: null,
     imagePreview: null,
     agent_company_ids: [],
+    agent_company_id: '',
   });
   const [agentCompanies, setAgentCompanies] = useState([]);
   const [loadingAgentCompanies, setLoadingAgentCompanies] = useState(false);
@@ -69,16 +70,17 @@ function UserDetailsModal({ isOpen, onClose, onSubmit, isLoading, user }) {
   useEffect(() => {
     if (isEditMode && user) {
       setFormData({
-        firstname: user.firstname || 'barny',
-        lastname: user.lastname || 'nyaboke',
-        idnumber: user.idnumber || '42112256',
-        phone_number: user.phone_number || '0795642633',
+        firstname: user.firstname || '',
+        lastname: user.lastname || '',
+        idnumber: user.idnumber || '',
+        phone_number: user.phone_number || '',
         is_authentic: user.is_authentic ? 'true' : 'false',
         authenticity_desc: user.authenticity_desc || '',
-        date_of_birth: user.date_of_birth ? new Date(user.date_of_birth).toISOString().split('T')[0] : '2003-08-20',
+        date_of_birth: user.date_of_birth ? new Date(user.date_of_birth).toISOString().split('T')[0] : '',
         image: null,
         imagePreview: user.image_loc ? `/useragents/profiles/${user.image_loc.split('/').pop()}` : null,
-        agent_company_ids: user.agent_company_ids || [4, 5],
+        agent_company_ids: user.agent_company_ids || [],
+        agent_company_id: user.agent_company_id || '',
       });
     } else {
       setFormData({
@@ -92,6 +94,7 @@ function UserDetailsModal({ isOpen, onClose, onSubmit, isLoading, user }) {
         image: null,
         imagePreview: null,
         agent_company_ids: [],
+        agent_company_id: '',
       });
     }
     setErrors({});
@@ -149,7 +152,8 @@ function UserDetailsModal({ isOpen, onClose, onSubmit, isLoading, user }) {
 
   const filteredAgentCompanies = agentCompanies.filter(company =>
     company.company_name?.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    company.registration_number?.toLowerCase().includes(searchTerm.toLowerCase())
+    company.registration_number?.toLowerCase().includes(searchTerm.toLowerCase()) ||
+    company.short_code?.toLowerCase().includes(searchTerm.toLowerCase())
   );
 
   const getSelectedCompanyNames = () => {
@@ -164,8 +168,8 @@ function UserDetailsModal({ isOpen, onClose, onSubmit, isLoading, user }) {
     if (!formData.firstname) newErrors.firstname = 'First name is required';
     if (!formData.lastname) newErrors.lastname = 'Last name is required';
     if (!formData.idnumber) newErrors.idnumber = 'ID number is required';
-    if (!formData.agent_company_ids || formData.agent_company_ids.length === 0) {
-      newErrors.agent_company_ids = 'At least one agent company is required';
+    if (!formData.agent_company_id) {
+      newErrors.agent_company_id = 'Primary agent company is required';
     }
     if (formData.phone_number && !/^\+?\d{1,3}?\d{9,12}$/.test(formData.phone_number)) {
       newErrors.phone_number = 'Invalid phone number format';
@@ -191,6 +195,8 @@ function UserDetailsModal({ isOpen, onClose, onSubmit, isLoading, user }) {
         if (key === 'agent_company_ids' && Array.isArray(value)) {
           // Join agent_company_ids into a comma-separated string
           formDataToSend.append('agent_company_ids', value.join(','));
+        } else if (key === 'agent_company_id') {
+          formDataToSend.append('agent_company_id', value);
         } else {
           formDataToSend.append(key, value);
         }
@@ -287,12 +293,65 @@ function UserDetailsModal({ isOpen, onClose, onSubmit, isLoading, user }) {
             </p>
           </div>
 
-          {/* Agent Company Selection */}
+          {/* Primary Agent Company Selection */}
+          <div className="bg-gradient-to-br from-green-50/50 to-emerald-50/50 dark:from-green-900/20 dark:to-emerald-900/20 rounded-xl p-6 border-2 border-green-100 dark:border-green-800/30">
+            <label className="flex items-center space-x-2 text-sm font-bold text-slate-700 dark:text-slate-300 mb-3">
+              <Briefcase className="w-5 h-5 text-green-600 dark:text-green-400" />
+              <span>Primary Agent Company</span>
+              <span className="text-red-500">*</span>
+            </label>
+            <select
+              name="agent_company_id"
+              value={formData.agent_company_id}
+              onChange={handleInputChange}
+              className={`w-full px-4 py-3.5 border-2 rounded-xl font-medium transition-all bg-white dark:bg-slate-800 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-green-200 dark:focus:ring-green-900 hover:border-slate-300 ${
+                errors.agent_company_id
+                  ? 'border-red-300 bg-red-50 dark:bg-red-900/20 dark:border-red-500'
+                  : 'border-slate-200 dark:border-slate-700'
+              }`}
+              disabled={isLoading || loadingAgentCompanies}
+            >
+              <option value="">
+                {loadingAgentCompanies ? 'Loading...' : 'Select primary company...'}
+              </option>
+              {agentCompanies.map((company) => (
+                <option key={company.id} value={company.id}>
+                  {company.company_name} {company.short_code ? `[${company.short_code}]` : ''} {company.registration_number ? `(${company.registration_number})` : ''}
+                </option>
+              ))}
+            </select>
+            {errors.agent_company_id && (
+              <p className="text-red-500 text-xs mt-2 ml-1 flex items-center font-medium">
+                <span className="mr-1">⚠</span>
+                {errors.agent_company_id}
+              </p>
+            )}
+            {/* Show primary company scrape status in edit mode */}
+            {isEditMode && user?.primary_company && (
+              <div className={`mt-2 ml-1 flex items-center gap-2 text-xs font-medium ${user.primary_company.is_scraped ? 'text-green-600 dark:text-green-400' : 'text-amber-600 dark:text-amber-400'}`}>
+                <Database className="w-3.5 h-3.5" />
+                {user.primary_company.is_scraped ? (
+                  <span>Scraped on {new Date(user.primary_company.last_scraped_at).toLocaleDateString()}</span>
+                ) : (
+                  <span>Not yet scraped from portal</span>
+                )}
+                {user.primary_company.identity_status && (
+                  <span className={`px-1.5 py-0.5 rounded text-xs ${user.primary_company.identity_status === 'Active' ? 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-300' : 'bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-300'}`}>
+                    {user.primary_company.identity_status}
+                  </span>
+                )}
+              </div>
+            )}
+            <p className="text-xs text-slate-500 dark:text-slate-400 mt-2 ml-1">
+              The main company this agent is associated with
+            </p>
+          </div>
+
+          {/* Additional Agent Companies Selection */}
           <div className="bg-gradient-to-br from-blue-50/50 to-cyan-50/50 dark:from-blue-900/20 dark:to-cyan-900/20 rounded-xl p-6 border-2 border-blue-100 dark:border-blue-800/30">
             <label className="flex items-center space-x-2 text-sm font-bold text-slate-700 dark:text-slate-300 mb-3">
               <Briefcase className="w-5 h-5 text-blue-600 dark:text-blue-400" />
-              <span>Agent Companies</span>
-              <span className="text-red-500">*</span>
+              <span>Additional Agent Companies</span>
             </label>
             
             {fetchError && (
@@ -320,21 +379,30 @@ function UserDetailsModal({ isOpen, onClose, onSubmit, isLoading, user }) {
                     {loadingAgentCompanies ? 'Loading agent companies...' : 'Select agent companies...'}
                   </span>
                 ) : (
-                  getSelectedCompanyNames().map((companyName, index) => (
+                  getSelectedCompanyNames().map((companyName, index) => {
+                    const companyId = formData.agent_company_ids[index];
+                    const isPrimary = companyId === Number(formData.agent_company_id);
+                    return (
                     <span
-                      key={formData.agent_company_ids[index]}
-                      className="inline-flex items-center gap-1 bg-blue-100 dark:bg-blue-900/40 text-blue-700 dark:text-blue-300 px-2 py-1 rounded-lg text-sm font-medium"
+                      key={companyId}
+                      className={`inline-flex items-center gap-1 px-2 py-1 rounded-lg text-sm font-medium ${
+                        isPrimary
+                          ? 'bg-green-100 dark:bg-green-900/40 text-green-700 dark:text-green-300 ring-1 ring-green-300 dark:ring-green-700'
+                          : 'bg-blue-100 dark:bg-blue-900/40 text-blue-700 dark:text-blue-300'
+                      }`}
                     >
+                      {isPrimary && <Shield className="w-3 h-3" />}
                       {companyName}
                       <button
                         type="button"
-                        onClick={(e) => removeAgentCompany(formData.agent_company_ids[index], e)}
+                        onClick={(e) => removeAgentCompany(companyId, e)}
                         className="hover:text-red-500 transition-colors"
                       >
                         <X className="w-3 h-3" />
                       </button>
                     </span>
-                  ))
+                    );
+                  })
                 )}
               </div>
 
@@ -371,7 +439,9 @@ function UserDetailsModal({ isOpen, onClose, onSubmit, isLoading, user }) {
                         No agent companies found
                       </div>
                     ) : (
-                      filteredAgentCompanies.map((company) => (
+                      filteredAgentCompanies.map((company) => {
+                        const linkedCompany = isEditMode && user?.agent_companies?.find(c => c.id === company.id);
+                        return (
                         <div
                           key={company.id}
                           className={`flex items-center px-4 py-3 cursor-pointer transition-colors ${
@@ -391,37 +461,50 @@ function UserDetailsModal({ isOpen, onClose, onSubmit, isLoading, user }) {
                             )}
                           </div>
                           <div className="flex-1">
-                            <div className="font-medium text-slate-900 dark:text-white">
+                            <div className="font-medium text-slate-900 dark:text-white flex items-center gap-2">
                               {company.company_name}
+                              {linkedCompany?.is_primary && (
+                                <span className="text-[10px] px-1.5 py-0.5 bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-300 rounded font-semibold">PRIMARY</span>
+                              )}
                             </div>
-                            {company.registration_number && (
-                              <div className="text-xs text-slate-500 dark:text-slate-400">
-                                Reg: {company.registration_number}
+                            <div className="flex items-center gap-2 mt-0.5">
+                              {company.short_code && (
+                                <span className="text-xs text-slate-500 dark:text-slate-400">
+                                  Code: {company.short_code}
+                                </span>
+                              )}
+                              {company.registration_number && (
+                                <span className="text-xs text-slate-500 dark:text-slate-400">
+                                  Reg: {company.registration_number}
+                                </span>
+                              )}
+                            </div>
+                            {linkedCompany && (
+                              <div className={`flex items-center gap-1 mt-0.5 text-[10px] ${linkedCompany.is_scraped ? 'text-green-600 dark:text-green-400' : 'text-amber-500 dark:text-amber-400'}`}>
+                                <Database className="w-3 h-3" />
+                                {linkedCompany.is_scraped ? 'Scraped' : 'Not scraped'}
+                                {linkedCompany.identity_status && (
+                                  <span className="ml-1">| {linkedCompany.identity_status}</span>
+                                )}
                               </div>
                             )}
                           </div>
                         </div>
-                      ))
+                        );
+                      })
                     )}
                   </div>
                 </div>
               )}
             </div>
 
-            {errors.agent_company_ids && (
-              <p className="text-red-500 text-xs mt-2 ml-1 flex items-center font-medium">
-                <span className="mr-1">⚠</span>
-                {errors.agent_company_ids}
-              </p>
-            )}
-            
             {!loadingAgentCompanies && agentCompanies.length === 0 && !fetchError && (
               <p className="text-sm text-amber-600 dark:text-amber-400 mt-2 ml-1">
                 No agent companies available. Please create an agent company first.
               </p>
             )}
             <p className="text-xs text-slate-500 dark:text-slate-400 mt-2 ml-1">
-              This user will be linked to the selected agent companies
+              Optionally link this user to additional agent companies
             </p>
           </div>
 

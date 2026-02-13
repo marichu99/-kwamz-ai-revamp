@@ -282,13 +282,29 @@ def capture_and_solve_captcha(page) -> str:
     Capture CAPTCHA image, solve it, and return the result.
     """
     captcha_selector = "//img[@class='verifyCode-img-item']"
-    page.wait_for_selector(captcha_selector)
-
     captcha_path = "captcha.png"
-    captcha_element = page.query_selector(captcha_selector)
-    captcha_element.screenshot(path=captcha_path)
-    print(f"[INFO] CAPTCHA image saved at {captcha_path}")
+    max_retries = 3
 
-    captcha_solution = solveCaptchaXai(captcha_path)
-    print(f"[INFO] CAPTCHA solved: {captcha_solution}")
-    return str(captcha_solution)
+    for attempt in range(max_retries):
+        try:
+            # Wait for the element to be stable in the DOM
+            page.wait_for_selector(captcha_selector, state="visible", timeout=10000)
+            import time
+            time.sleep(1)  # Allow the captcha image to fully render
+
+            # Use locator (auto-waits and re-queries) instead of query_selector (stale handle)
+            captcha_locator = page.locator(captcha_selector).first
+            captcha_locator.wait_for(state="visible", timeout=5000)
+            captcha_locator.screenshot(path=captcha_path)
+            print(f"[INFO] CAPTCHA image saved at {captcha_path}")
+
+            captcha_solution = solveCaptchaXai(captcha_path)
+            print(f"[INFO] CAPTCHA solved: {captcha_solution}")
+            return str(captcha_solution)
+        except Exception as e:
+            print(f"[WARN] CAPTCHA screenshot attempt {attempt + 1}/{max_retries} failed: {e}")
+            if attempt < max_retries - 1:
+                import time
+                time.sleep(2)
+            else:
+                raise

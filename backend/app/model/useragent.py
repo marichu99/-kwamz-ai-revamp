@@ -21,14 +21,16 @@ class UserAgent(db.Model):
     image_loc = db.Column(db.Text, nullable=True)
     date_of_birth = db.Column(db.Date, nullable=True)
     user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=True)
-    
-    agent_companies = db.relationship('AgentCompany', 
+    agent_company_id = db.Column(db.Integer, db.ForeignKey('agentcompanies.id'), nullable=True)
+
+    agent_company = db.relationship('AgentCompany', foreign_keys=[agent_company_id])
+    agent_companies = db.relationship('AgentCompany',
                                     secondary=user_agent_companies,
                                     backref=db.backref('user_agents', lazy='dynamic'),
                                     lazy='select')
 
     def __init__(self, firstname, lastname, idnumber, phone_number=None,
-                 is_authentic=False, authenticity_desc=None, image_loc=None, date_of_birth=None, user_id=None):
+                 is_authentic=False, authenticity_desc=None, image_loc=None, date_of_birth=None, user_id=None, agent_company_id=None):
         self.firstname = firstname
         self.lastname = lastname
         self.idnumber = idnumber
@@ -38,6 +40,7 @@ class UserAgent(db.Model):
         self.image_loc = image_loc
         self.date_of_birth = date_of_birth
         self.user_id = user_id
+        self.agent_company_id = agent_company_id
 
     def __repr__(self):
         return f'<UserAgent {self.firstname} {self.lastname}>'

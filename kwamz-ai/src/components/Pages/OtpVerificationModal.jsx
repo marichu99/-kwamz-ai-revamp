@@ -4,6 +4,7 @@ const OtpVerificationModal = ({ isOpen, onClose, onVerify, email, resendOtp }) =
   const [otp, setOtp] = useState('');
   const [error, setError] = useState('');
   const [resendCooldown, setResendCooldown] = useState(60);
+  const [isVerifying, setIsVerifying] = useState(false);
 
   // Effect to handle the resend OTP countdown
   useEffect(() => {
@@ -11,6 +12,7 @@ const OtpVerificationModal = ({ isOpen, onClose, onVerify, email, resendOtp }) =
       setResendCooldown(60); // Reset timer when modal opens
       setError('');
       setOtp('');
+      setIsVerifying(false);
       return;
     }
 
@@ -20,13 +22,18 @@ const OtpVerificationModal = ({ isOpen, onClose, onVerify, email, resendOtp }) =
     }
   }, [isOpen, resendCooldown]);
 
-  const handleVerifyClick = () => {
+  const handleVerifyClick = async () => {
     if (!/^\d{6}$/.test(otp)) {
       setError('Please enter a valid 6-digit OTP.');
       return;
     }
     setError('');
-    onVerify(otp); 
+    setIsVerifying(true);
+    try {
+      await onVerify(otp);
+    } finally {
+      setIsVerifying(false);
+    }
   };
 
   const handleResendClick = () => {
@@ -58,9 +65,10 @@ const OtpVerificationModal = ({ isOpen, onClose, onVerify, email, resendOtp }) =
 
         <button
           onClick={handleVerifyClick}
-          className="w-full mt-5 sm:mt-6 bg-gradient-to-r from-indigo-500 to-purple-600 text-white font-semibold py-3 px-6 rounded-xl transition-all duration-200 transform hover:scale-105"
+          disabled={isVerifying}
+          className="w-full mt-5 sm:mt-6 bg-gradient-to-r from-indigo-500 to-purple-600 text-white font-semibold py-3 px-6 rounded-xl transition-all duration-200 transform hover:scale-105 disabled:opacity-50 disabled:cursor-not-allowed disabled:transform-none"
         >
-          Validate
+          {isVerifying ? 'Verifying...' : 'Validate'}
         </button>
 
         <div className="mt-4 text-sm text-gray-500">

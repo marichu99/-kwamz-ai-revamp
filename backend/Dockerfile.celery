@@ -43,4 +43,4 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
     CMD celery -A worker:celery inspect ping -d celery@$HOSTNAME || exit 1
 
 # Default command - run celery worker for fraud_detection queue
-CMD ["celery", "-A", "worker:celery", "worker", "-Q", "fraud_detection", "-l", "info", "--concurrency=4"]
+CMD ["celery", "-A", "worker:celery", "worker", "-Q", "fraud_detection", "-l", "info", "--concurrency=2"]
