@@ -25,7 +25,8 @@ def get_commissions_report():
         transaction_type = request.args.get('transaction_type', 'commission')
         reason_type = request.args.get('reason_type')
         transaction_status = request.args.get('transaction_status')
-        
+        company_id = request.args.get('company_id', type=int)
+
         # Generate report
         report = commission_report_service.generate_report(
             start_date=start_date,
@@ -33,7 +34,8 @@ def get_commissions_report():
             date_range=date_range,
             transaction_type=transaction_type,
             reason_type=reason_type,
-            transaction_status=transaction_status
+            transaction_status=transaction_status,
+            company_id=company_id
         )
         
         return jsonify({'success': True, 'report': report})

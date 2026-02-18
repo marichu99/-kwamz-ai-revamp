@@ -16,6 +16,8 @@ import BankList from '../Pages/BankList';
 import TransactionsGrid from '../Pages/TransactionsGrid';
 import ConfigGrid from '../Pages/ConfigGrid';
 import UserReportConfigGrid from '../Pages/UserReportConfigGrid';
+import FraudAlertsGrid from '../Pages/FraudAlertsGrid';
+import SwapHistoryGrid from '../Pages/SwapHistoryGrid';
 import { analyticsApi } from '../../service/AnalyticsApi';
 import { Loader2, AlertCircle, RefreshCw } from 'lucide-react';
 
@@ -132,6 +134,8 @@ function Dashboard({ currentPage, setCurrentPage }) {
         {currentPage === 'bank-list' && <BankList />}
         {currentPage === 'configs' && <ConfigGrid />}
         {currentPage === 'report-schedules' && <UserReportConfigGrid />}
+        {currentPage === 'fraud-alerts' && <FraudAlertsGrid />}
+        {currentPage === 'swap-history' && <SwapHistoryGrid />}
       </div>
     </div>
   );

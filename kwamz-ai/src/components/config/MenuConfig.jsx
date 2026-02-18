@@ -6,6 +6,8 @@ import {
     Wallet,
     Wrench,
     Clock,
+    Shield,
+    Repeat,
 } from 'lucide-react';
 
 export const adminMenuItems = [
@@ -34,6 +36,7 @@ export const adminMenuItems = [
             { id: "bank-list", label: "Bank Details" },
             { id: "configs", label: "System Configs" },
             { id: "report-schedules", label: "Report Schedules" },
+            { id: "fraud-alerts", label: "Fraud Alerts" },
         ]
     },
     
@@ -76,9 +79,17 @@ const userMenuItems = [
         label: "Users",
         count: "12",
         submenu: [
-            { id: "user-list", label: "Agents" },           
-            { id: "agent-list", label: "Tills" },           
-            { id: "company-list", label: "Companies" },           
+            { id: "user-list", label: "Agents" },
+            { id: "agent-list", label: "Tills" },
+            { id: "company-list", label: "Companies" },
+        ]
+    },
+    {
+        id: "operations",
+        icon: Repeat,
+        label: "Operations",
+        submenu: [
+            { id: "swap-history", label: "Swap History" },
         ]
     },
     {
@@ -90,6 +101,15 @@ const userMenuItems = [
         id: "transactions",
         icon: Wallet,
         label: "Transactions",
+    },
+    {
+        id: "fraud-detection",
+        icon: Shield,
+        label: "Fraud Detection",
+        submenu: [
+            { id: "fraud-alerts", label: "Fraud Alerts" },
+            { id: "configs", label: "Detection Config" },
+        ]
     },
     {
         id: "reports",

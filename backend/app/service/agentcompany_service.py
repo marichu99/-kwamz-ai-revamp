@@ -136,6 +136,8 @@ class AgentCompanyService:
                     'till_number': ac.till_number,
                     'agentcompany_code': ac.agentcompany_code,
                     'store_number': ac.store_number,
+                    'short_code': ac.short_code,
+                    'business_short_code': ac.business_short_code,
                     'location_details': ac.location_details,
                     'agent_number': ac.agent_number,
                     'company_id': ac.company_id,
@@ -155,6 +157,12 @@ class AgentCompanyService:
                         if ac.commission_rate is not None else None,
                     'last_audit_date': ac.last_audit_date.isoformat()
                         if ac.last_audit_date else None,
+
+                    # Scrape info
+                    'is_scraped': ac.last_scraped_at is not None,
+                    'last_scraped_at': ac.last_scraped_at.isoformat()
+                        if ac.last_scraped_at else None,
+                    'identity_status': ac.identity_status,
 
                     #  Normalized account data
                     'accounts': account_list,

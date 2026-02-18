@@ -27,12 +27,36 @@ if EMAIL_PROVIDER == "resend" and RESEND_API_KEY:
     resend.api_key = RESEND_API_KEY
 
 
+def get_smtp_settings():
+    """Get SMTP settings from DB (SmtpConfig), falling back to env vars."""
+    try:
+        from app.model.config import SmtpConfig
+        row = SmtpConfig.get_global()
+        return {
+            'host': row.smtp_server if row.smtp_server else SMTP_HOST,
+            'port': row.smtp_port if row.smtp_port else SMTP_PORT,
+            'username': row.sender_email if row.sender_email else SMTP_USERNAME,
+            'password': row.sender_password if row.sender_password else SMTP_PASSWORD,
+            'from_email': row.sender_email if row.sender_email else EMAIL_ADDRESS,
+        }
+    except Exception as e:
+        print(f"Failed to read SmtpConfig from DB, using env vars: {e}")
+        return {
+            'host': SMTP_HOST,
+            'port': SMTP_PORT,
+            'username': SMTP_USERNAME,
+            'password': SMTP_PASSWORD,
+            'from_email': EMAIL_ADDRESS,
+        }
+
+
 def _send_email_smtp(subject: str, html: str, recipient: str, attachments=None):
     """Send email using SMTP."""
     try:
+        settings = get_smtp_settings()
         msg = MIMEMultipart('alternative')
         msg['Subject'] = subject
-        msg['From'] = EMAIL_ADDRESS
+        msg['From'] = settings['from_email']
         msg['To'] = recipient
 
         html_part = MIMEText(html, 'html')
@@ -52,10 +76,10 @@ def _send_email_smtp(subject: str, html: str, recipient: str, attachments=None):
                 )
                 msg.attach(part)
 
-        with smtplib.SMTP(SMTP_HOST, SMTP_PORT) as server:
+        with smtplib.SMTP(settings['host'], settings['port']) as server:
             server.starttls()
-            server.login(SMTP_USERNAME, SMTP_PASSWORD)
-            server.sendmail(EMAIL_ADDRESS, recipient, msg.as_string())
+            server.login(settings['username'], settings['password'])
+            server.sendmail(settings['from_email'], recipient, msg.as_string())
 
         print(f"Email sent via SMTP: {subject} -> {recipient}")
         return True

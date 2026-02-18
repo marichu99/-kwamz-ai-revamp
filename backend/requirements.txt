@@ -29,3 +29,4 @@ redis
 flower
 minio
 resend
+cryptography

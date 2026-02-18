@@ -31,6 +31,7 @@ class UserAgentService:
 
     def serialize_user_agent(self, user_agent):
         """Serialize UserAgent object to JSON."""
+        primary = user_agent.agent_company
         return {
             'id': user_agent.id,
             'firstname': user_agent.firstname,
@@ -41,13 +42,28 @@ class UserAgentService:
             'authenticity_desc': user_agent.authenticity_desc,
             'image_loc': user_agent.image_loc,
             'date_of_birth': user_agent.date_of_birth.isoformat() if user_agent.date_of_birth else None,
+            'agent_company_id': user_agent.agent_company_id,
+            'agent_company_name': primary.company_name if primary else None,
             'agent_company_ids': user_agent.get_agent_company_ids(),
             'agent_company_names': user_agent.get_agent_company_names(),
             'agent_companies': [{
                 'id': company.id,
                 'company_name': company.company_name,
-                'registration_number': company.registration_number
-            } for company in user_agent.agent_companies]
+                'registration_number': company.registration_number,
+                'short_code': company.short_code,
+                'is_scraped': company.last_scraped_at is not None,
+                'last_scraped_at': company.last_scraped_at.isoformat() if company.last_scraped_at else None,
+                'identity_status': company.identity_status,
+                'is_primary': company.id == user_agent.agent_company_id
+            } for company in user_agent.agent_companies],
+            'primary_company': {
+                'id': primary.id,
+                'company_name': primary.company_name,
+                'short_code': primary.short_code,
+                'is_scraped': primary.last_scraped_at is not None,
+                'last_scraped_at': primary.last_scraped_at.isoformat() if primary.last_scraped_at else None,
+                'identity_status': primary.identity_status,
+            } if primary else None,
         }
 
     def create_user_agent(self, data, files, user_id):
@@ -59,26 +75,47 @@ class UserAgentService:
             if missing_fields:
                 return None, f"Missing required fields: {', '.join(missing_fields)}"
 
-            # Parse agent company IDs
+            # Parse primary agent_company_id
+            primary_company_id = data.get('agent_company_id')
+            if primary_company_id:
+                primary_company_id = int(primary_company_id)
+
+            # Parse additional agent company IDs (multi-select, optional)
+            company_ids = []
             agent_company_ids = data.get('agent_company_ids[]') or data.get('agent_company_ids')
-            if not agent_company_ids:
+            if agent_company_ids:
+                if isinstance(agent_company_ids, str):
+                    if ',' in agent_company_ids:
+                        company_ids = [int(id.strip()) for id in agent_company_ids.split(',') if id.strip()]
+                    elif agent_company_ids.strip():
+                        company_ids = [int(agent_company_ids)]
+                else:
+                    company_ids = [int(id) for id in agent_company_ids]
+
+            # Require at least a primary company or additional companies
+            if not primary_company_id and not company_ids:
                 return None, 'At least one agent company is required'
 
-            if isinstance(agent_company_ids, str):
-                if ',' in agent_company_ids:
-                    company_ids = [int(id.strip()) for id in agent_company_ids.split(',') if id.strip()]
-                else:
-                    company_ids = [int(agent_company_ids)]
-            else:
-                company_ids = [int(id) for id in agent_company_ids]
+            # Fall back: if no primary set, use first from additional list
+            if not primary_company_id and company_ids:
+                primary_company_id = company_ids[0]
 
-            if not company_ids:
-                return None, 'Invalid agent company IDs'
+            # Ensure primary company is included in the additional list for m2m
+            if primary_company_id and primary_company_id not in company_ids:
+                company_ids.append(primary_company_id)
 
-            # Fetch agent companies
-            agent_companies = AgentCompany.query.filter(AgentCompany.id.in_(company_ids)).all()
-            if len(agent_companies) != len(company_ids):
-                return None, 'One or more agent companies not found'
+            # Fetch agent companies for m2m relationship
+            agent_companies = []
+            if company_ids:
+                agent_companies = AgentCompany.query.filter(AgentCompany.id.in_(company_ids)).all()
+                if len(agent_companies) != len(company_ids):
+                    return None, 'One or more agent companies not found'
+
+            # Validate primary company exists
+            if primary_company_id:
+                primary_company = AgentCompany.query.get(primary_company_id)
+                if not primary_company:
+                    return None, 'Primary agent company not found'
 
             # Parse date_of_birth if provided
             date_of_birth = None
@@ -115,10 +152,11 @@ class UserAgentService:
                 authenticity_desc=data.get('authenticity_desc'),
                 image_loc=image_loc,
                 date_of_birth=date_of_birth,
-                user_id=user_id
+                user_id=user_id,
+                agent_company_id=primary_company_id
             )
 
-            # Add agent companies
+            # Add agent companies to m2m
             for company in agent_companies:
                 new_user.agent_companies.append(company)
 
@@ -164,6 +202,43 @@ class UserAgentService:
             user = UserAgent.query.get_or_404(user_id)
             return self.serialize_user_agent(user), None
         except Exception as e:
+            return None, str(e)
+
+    def get_scrape_status(self, user_agent_id):
+        """Check scrape status for all agent companies linked to a user agent."""
+        try:
+            user_agent = UserAgent.query.get_or_404(user_agent_id)
+            companies = user_agent.agent_companies
+            if not companies and user_agent.agent_company:
+                companies = [user_agent.agent_company]
+
+            result = []
+            all_scraped = True
+            for company in companies:
+                is_scraped = company.last_scraped_at is not None
+                if not is_scraped:
+                    all_scraped = False
+                result.append({
+                    'id': company.id,
+                    'company_name': company.company_name,
+                    'short_code': company.short_code,
+                    'business_short_code': company.business_short_code,
+                    'is_scraped': is_scraped,
+                    'last_scraped_at': company.last_scraped_at.isoformat() if company.last_scraped_at else None,
+                    'identity_status': company.identity_status,
+                    'is_primary': company.id == user_agent.agent_company_id,
+                })
+
+            return {
+                'user_agent_id': user_agent_id,
+                'all_scraped': all_scraped,
+                'companies': result,
+                'total_companies': len(result),
+                'scraped_count': sum(1 for c in result if c['is_scraped']),
+                'unscraped_count': sum(1 for c in result if not c['is_scraped']),
+            }, None
+        except Exception as e:
+            current_app.logger.error(f"Error checking scrape status: {str(e)}")
             return None, str(e)
 
     def update_user(self, user_id, data, files):
@@ -212,30 +287,40 @@ class UserAgentService:
                 else:
                     user.date_of_birth = None
 
-            # Handle agent companies update
+            # Handle primary agent company update
+            if 'agent_company_id' in data:
+                agent_company_id = data.get('agent_company_id')
+                if agent_company_id:
+                    user.agent_company_id = int(agent_company_id)
+                else:
+                    user.agent_company_id = None
+
+            # Handle agent companies update (m2m)
             if 'agent_company_ids[]' in data or 'agent_company_ids' in data:
                 agent_company_ids = data.get('agent_company_ids[]') or data.get('agent_company_ids')
-                if not agent_company_ids:
-                    return None, 'At least one agent company is required'
-
-                if isinstance(agent_company_ids, str):
-                    if ',' in agent_company_ids:
-                        company_ids = [int(id.strip()) for id in agent_company_ids.split(',') if id.strip()]
+                company_ids = []
+                if agent_company_ids:
+                    if isinstance(agent_company_ids, str):
+                        if ',' in agent_company_ids:
+                            company_ids = [int(id.strip()) for id in agent_company_ids.split(',') if id.strip()]
+                        elif agent_company_ids.strip():
+                            company_ids = [int(agent_company_ids)]
                     else:
-                        company_ids = [int(agent_company_ids)]
+                        company_ids = [int(id) for id in agent_company_ids]
+
+                # Ensure primary company is in the m2m list
+                if user.agent_company_id and user.agent_company_id not in company_ids:
+                    company_ids.append(user.agent_company_id)
+
+                if company_ids:
+                    agent_companies = AgentCompany.query.filter(AgentCompany.id.in_(company_ids)).all()
+                    if len(agent_companies) != len(company_ids):
+                        return None, 'One or more agent companies not found'
+                    user.agent_companies.clear()
+                    for company in agent_companies:
+                        user.agent_companies.append(company)
                 else:
-                    company_ids = [int(id) for id in agent_company_ids]
-
-                if not company_ids:
-                    return None, 'Invalid agent company IDs'
-
-                agent_companies = AgentCompany.query.filter(AgentCompany.id.in_(company_ids)).all()
-                if len(agent_companies) != len(company_ids):
-                    return None, 'One or more agent companies not found'
-
-                user.agent_companies.clear()
-                for company in agent_companies:
-                    user.agent_companies.append(company)
+                    user.agent_companies.clear()
 
             # Handle file upload
             if 'image' in files:
@@ -424,6 +509,7 @@ class UserAgentService:
                     new_user = UserAgent(**user_data)
                     existing_company_store = AgentCompany.query.filter_by(store_number=store_number).first()
                     if existing_company_store:
+                        new_user.agent_company_id = existing_company_store.id
                         new_user.agent_companies.append(existing_company_store)
                     db.session.add(new_user)
                     created_users.append(user_data)

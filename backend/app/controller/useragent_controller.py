@@ -44,6 +44,15 @@ def get_user(user_id):
         return jsonify({'error': error}), 404 if 'not found' in error.lower() else 500
     return jsonify(user), 200
 
+@user_agent_bp.route('/<int:user_id>/scrape-status', methods=['GET'])
+@jwt_required()
+def get_scrape_status(user_id):
+    service = UserAgentService()
+    result, error = service.get_scrape_status(user_id)
+    if error:
+        return jsonify({'error': error}), 404 if 'not found' in error.lower() else 500
+    return jsonify(result), 200
+
 @user_agent_bp.route('/<int:user_id>', methods=['PUT'])
 @jwt_required()
 def update_user(user_id):

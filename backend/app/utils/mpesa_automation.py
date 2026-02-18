@@ -6,8 +6,10 @@ from app.tasks.fraud_detection_tasks import run_fraud_detection_for_user
 from app.service.transaction_service import TransactionService
 from app.service.agentcompany_service import AgentCompanyService
 from app.service.email_outbox_service import EmailOutboxService
+from app import db
 from app.model.user import User
 from app.model.email_outbox import EmailOutbox
+from app.model.useragent import UserAgent
 # from script import fill_login_form, capture_and_solve_captcha
 from PIL import Image, ImageFilter, ImageOps
 from dotenv import load_dotenv
@@ -69,15 +71,18 @@ def login_to_mpesa(password: str = None, username: str = None, short_code: str =
         page.goto(url, timeout=600000)
         time.sleep(3)
         wait_after_click = 5  # seconds
-        # Fill login fields once
-        fill_login_form(page, short_code, username, password)
-        print("[INFO] Login form filled")
         
         # Solve captcha initially
         captcha_solution = capture_and_solve_captcha(page)
+        fill_login_form(page, short_code, username, password)
+        # Fill login fields once
+        print("[INFO] Login form filled")
         print(f"[DEBUG] Initial captcha solution: {captcha_solution}")
         while(len(captcha_solution) > 4):
             captcha_solution = retry_captcha_login(page)
+            fill_login_form(page, short_code, username, password)
+            # Fill login fields once
+            print("[INFO] Login form filled")
             
         if(has_verification_error_regex(page)):
             captcha_solution = retry_captcha_login(page)
@@ -101,8 +106,6 @@ def login_to_mpesa(password: str = None, username: str = None, short_code: str =
 
 def has_verification_error_regex(page) -> bool:
     """Checks if the page contains a verification code error using regex."""
-    # with open("debug_page.html", "w", encoding="utf-8") as f:
-    #     f.write(page.content())
     body_text = page.locator("body").inner_text()
     pattern = re.compile(r"verification\s+code\s+is\s+incorrect\s+or\s+has\s+expired", re.IGNORECASE)
     return bool(pattern.search(body_text))
@@ -255,11 +258,6 @@ def extract_extra_till_info(page: Page, extra_info: dict) -> Dict[str, Any]:
         
         # Get all the basic-info-card elements
         all_cards = page.query_selector_all(".el-col .basic-info-card")
-        
-        # Debug: Save HTML for inspection
-        # html_content = page.content()
-        # with open("extra_info_debug.html", "w", encoding="utf-8") as f:
-        #     f.write(html_content)
 
         extracted_data = {}
         
@@ -306,7 +304,7 @@ def extract_extra_till_info(page: Page, extra_info: dict) -> Dict[str, Any]:
                     send_alert_on_non_active_("martinmaati31@gmail.com",
                                               business_name=extra_info.get('company_name'),
                                               business_short_code=extra_info.get("short_code"),
-                                              status=key)
+                                              status=value)
                     
                 print(f"  {key}: {value}")
             
@@ -413,8 +411,6 @@ def save_table_to_dataframe_(page: Page, business_shortcode: int,category:str) -
         trs = tbody.find("tr") if tbody else None
         # first_tr = trs[0] if trs and len(trs) > 0 else None
         
-        with open(f"page_{business_shortcode}_content.html", "w", encoding="utf-8") as f:
-            f.write(trs.prettify())
         span = soup.find("span", class_="receipt-link")
         if span:
             transaction_id = span.get_text(strip=True)
@@ -549,161 +545,7 @@ def save_table_to_dataframe_latest_(page: Page, business_shortcode: int, pass_va
     else:
         print(f"\n Failed: {results.get('error', 'Unknown error')}")
         
-    df.to_csv(f"{additional_category}_{business_shortcode}.csv")
-
     return df, success_value
-
-    # except Exception as exc:
-    #     print(f"[ERROR] Table extraction failed: {exc}")
-    #     traceback.print_exc()
-    #     return None, None      
-        # try:                
-        #     # Wait for page to load
-        #     page.wait_for_load_state("networkidle", timeout=10000)
-            
-        #     # Wait for table to be visible
-        #     body_tbl = page.wait_for_selector(
-        #         "//table[@class='el-table__body']",
-        #         timeout=20000
-        #     )
-            
-        #     if not body_tbl.is_visible():
-        #         print("[WARN] Table body not visible, ending extraction.")
-        #         return None, None
-
-        #     # Parse the table directly
-        #     html_content = body_tbl.inner_html()
-            
-        #     # Save raw HTML (optional)
-        #     with open(f"transactions_{business_shortcode}.html", "w", encoding="utf8") as f:
-        #         f.write(BeautifulSoup(html_content, "html.parser").prettify())
-            
-        #     # Convert to DataFrame
-        #     df,columns = parse_element_plus_transactions(html_content,transaction_type=additional_category,business_shortcode=business_shortcode)
-            
-        #     if df.empty:
-        #         print("[WARN] No transactions found in table.")
-        #         return None, None
-                
-        #     return df, columns
-
-        # except Exception as e:
-        #     print(f"[ERROR] Failed to extract table: {e}")
-        #     return None, None
-        
-        # Find the matching receipt and click all from that point to latest
-        # print(f"[INFO] Looking for receipt {latest_receipt_number} and transactions from match point...")
-        
-        # try:
-        #     # Find all receipt links on the page
-        #     receipt_links = page.locator("span.receipt-link")
-        #     receipt_count = receipt_links.count()
-            
-        #     if receipt_count == 0:
-        #         print("[WARN] No receipt links found on the page.")
-        #         return None, None
-                
-        #     print(f"[INFO] Found {receipt_count} receipt links on the page.")
-            
-        #     # First pass: Find all matching receipts and the latest receipt
-        #     matching_indices = []
-        #     latest_receipt_index = -1
-            
-        #     for i in range(receipt_count):
-        #         try:
-        #             link_text = receipt_links.nth(i).inner_text(timeout=3000).strip()
-                    
-        #             # Check if this link matches the latest receipt number
-        #             if link_text == latest_receipt_number or latest_receipt_number in link_text:
-        #                 latest_receipt_index = i
-        #                 matching_indices.append(i)
-        #                 print(f"[INFO] Latest receipt found at position {i}")
-        #                 print(f"[INFO] Matching receipt found at position {i}: {link_text}")
-                        
-        #         except Exception as e:
-        #             print(f"[WARN] Could not read link at position {i}: {e}")
-        #             continue
-            
-        #     if not matching_indices and latest_receipt_index == -1:
-        #         print(f"[ERROR] No matching receipts found for {latest_receipt_number}")
-        #         return None, None
-            
-        #     # Determine the starting point for clicking
-        #     # Option 1: Start from the earliest matching receipt
-        #     # start_index = min(matching_indices) if matching_indices else latest_receipt_index
-            
-        #     # Option 2: Start from the latest matching receipt (uncomment if needed)
-        #     start_index = max(matching_indices) if matching_indices else latest_receipt_index
-            
-        #     print(f"[INFO] Starting to click receipts from position {start_index} to {receipt_count-1}")
-            
-        #     # Click all receipts from the starting point to the end
-        #     for i in range(start_index, receipt_count):
-        #         try:
-        #             # Get link text
-        #             link_text = receipt_links.nth(i).inner_text(timeout=5000).strip()
-        #             print(f"[INFO] Clicking receipt {i+1}/{receipt_count}: {link_text}")
-                    
-        #             # Store the original page context for returning
-        #             original_page = page
-                    
-        #             # Click the receipt link
-        #             receipt_links.nth(i).click()
-        #             print(f"[INFO] Clicked transaction: {link_text}")
-                    
-        #             # Wait for the receipt page to load
-        #             time.sleep(2)  # Initial wait
-        #             page.wait_for_load_state("networkidle", timeout=10000)
-                    
-        #             # Check if we're on a new tab
-        #             current_page = page
-        #             if len(page.context.pages) > 1:
-        #                 # Switch to the new tab
-        #                 new_page = page.context.pages[-1]
-        #                 new_page.bring_to_front()
-        #                 current_page = new_page
-                    
-        #             # Extract details from the receipt
-        #             extract_success = extract_extra_details_on_receipt(current_page, link_text)
-                    
-        #             # Close the receipt tab if it was opened in a new tab
-        #             if current_page != original_page:
-        #                 current_page.close()
-        #                 original_page.bring_to_front()
-        #                 page = original_page  # Reset page reference
-                    
-        #             # If we navigated in the same tab, go back to the main table
-        #             elif i < receipt_count - 1:  # Don't go back after the last one
-        #                 try:
-        #                     page.go_back()
-        #                     page.wait_for_load_state("networkidle", timeout=10000)
-        #                     # Re-locate elements after navigation
-        #                     receipt_links = page.locator("span.receipt-link")
-        #                     print(f"[INFO] Navigated back to main table")
-        #                 except Exception as nav_error:
-        #                     print(f"[WARN] Could not navigate back: {nav_error}")
-                    
-        #             # Wait a bit before processing next link
-        #             if i < receipt_count - 1:
-        #                 time.sleep(1)
-                    
-        #         except Exception as e:
-        #             print(f"[WARN] Failed to process link at position {i}: {e}")
-        #             # Try to recover and continue
-        #             try:
-        #                 page.bring_to_front()
-        #                 receipt_links = page.locator("span.receipt-link")
-        #             except:
-        #                 pass
-        #             continue
-            
-        #     print(f"[INFO] Successfully processed {receipt_count - start_index} receipts from position {start_index}")
-                
-        # except Exception as e:
-        #     print(f"[ERROR] Failed to locate or process receipt links: {e}")
-        #     traceback.print_exc()
-        #     return None, None
-
     
 def parse_element_plus_transactions(html_content: str, transaction_type: str, business_shortcode: str) -> tuple:
     """
@@ -897,10 +739,6 @@ def process_detailed_receipt(page: Page, receipt_no: str, transaction_type: str 
         # Get HTML
         detailed_html = page.inner_html(selector="//div[contains(@class, 'portal-collapse-content')]")
         
-        # Save for debugging
-        with open(f"detailed_{receipt_no}.html", "w", encoding="utf-8") as f:
-            f.write(detailed_html)
-        
         # Update transaction
         result = transaction_service.update_transaction_with_detailed_info(
             receipt_no=receipt_no,
@@ -954,7 +792,6 @@ def update_transactions_from_file(file_path, business_shortcode, transaction_typ
         print(f"\n Failed: {results.get('error', 'Unknown error')}")
     
     # Save the processed file
-    df.to_excel(f"{business_shortcode}_{transaction_type}.xlsx", index=False)
     print(f"💾 Saved to: {business_shortcode}_{transaction_type}.xlsx")
     
     return df, success_value
@@ -1140,9 +977,6 @@ def extract_extra_details_on_receipt(page:Page,receipt_no:str) -> bool:
         transactions_div_html = transactions_div.inner_html()
         
         soup = BeautifulSoup(transactions_div_html,"html.parser")
-        
-        with open(f"transaction_{receipt_no}.html","w+",encoding="utf8") as f:
-            f.write(soup.prettify())
         
         return True
     except Exception as e:
@@ -2075,7 +1909,99 @@ def solveCaptchaXai(image_path):
     print(f"Extracted CAPTCHA: {captcha_text}")
     return captcha_text
 
-def navigate_to_review_transaction(page) -> bool:
+def extract_user_agent_kyc(short_code:str,page:Page) -> bool:
+    kyc_tab_key = page.wait_for_selector("//div[@id='tab-third']",timeout=10000)
+
+    kyc_tab_key.click()
+    time.sleep(5)
+
+    scroll_to_bottom(page=page)
+    
+    if(short_code == "2811179"):
+        print(f"We are at the kyc tab")
+        exit(0)
+
+    org_details = page.wait_for_selector("//div[@class='el-table--fit el-table--border el-table--enable-row-hover el-table--enable-row-transition el-table el-table--layout-fixed multi_table is-scrolling-none']//div[@class='el-table__inner-wrapper']",timeout=10000)
+
+    soup = BeautifulSoup(org_details.inner_html(),"html.parser")
+
+    try:
+        # Parse contact rows from the KYC table
+        rows = soup.select("tbody tr.el-table__row")
+
+        for row in rows:
+            cells = row.select("td .view_span")
+            if len(cells) < 7:
+                print("The cells  do not make the cut")
+                continue
+
+            contact_type = cells[0].get_text(strip=True)
+            first_name = cells[1].get_text(strip=True)
+            second_name = cells[2].get_text(strip=True)
+            surname = cells[3].get_text(strip=True)
+            phone_number = cells[4].get_text(strip=True)
+            # cells[5] = ID Type (e.g. "National ID")
+            id_number = cells[6].get_text(strip=True)
+
+            if not id_number or id_number == '-':
+                continue
+
+            # Combine second_name and surname as lastname
+            lastname = f"{second_name} {surname}".strip() or surname
+
+            # Normalize phone number
+            phone = phone_number if phone_number and phone_number != '-' else None
+
+            # Resolve AgentCompany by short_code first
+            agent_company_service = AgentCompanyService()
+            agent_company = agent_company_service.get_agent_company_by_shortcode_(str(short_code))
+
+            # Check if UserAgent with this ID number already exists
+            existing_agent = UserAgent.query.filter_by(idnumber=id_number).first()
+
+            if existing_agent:                
+                print("We have found an existing agent")
+                user_agent = existing_agent
+                user_agent.firstname = first_name
+                user_agent.lastname = lastname
+                if phone:
+                    user_agent.phone_number = phone
+                user_agent.authenticity_desc = f"Scraped from KYC - {contact_type}"
+                if user_id:
+                    user_agent.user_id = user_id
+                if agent_company and not user_agent.agent_company_id:
+                    user_agent.agent_company_id = agent_company.id
+                print(f"[INFO] Updated existing UserAgent: {user_agent}")
+            else:
+                print("We have found a new  agent")
+                user_agent = UserAgent(
+                    firstname=first_name,
+                    lastname=lastname,
+                    idnumber=id_number,
+                    phone_number=phone,
+                    is_authentic=False,
+                    authenticity_desc=f"Scraped from KYC - {contact_type}",
+                    user_id=user_id,
+                    agent_company_id=agent_company.id if agent_company else None
+                )
+                db.session.add(user_agent)
+                db.session.flush()
+                print(f"[INFO] Created new UserAgent: {user_agent}")
+
+            # Link to AgentCompany m2m
+            if agent_company and agent_company not in user_agent.agent_companies:
+                user_agent.agent_companies.append(agent_company)
+                print(f"[INFO] Linked UserAgent {user_agent} to AgentCompany {agent_company.company_name}")
+
+        db.session.commit()
+        print(f"[INFO] Successfully processed KYC contacts for short_code {short_code}")
+
+    except Exception as e:
+        db.session.rollback()
+        print(f"[ERROR] Failed to create/link user agents for {short_code}: {e}")
+        traceback.print_exc()
+
+def navigate_to_review_transaction(business_short_code:str, page:Page) -> bool:
     """Navigate through detail panel to Review Transaction button."""
     try:
         close_irritative_dialog_box(page)
@@ -2094,6 +2020,8 @@ def navigate_to_review_transaction(page) -> bool:
         )
         more_button.click()
         page.wait_for_timeout(1000)
+        
+        extract_user_agent_kyc(short_code=business_short_code,page=page)
 
         # Click "Review Transaction"
         review_btn = page.wait_for_selector(
@@ -2382,6 +2310,82 @@ def _get_priority_shortcodes_(all_shortcodes: Set[str]) -> Set[str]:
 #         print(f"[ERROR] An error occurred {str(e)}")
 #         return False
 
+def _is_agent_company_scraped(business_short_code: int) -> bool:
+    """Check if an agent company with this shortcode has already been scraped (till details + KYC saved)."""
+    try:
+        from app.model.agentcompany import AgentCompany
+        company = AgentCompany.query.filter(
+            db.or_(
+                AgentCompany.agentcompany_code == str(business_short_code),
+                AgentCompany.short_code == str(business_short_code),
+                AgentCompany.business_short_code == str(business_short_code)
+            )
+        ).first()
+        if company and company.last_scraped_at is not None:
+            return True
+        return False
+    except Exception as e:
+        print(f"[WARN] Could not check scrape status for {business_short_code}: {e}")
+        return False
+
+def process_single_row_kyc_only(page: Page, business_short_code: int, row_number: int) -> bool:
+    """
+    Lightweight scrape: only till details + KYC contacts.
+    Skips transaction scraping (float/commission).
+    Used for non-priority tills that haven't been scraped yet.
+    """
+    try:
+        print(f"\n[KYC-ONLY] Processing Row {row_number} | Business Code: {business_short_code} (lightweight)")
+        close_irritative_dialog_box(page)
+
+        # Scrape basic till details and save agent company
+        mapped_data = scrape_till_details(page, business_short_code)
+
+        # Save the scraped till details to DB
+        save_results = agent_company_service.save_or_update_scraped_agent_company(
+            mapped_data=mapped_data, user_id=user_id
+        )
+        print(f"[KYC-ONLY] Saved till details: {save_results}")
+
+        # Navigate to detail panel to extract KYC
+        try:
+            close_irritative_dialog_box(page)
+            first_div = page.wait_for_selector(
+                "//div[@class='vertical-page-container']/div[1]",
+                timeout=10000
+            )
+            first_div.click()
+            page.wait_for_timeout(1000)
+
+            more_button = page.wait_for_selector(
+                "//button[@class='el-button el-button--primary is-link']",
+                timeout=10000
+            )
+            more_button.click()
+            page.wait_for_timeout(1000)
+
+            # Extract KYC user agents
+            extract_user_agent_kyc(short_code=business_short_code, page=page)
+            print(f"[KYC-ONLY] KYC extraction complete for {business_short_code}")
+        except Exception as kyc_err:
+            print(f"[KYC-ONLY] KYC extraction failed for {business_short_code}: {kyc_err}")
+
+        # Return to org list
+        if not return_to_organization_list(page):
+            print("[KYC-ONLY] Failed to return to list — attempting recovery")
+            page.reload()
+            wait_for_table_load(page)
+            return False
+
+        return True
+
+    except Exception as e:
+        print(f"[ERROR] KYC-only processing failed for {business_short_code}: {e}")
+        traceback.print_exc()
+        close_irritative_dialog_box(page)
+        close_detail_panel(page)
+        return False
+
 def process_page_rows(
     page: Page,
     total_in_list: int,
@@ -2396,46 +2400,55 @@ def process_page_rows(
     rows_locator = page.locator("//tbody//tr[@class='el-table__row childTableRow']")
 
     visible_rows = get_visible_rows(rows_locator)
-    
+
     print(f"The priority short codes are {priority_short_codes}")
-        
+
     if not visible_rows:
         print("[INFO] No visible rows — scrolling to load more...")
         page.mouse.wheel(0, 1200)
         time.sleep(2)
-        
+
     visible_rows_size = len(visible_rows)
     print(f"[INFO] Found {visible_rows_size} visible rows to process on this page")
-            
-    # while processed_on_page < visible_rows_size:
 
     for row in visible_rows:
         if processed_on_page >= 10:
             break
 
-        # I will think about this later
         business_short_code = extract_business_short_code(row)
-        if not business_short_code or str(business_short_code) not in priority_short_codes:
-            print(f"[INFO] Skipping row {business_short_code} as it's not a priority shortcode.")
+        if not business_short_code:
+            processed_on_page += 1
+            continue
+
+        is_priority = str(business_short_code) in priority_short_codes
+        already_scraped = _is_agent_company_scraped(business_short_code)
+
+        if not is_priority and already_scraped:
+            # Non-priority AND already scraped — skip entirely
+            print(f"[INFO] Skipping row {business_short_code} — not priority and already scraped.")
             processed_on_page += 1
             continue
 
         row.click(timeout=15000)
         page.wait_for_timeout(1000)
 
-        success = process_single_row(page, business_short_code, total_processed_so_far + processed_on_page + 1,pass_value=pass_value)
+        if is_priority:
+            # Full scrape: till details + KYC + transactions
+            success = process_single_row(page, business_short_code, total_processed_so_far + processed_on_page + 1, pass_value=pass_value)
+        else:
+            # Lightweight scrape: till details + KYC only (no transactions)
+            print(f"[INFO] Non-priority but unscraped — doing KYC-only scrape for {business_short_code}")
+            success = process_single_row_kyc_only(page, business_short_code, total_processed_so_far + processed_on_page + 1)
 
         if success:
             print(f"[SUCCESS] Completed row {total_processed_so_far + processed_on_page + 1}")
-            # return_to_organization_list(page)
-            
         else:
-            to_be_rerun.append(business_short_code)
+            if is_priority:
+                to_be_rerun.append(business_short_code)
             return_to_organization_list(page)
-            print(f"[WARN] Row {business_short_code} failed, added to rerun list")
+            print(f"[WARN] Row {business_short_code} failed{', added to rerun list' if is_priority else ''}")
 
-        # processed_on_page += 1
-        # time.sleep(1)
+        processed_on_page += 1
 
     # Scroll to load more rows if needed
     if processed_on_page < total_in_list:
@@ -2478,9 +2491,9 @@ def process_single_row(page: Page, business_short_code: int, row_number: int, pa
 
         # Scrape basic till details
         mapped_data = scrape_till_details(page, business_short_code)
-
+                        
         # Navigate and process float/commission
-        if not navigate_to_review_transaction(page):
+        if not navigate_to_review_transaction(business_short_code=business_short_code,page=page):
             print("[ERROR] Failed to navigate to review transaction")
             return_to_organization_list(page)
             return False

@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import axios from 'axios';
-import { X, User as UserIcon, Phone, IdCard, Calendar, Shield, FileText, Camera, Briefcase, AlertCircle, Search, Check } from 'lucide-react';
+import { X, User as UserIcon, Phone, IdCard, Calendar, Shield, FileText, Camera, Briefcase, AlertCircle, Search, Check, Database, Clock } from 'lucide-react';
 import { useToast } from './ToastProvider';
 import config from '../../Config';
 
@@ -17,6 +17,7 @@ function UserDetailsModal({ isOpen, onClose, onSubmit, isLoading, user }) {
     image: null,
     imagePreview: null,
     agent_company_ids: [],
+    agent_company_id: '',
   });
   const [agentCompanies, setAgentCompanies] = useState([]);
   const [loadingAgentCompanies, setLoadingAgentCompanies] = useState(false);
@@ -24,19 +25,22 @@ function UserDetailsModal({ isOpen, onClose, onSubmit, isLoading, user }) {
   const [errors, setErrors] = useState({});
   const [searchTerm, setSearchTerm] = useState('');
   const [isDropdownOpen, setIsDropdownOpen] = useState(false);
+  const [primarySearchTerm, setPrimarySearchTerm] = useState('');
+  const [isPrimaryDropdownOpen, setIsPrimaryDropdownOpen] = useState(false);
 
   const isEditMode = !!user;
 
   // Fetch agent companies when modal opens
   useEffect(() => {
     const abortController = new AbortController();
+    let didCancel = false;
 
     const fetchAgentCompanies = async () => {
       if (!isOpen) return;
 
       setLoadingAgentCompanies(true);
       setFetchError('');
-      
+
       try {
         const token = localStorage.getItem('token');
         if (!token) {
@@ -46,39 +50,44 @@ function UserDetailsModal({ isOpen, onClose, onSubmit, isLoading, user }) {
           headers: { Authorization: `Bearer ${token}` },
           signal: abortController.signal,
         });
-        setAgentCompanies(Array.isArray(response.data) ? response.data : []);
+        if (!didCancel) {
+          setAgentCompanies(Array.isArray(response.data) ? response.data : []);
+        }
       } catch (error) {
-        if (error.name !== 'AbortError') {
+        if (!didCancel && error.name !== 'AbortError' && error.name !== 'CanceledError') {
           console.error('Error fetching agent companies:', error.response?.data || error.message);
           setFetchError('Failed to load agent companies. Please try again.');
-          showToast('Failed to load agent companies', 'error');
         }
       } finally {
-        setLoadingAgentCompanies(false);
+        if (!didCancel) {
+          setLoadingAgentCompanies(false);
+        }
       }
     };
 
     fetchAgentCompanies();
 
     return () => {
+      didCancel = true;
       abortController.abort();
     };
-  }, [isOpen, showToast]);
+  }, [isOpen]);
 
   // Populate form with user data when in edit mode or apply provided data
   useEffect(() => {
     if (isEditMode && user) {
       setFormData({
-        firstname: user.firstname || 'barny',
-        lastname: user.lastname || 'nyaboke',
-        idnumber: user.idnumber || '42112256',
-        phone_number: user.phone_number || '0795642633',
+        firstname: user.firstname || '',
+        lastname: user.lastname || '',
+        idnumber: user.idnumber || '',
+        phone_number: user.phone_number || '',
         is_authentic: user.is_authentic ? 'true' : 'false',
         authenticity_desc: user.authenticity_desc || '',
-        date_of_birth: user.date_of_birth ? new Date(user.date_of_birth).toISOString().split('T')[0] : '2003-08-20',
+        date_of_birth: user.date_of_birth ? new Date(user.date_of_birth).toISOString().split('T')[0] : '',
         image: null,
         imagePreview: user.image_loc ? `/useragents/profiles/${user.image_loc.split('/').pop()}` : null,
-        agent_company_ids: user.agent_company_ids || [4, 5],
+        agent_company_ids: user.agent_company_ids || [],
+        agent_company_id: user.agent_company_id || '',
       });
     } else {
       setFormData({
@@ -92,11 +101,14 @@ function UserDetailsModal({ isOpen, onClose, onSubmit, isLoading, user }) {
         image: null,
         imagePreview: null,
         agent_company_ids: [],
+        agent_company_id: '',
       });
     }
     setErrors({});
     setSearchTerm('');
     setIsDropdownOpen(false);
+    setPrimarySearchTerm('');
+    setIsPrimaryDropdownOpen(false);
   }, [user, isOpen, isEditMode]);
 
   const handleInputChange = (e) => {
@@ -149,8 +161,20 @@ function UserDetailsModal({ isOpen, onClose, onSubmit, isLoading, user }) {
 
   const filteredAgentCompanies = agentCompanies.filter(company =>
     company.company_name?.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    company.registration_number?.toLowerCase().includes(searchTerm.toLowerCase())
+    company.registration_number?.toLowerCase().includes(searchTerm.toLowerCase()) ||
+    company.short_code?.toLowerCase().includes(searchTerm.toLowerCase())
   );
+
+  const filteredPrimaryCompanies = agentCompanies.filter(company =>
+    company.company_name?.toLowerCase().includes(primarySearchTerm.toLowerCase()) ||
+    company.registration_number?.toLowerCase().includes(primarySearchTerm.toLowerCase()) ||
+    company.short_code?.toLowerCase().includes(primarySearchTerm.toLowerCase())
+  );
+
+  const getSelectedPrimaryCompany = () => {
+    if (!formData.agent_company_id) return null;
+    return agentCompanies.find(c => c.id === Number(formData.agent_company_id));
+  };
 
   const getSelectedCompanyNames = () => {
     return formData.agent_company_ids.map(id => {
@@ -164,8 +188,8 @@ function UserDetailsModal({ isOpen, onClose, onSubmit, isLoading, user }) {
     if (!formData.firstname) newErrors.firstname = 'First name is required';
     if (!formData.lastname) newErrors.lastname = 'Last name is required';
     if (!formData.idnumber) newErrors.idnumber = 'ID number is required';
-    if (!formData.agent_company_ids || formData.agent_company_ids.length === 0) {
-      newErrors.agent_company_ids = 'At least one agent company is required';
+    if (!formData.agent_company_id) {
+      newErrors.agent_company_id = 'Primary agent company is required';
     }
     if (formData.phone_number && !/^\+?\d{1,3}?\d{9,12}$/.test(formData.phone_number)) {
       newErrors.phone_number = 'Invalid phone number format';
@@ -191,6 +215,8 @@ function UserDetailsModal({ isOpen, onClose, onSubmit, isLoading, user }) {
         if (key === 'agent_company_ids' && Array.isArray(value)) {
           // Join agent_company_ids into a comma-separated string
           formDataToSend.append('agent_company_ids', value.join(','));
+        } else if (key === 'agent_company_id') {
+          formDataToSend.append('agent_company_id', value);
         } else {
           formDataToSend.append(key, value);
         }
@@ -287,12 +313,174 @@ function UserDetailsModal({ isOpen, onClose, onSubmit, isLoading, user }) {
             </p>
           </div>
 
-          {/* Agent Company Selection */}
+          {/* Primary Agent Company Selection */}
+          <div className="bg-gradient-to-br from-green-50/50 to-emerald-50/50 dark:from-green-900/20 dark:to-emerald-900/20 rounded-xl p-6 border-2 border-green-100 dark:border-green-800/30">
+            <label className="flex items-center space-x-2 text-sm font-bold text-slate-700 dark:text-slate-300 mb-3">
+              <Briefcase className="w-5 h-5 text-green-600 dark:text-green-400" />
+              <span>Primary Agent Company</span>
+              <span className="text-red-500">*</span>
+            </label>
+
+            <div className="relative">
+              {/* Selected Company Display */}
+              <div
+                className={`min-h-12 p-3 border-2 rounded-xl cursor-pointer transition-all font-medium flex items-center ${
+                  errors.agent_company_id
+                    ? 'border-red-300 bg-red-50 dark:bg-red-900/20 dark:border-red-500'
+                    : 'border-slate-200 dark:border-slate-700 hover:border-slate-300 dark:hover:border-slate-600'
+                } ${isPrimaryDropdownOpen ? 'ring-2 ring-green-500 border-green-500' : ''}`}
+                onClick={() => {
+                  if (isLoading || loadingAgentCompanies) return;
+                  setIsPrimaryDropdownOpen(!isPrimaryDropdownOpen);
+                  setIsDropdownOpen(false);
+                }}
+              >
+                {(() => {
+                  const selected = getSelectedPrimaryCompany();
+                  if (!selected) {
+                    return (
+                      <span className="text-slate-400 dark:text-slate-500">
+                        {loadingAgentCompanies ? 'Loading agent companies...' : 'Select primary company...'}
+                      </span>
+                    );
+                  }
+                  return (
+                    <span className="inline-flex items-center gap-1 px-2 py-1 rounded-lg text-sm font-medium bg-green-100 dark:bg-green-900/40 text-green-700 dark:text-green-300 ring-1 ring-green-300 dark:ring-green-700">
+                      <Shield className="w-3 h-3" />
+                      {selected.company_name}
+                      {selected.short_code && <span className="text-green-500 dark:text-green-400">[{selected.short_code}]</span>}
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setFormData(prev => ({ ...prev, agent_company_id: '' }));
+                        }}
+                        className="hover:text-red-500 transition-colors"
+                      >
+                        <X className="w-3 h-3" />
+                      </button>
+                    </span>
+                  );
+                })()}
+              </div>
+
+              {/* Dropdown Panel */}
+              {isPrimaryDropdownOpen && (
+                <div className="absolute z-50 w-full mt-1 bg-white dark:bg-slate-800 border-2 border-slate-200 dark:border-slate-700 rounded-xl shadow-2xl max-h-60 overflow-hidden">
+                  {/* Search Input */}
+                  <div className="p-2 border-b border-slate-200 dark:border-slate-700">
+                    <div className="relative">
+                      <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 w-4 h-4 text-slate-400" />
+                      <input
+                        type="text"
+                        placeholder="Search agent companies..."
+                        value={primarySearchTerm}
+                        onChange={(e) => setPrimarySearchTerm(e.target.value)}
+                        className="w-full pl-10 pr-4 py-2.5 border border-slate-200 dark:border-slate-600 rounded-lg bg-white dark:bg-slate-700 text-slate-900 dark:text-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-green-500"
+                        onClick={(e) => e.stopPropagation()}
+                      />
+                    </div>
+                  </div>
+
+                  {/* Options List */}
+                  <div className="overflow-y-auto max-h-44">
+                    {loadingAgentCompanies ? (
+                      <div className="p-4 text-center text-slate-500 dark:text-slate-400">
+                        <svg className="animate-spin h-5 w-5 mx-auto text-green-600" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                          <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                          <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                        </svg>
+                        <p className="mt-2 text-sm">Loading agent companies...</p>
+                      </div>
+                    ) : filteredPrimaryCompanies.length === 0 ? (
+                      <div className="p-4 text-center text-slate-500 dark:text-slate-400">
+                        No agent companies found
+                      </div>
+                    ) : (
+                      filteredPrimaryCompanies.map((company) => {
+                        const isSelected = Number(formData.agent_company_id) === company.id;
+                        return (
+                          <div
+                            key={company.id}
+                            className={`flex items-center px-4 py-3 cursor-pointer transition-colors ${
+                              isSelected
+                                ? 'bg-green-50 dark:bg-green-900/20 text-green-700 dark:text-green-300'
+                                : 'hover:bg-slate-50 dark:hover:bg-slate-700'
+                            }`}
+                            onClick={() => {
+                              setFormData(prev => ({ ...prev, agent_company_id: company.id }));
+                              setErrors(prev => ({ ...prev, agent_company_id: '' }));
+                              setIsPrimaryDropdownOpen(false);
+                              setPrimarySearchTerm('');
+                            }}
+                          >
+                            <div className={`w-5 h-5 border-2 rounded-full flex items-center justify-center mr-3 ${
+                              isSelected
+                                ? 'bg-green-600 border-green-600'
+                                : 'border-slate-300 dark:border-slate-600'
+                            }`}>
+                              {isSelected && (
+                                <Check className="w-3 h-3 text-white" />
+                              )}
+                            </div>
+                            <div className="flex-1">
+                              <div className="font-medium text-slate-900 dark:text-white">
+                                {company.company_name}
+                              </div>
+                              <div className="flex items-center gap-2 mt-0.5">
+                                {company.short_code && (
+                                  <span className="text-xs text-slate-500 dark:text-slate-400">
+                                    Code: {company.short_code}
+                                  </span>
+                                )}
+                                {company.registration_number && (
+                                  <span className="text-xs text-slate-500 dark:text-slate-400">
+                                    Reg: {company.registration_number}
+                                  </span>
+                                )}
+                              </div>
+                            </div>
+                          </div>
+                        );
+                      })
+                    )}
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {errors.agent_company_id && (
+              <p className="text-red-500 text-xs mt-2 ml-1 flex items-center font-medium">
+                <span className="mr-1">⚠</span>
+                {errors.agent_company_id}
+              </p>
+            )}
+            {/* Show primary company scrape status in edit mode */}
+            {isEditMode && user?.primary_company && (
+              <div className={`mt-2 ml-1 flex items-center gap-2 text-xs font-medium ${user.primary_company.is_scraped ? 'text-green-600 dark:text-green-400' : 'text-amber-600 dark:text-amber-400'}`}>
+                <Database className="w-3.5 h-3.5" />
+                {user.primary_company.is_scraped ? (
+                  <span>Scraped on {new Date(user.primary_company.last_scraped_at).toLocaleDateString()}</span>
+                ) : (
+                  <span>Not yet scraped from portal</span>
+                )}
+                {user.primary_company.identity_status && (
+                  <span className={`px-1.5 py-0.5 rounded text-xs ${user.primary_company.identity_status === 'Active' ? 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-300' : 'bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-300'}`}>
+                    {user.primary_company.identity_status}
+                  </span>
+                )}
+              </div>
+            )}
+            <p className="text-xs text-slate-500 dark:text-slate-400 mt-2 ml-1">
+              The main company this agent is associated with
+            </p>
+          </div>
+
+          {/* Additional Agent Companies Selection */}
           <div className="bg-gradient-to-br from-blue-50/50 to-cyan-50/50 dark:from-blue-900/20 dark:to-cyan-900/20 rounded-xl p-6 border-2 border-blue-100 dark:border-blue-800/30">
             <label className="flex items-center space-x-2 text-sm font-bold text-slate-700 dark:text-slate-300 mb-3">
               <Briefcase className="w-5 h-5 text-blue-600 dark:text-blue-400" />
-              <span>Agent Companies</span>
-              <span className="text-red-500">*</span>
+              <span>Additional Agent Companies</span>
             </label>
             
             {fetchError && (
@@ -313,28 +501,40 @@ function UserDetailsModal({ isOpen, onClose, onSubmit, isLoading, user }) {
                     ? 'border-red-300 bg-red-50 dark:bg-red-900/20 dark:border-red-500'
                     : 'border-slate-200 dark:border-slate-700 hover:border-slate-300 dark:hover:border-slate-600'
                 } ${isDropdownOpen ? 'ring-2 ring-blue-500 border-blue-500' : ''}`}
-                onClick={() => setIsDropdownOpen(!isDropdownOpen)}
+                onClick={() => {
+                  setIsDropdownOpen(!isDropdownOpen);
+                  setIsPrimaryDropdownOpen(false);
+                }}
               >
                 {formData.agent_company_ids.length === 0 ? (
                   <span className="text-slate-400 dark:text-slate-500">
                     {loadingAgentCompanies ? 'Loading agent companies...' : 'Select agent companies...'}
                   </span>
                 ) : (
-                  getSelectedCompanyNames().map((companyName, index) => (
+                  getSelectedCompanyNames().map((companyName, index) => {
+                    const companyId = formData.agent_company_ids[index];
+                    const isPrimary = companyId === Number(formData.agent_company_id);
+                    return (
                     <span
-                      key={formData.agent_company_ids[index]}
-                      className="inline-flex items-center gap-1 bg-blue-100 dark:bg-blue-900/40 text-blue-700 dark:text-blue-300 px-2 py-1 rounded-lg text-sm font-medium"
+                      key={companyId}
+                      className={`inline-flex items-center gap-1 px-2 py-1 rounded-lg text-sm font-medium ${
+                        isPrimary
+                          ? 'bg-green-100 dark:bg-green-900/40 text-green-700 dark:text-green-300 ring-1 ring-green-300 dark:ring-green-700'
+                          : 'bg-blue-100 dark:bg-blue-900/40 text-blue-700 dark:text-blue-300'
+                      }`}
                     >
+                      {isPrimary && <Shield className="w-3 h-3" />}
                       {companyName}
                       <button
                         type="button"
-                        onClick={(e) => removeAgentCompany(formData.agent_company_ids[index], e)}
+                        onClick={(e) => removeAgentCompany(companyId, e)}
                         className="hover:text-red-500 transition-colors"
                       >
                         <X className="w-3 h-3" />
                       </button>
                     </span>
-                  ))
+                    );
+                  })
                 )}
               </div>
 
@@ -371,7 +571,9 @@ function UserDetailsModal({ isOpen, onClose, onSubmit, isLoading, user }) {
                         No agent companies found
                       </div>
                     ) : (
-                      filteredAgentCompanies.map((company) => (
+                      filteredAgentCompanies.map((company) => {
+                        const linkedCompany = isEditMode && user?.agent_companies?.find(c => c.id === company.id);
+                        return (
                         <div
                           key={company.id}
                           className={`flex items-center px-4 py-3 cursor-pointer transition-colors ${
@@ -391,37 +593,50 @@ function UserDetailsModal({ isOpen, onClose, onSubmit, isLoading, user }) {
                             )}
                           </div>
                           <div className="flex-1">
-                            <div className="font-medium text-slate-900 dark:text-white">
+                            <div className="font-medium text-slate-900 dark:text-white flex items-center gap-2">
                               {company.company_name}
+                              {linkedCompany?.is_primary && (
+                                <span className="text-[10px] px-1.5 py-0.5 bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-300 rounded font-semibold">PRIMARY</span>
+                              )}
                             </div>
-                            {company.registration_number && (
-                              <div className="text-xs text-slate-500 dark:text-slate-400">
-                                Reg: {company.registration_number}
+                            <div className="flex items-center gap-2 mt-0.5">
+                              {company.short_code && (
+                                <span className="text-xs text-slate-500 dark:text-slate-400">
+                                  Code: {company.short_code}
+                                </span>
+                              )}
+                              {company.registration_number && (
+                                <span className="text-xs text-slate-500 dark:text-slate-400">
+                                  Reg: {company.registration_number}
+                                </span>
+                              )}
+                            </div>
+                            {linkedCompany && (
+                              <div className={`flex items-center gap-1 mt-0.5 text-[10px] ${linkedCompany.is_scraped ? 'text-green-600 dark:text-green-400' : 'text-amber-500 dark:text-amber-400'}`}>
+                                <Database className="w-3 h-3" />
+                                {linkedCompany.is_scraped ? 'Scraped' : 'Not scraped'}
+                                {linkedCompany.identity_status && (
+                                  <span className="ml-1">| {linkedCompany.identity_status}</span>
+                                )}
                               </div>
                             )}
                           </div>
                         </div>
-                      ))
+                        );
+                      })
                     )}
                   </div>
                 </div>
               )}
             </div>
 
-            {errors.agent_company_ids && (
-              <p className="text-red-500 text-xs mt-2 ml-1 flex items-center font-medium">
-                <span className="mr-1">⚠</span>
-                {errors.agent_company_ids}
-              </p>
-            )}
-            
             {!loadingAgentCompanies && agentCompanies.length === 0 && !fetchError && (
               <p className="text-sm text-amber-600 dark:text-amber-400 mt-2 ml-1">
                 No agent companies available. Please create an agent company first.
               </p>
             )}
             <p className="text-xs text-slate-500 dark:text-slate-400 mt-2 ml-1">
-              This user will be linked to the selected agent companies
+              Optionally link this user to additional agent companies
             </p>
           </div>
 

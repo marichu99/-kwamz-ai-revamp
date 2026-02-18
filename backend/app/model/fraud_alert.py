@@ -53,17 +53,19 @@ class FraudAlert(db.Model):
 
 class FraudReportHistory(db.Model):
     __tablename__ = 'fraud_report_history'
-    
+
     id = db.Column(db.Integer, primary_key=True)
     user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
-    analysis_period_days = db.Column(db.Integer, nullable=False)
+    # 'historical' for the one-time full scan, 'periodic' for recurring checks
+    report_type = db.Column(db.String(20), nullable=True, default='historical')
+    analysis_period_days = db.Column(db.Integer, nullable=True)
     total_transactions = db.Column(db.Integer, default=0)
     suspicious_patterns = db.Column(db.Integer, default=0)
     accounts_flagged = db.Column(db.Integer, default=0)
     report_data = db.Column(db.JSON, nullable=True)
-    
+
     # Timestamps
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
-    
+
     # Relationships
     user = db.relationship('User', backref='fraud_reports', lazy=True)

@@ -8,7 +8,7 @@ from app import db
 from app.model.transaction import Transaction, TransactionStats
 from app.database.connection_pool import db_pool
 from app.model.company import Company
-from sqlalchemy import and_, case, extract, or_, func
+from sqlalchemy import and_, extract, or_, func
 import logging
 from typing import Generator, List, Dict, Any, Optional, Tuple,Union
 from werkzeug.utils import secure_filename
@@ -25,6 +25,7 @@ from app.service.company_service import CompanyService
 from app.service.agentcompany_service import AgentCompanyService
 from app.model.agentcompany import AgentCompany
 from app.service.fraud_detector import FraudDetectionService
+from app.service.config_service import ConfigService
 from app.model.fraud_alert import FraudAlert, FraudReportHistory
 from app.model.user import User
 
@@ -1217,9 +1218,13 @@ class TransactionService:
             logger.error(f"User {user_id} not found")
             return {'status': 'error', 'message': 'User not found'}
         
-        # Initialize fraud detection service
-        fraud_service = FraudDetectionService(user=user)
-        
+        # Load user's active fraud detection config
+        config_obj = ConfigService.get_active_config(user.id)
+        config_dict = config_obj.to_dict() if config_obj else {}
+
+        # Initialize fraud detection service with user's config
+        fraud_service = FraudDetectionService(user=user, config=config_dict)
+
         try:
             # Step 1: Historical analysis (first run only)
             historical_report, all_transactions = self._run_historical_analysis_sync(fraud_service, user)
@@ -1245,238 +1250,346 @@ class TransactionService:
             return {'status': 'error', 'message': str(e)}
 
     def _run_historical_analysis_sync(self, fraud_service, user):
-        """Synchronous historical analysis. Returns (result, transactions)."""
+        """Synchronous historical analysis. Returns (result, transactions).
+
+        Runs once per user — covers ALL historical transactions with no date or
+        count limit, then records a 'historical' FraudReportHistory entry so
+        it is never triggered again.
+        """
         logger.info(f"Running historical analysis for {user.email}")
 
-        # Check if user has already received historical report
-        report_count = FraudReportHistory.query.filter_by(user_id=user.id).count()
+        # Check if user has already received the historical report.
+        # NULL report_type rows are legacy records treated as 'historical'.
+        already_sent = FraudReportHistory.query.filter(
+            FraudReportHistory.user_id == user.id,
+            db.or_(
+                FraudReportHistory.report_type == 'historical',
+                FraudReportHistory.report_type == None  # noqa: E711
+            )
+        ).count()
 
-        if report_count > 0:
-            logger.info(f"User {user.email} already received historical report")
+        if already_sent > 0:
+            logger.info(f"User {user.email} already received historical report — skipping")
             return {'summary': {}, 'detections': []}, []
 
-        # Get all shortcodes
+        # Get all shortcodes for this user
         shortcodes = self.get_all_shortcodes_in_txn_tbl(user)
         all_transactions = []
 
-        # Fetch historical transactions
+        # Fetch ALL historical transactions — no date cutoff, no row limit
         for shortcode in shortcodes:
-            transactions = self.get_recent_transactions_for_shortcode_sync(
-                shortcode,
-                user.id,
-                days=30,
-                limit=100
-            )
+            transactions = self._get_all_transactions_for_shortcode_sync(shortcode, user.id)
             all_transactions.extend(transactions)
 
+        logger.info(
+            f"Historical analysis: {len(all_transactions)} total transactions "
+            f"across {len(shortcodes)} shortcodes for {user.email}"
+        )
+
         if all_transactions:
-            # Run detection
+            # Run all fraud-type detections
             result = fraud_service.run_detection(all_transactions)
 
-            # Send historical report email with transactions and detections
+            # Persist a FraudAlert record for EVERY detection (all types, all risk
+            # levels) so the deduplication logic can exclude these transaction IDs
+            # from all future periodic scans.
+            detections = result.get('detections', [])
+            recorded = 0
+            for detection in detections:
+                fraud_type = detection.get('fraud_type', 'unknown')
+                if self._record_fraud_alert_sync(detection, fraud_type, user):
+                    recorded += 1
+            logger.info(
+                f"Historical report: recorded {recorded}/{len(detections)} new "
+                f"FraudAlert entries for user {user.email}"
+            )
+
+            # Send the one-time historical fraud report email
             fraud_service.send_historical_report(
                 result['summary'],
                 transactions=all_transactions,
-                detections=result.get('detections', [])
+                detections=detections,
             )
 
-            # Record in database
-            self._record_report_history_sync(user, result['summary'])
+            # Persist the history record so we never re-send the historical report
+            self._record_report_history_sync(user, result['summary'], report_type='historical')
 
             return result, all_transactions
 
+        # No transactions found — still record the fact that we ran the historical check
+        # so the periodic scan can start immediately when transactions arrive later.
+        self._record_report_history_sync(user, {}, report_type='historical')
         return {'summary': {}, 'detections': []}, []
 
     def _send_detection_summary_sync(self, user, historical_report, recent_detections, transactions=None):
         """
-        Send lightweight detection summary synchronously.
-        Simple plain-text format to prevent CPU exhaustion.
-        Includes: receipt numbers, amounts, times, parties, and fraud explanations.
+        Send fraud detection summary as a formatted HTML email with tables.
+        Includes: summary cards, detections table, culpable agents, historical analysis.
         """
         from app.utils.email_utils import _send_email
         from datetime import datetime
 
         now = datetime.now()
+        report_id = f"PFR-{now.strftime('%Y%m%d%H%M%S')}-{user.id}"
 
         # Count detections by risk level
         high_risk_count = sum(1 for d in recent_detections if d.get('risk_level') == 'HIGH')
         medium_risk_count = sum(1 for d in recent_detections if d.get('risk_level') == 'MEDIUM')
         low_risk_count = len(recent_detections) - high_risk_count - medium_risk_count
+        total_count = len(recent_detections)
 
-        # Build lightweight plain-text report
-        lines = [
-            "=" * 60,
-            "PERIODIC FRAUD DETECTION ALERT",
-            "=" * 60,
-            f"Report Time: {now.strftime('%Y-%m-%d %H:%M:%S')}",
-            f"User: {user.email}",
-            "",
-            "-" * 60,
-            "SUMMARY",
-            "-" * 60,
-            f"High Risk Alerts:   {high_risk_count}",
-            f"Medium Risk Alerts: {medium_risk_count}",
-            f"Low Risk Alerts:    {low_risk_count}",
-            f"Total Detections:   {len(recent_detections)}",
-            "",
-        ]
+        def risk_badge(level):
+            colors = {'HIGH': '#dc2626', 'MEDIUM': '#ea580c', 'LOW': '#ca8a04'}
+            bg = colors.get(level, '#6b7280')
+            return f'<span style="background:{bg};color:#fff;padding:2px 8px;border-radius:4px;font-size:12px;font-weight:600;">{level}</span>'
 
-        # Add detection details with transaction info
+        def fraud_badge(ftype):
+            colors = {'SPLIT TRANSACTION': '#7c3aed', 'ROLLOVER FRAUD': '#0891b2', 'RAPID BACK FORTH': '#be185d'}
+            label = (ftype or 'Unknown').replace('_', ' ').upper()
+            bg = colors.get(label, '#4b5563')
+            return f'<span style="background:{bg};color:#fff;padding:2px 8px;border-radius:4px;font-size:11px;font-weight:600;">{label}</span>'
+
+        # --- Build HTML ---
+        html = f'''
+        <div style="font-family:Arial,Helvetica,sans-serif;max-width:1100px;margin:0 auto;background:#f8fafc;">
+          <!-- Header Banner -->
+          <div style="background:linear-gradient(135deg,#1e293b,#334155);padding:24px 32px;border-radius:8px 8px 0 0;">
+            <h1 style="color:#fff;margin:0;font-size:22px;">&#128680; Periodic Fraud Detection Alert</h1>
+            <p style="color:#94a3b8;margin:8px 0 0;font-size:13px;">
+              Report Time: {now.strftime('%Y-%m-%d %H:%M:%S')} &nbsp;|&nbsp; User: {user.email} &nbsp;|&nbsp; Report ID: {report_id}
+            </p>
+          </div>
+
+          <div style="padding:24px 32px;background:#ffffff;">
+            <!-- Summary Cards -->
+            <table style="width:100%;border-collapse:collapse;margin-bottom:24px;">
+              <tr>
+                <td style="padding:4px;">
+                  <div style="background:#fef2f2;border-left:4px solid #dc2626;padding:12px 16px;border-radius:4px;">
+                    <div style="font-size:11px;color:#991b1b;text-transform:uppercase;font-weight:600;">High Risk</div>
+                    <div style="font-size:28px;font-weight:700;color:#dc2626;">{high_risk_count}</div>
+                  </div>
+                </td>
+                <td style="padding:4px;">
+                  <div style="background:#fff7ed;border-left:4px solid #ea580c;padding:12px 16px;border-radius:4px;">
+                    <div style="font-size:11px;color:#9a3412;text-transform:uppercase;font-weight:600;">Medium Risk</div>
+                    <div style="font-size:28px;font-weight:700;color:#ea580c;">{medium_risk_count}</div>
+                  </div>
+                </td>
+                <td style="padding:4px;">
+                  <div style="background:#fefce8;border-left:4px solid #ca8a04;padding:12px 16px;border-radius:4px;">
+                    <div style="font-size:11px;color:#854d0e;text-transform:uppercase;font-weight:600;">Low Risk</div>
+                    <div style="font-size:28px;font-weight:700;color:#ca8a04;">{low_risk_count}</div>
+                  </div>
+                </td>
+                <td style="padding:4px;">
+                  <div style="background:#eff6ff;border-left:4px solid #2563eb;padding:12px 16px;border-radius:4px;">
+                    <div style="font-size:11px;color:#1e40af;text-transform:uppercase;font-weight:600;">Total</div>
+                    <div style="font-size:28px;font-weight:700;color:#2563eb;">{total_count}</div>
+                  </div>
+                </td>
+              </tr>
+            </table>
+        '''        
+
+        # --- Detections Table ---
         if recent_detections:
-            lines.extend([
-                "-" * 60,
-                "FRAUDULENT TRANSACTIONS DETECTED",
-                "-" * 60,
-                ""
-            ])
+            html += '''
+            <h2 style="font-size:16px;color:#1e293b;margin:24px 0 12px;border-bottom:2px solid #e2e8f0;padding-bottom:8px;">
+            Fraudulent Transactions Detected
+            </h2>
+            <div style="overflow-x:auto;width:100%;">
+            <table style="width:140%;border-collapse:collapse;font-size:12px;border:1px solid #e2e8f0;">
+                <thead>
+                <tr style="background:#f1f5f9;">
+                    <th style="padding:10px;border:1px solid #e2e8f0;text-align:left;width:3%;">#</th>
+                    <th style="padding:10px;border:1px solid #e2e8f0;text-align:left;width:7%;">Fraud Type</th>
+                    <th style="padding:10px;border:1px solid #e2e8f0;text-align:left;width:5%;">Risk</th>
+                    <th style="padding:10px;border:1px solid #e2e8f0;text-align:left;width:10%;">Account</th>
+                    <th style="padding:10px;border:1px solid #e2e8f0;text-align:right;width:8%;">Amount (KES)</th>
+                    <th style="padding:10px;border:1px solid #e2e8f0;text-align:left;width:7%;">Shortcode</th>
+                    <th style="padding:10px;border:1px solid #e2e8f0;text-align:left;width:15%;">Agent Company / Location</th>
+                    <th style="padding:10px;border:1px solid #e2e8f0;text-align:left;width:25%;">Transactions</th>
+                    <th style="padding:10px;border:1px solid #e2e8f0;text-align:left;width:20%;">Reason</th>
+                </tr>
+                </thead>
+                <tbody>
+            '''
 
-            for idx, detection in enumerate(recent_detections[:20], 1):  # Limit to 20
-                fraud_type = detection.get('fraud_type', 'Unknown').replace('_', ' ').upper()
+            for idx, detection in enumerate(recent_detections[:20], 1):
+                fraud_type = detection.get('fraud_type', 'Unknown')
                 risk_level = detection.get('risk_level', 'UNKNOWN')
                 account_phone = detection.get('account_phone', 'Unknown')
                 account_name = detection.get('account_name', 'Unknown')
                 total_amount = detection.get('total_amount', 0)
-                receipt_nos = detection.get('receipt_nos', [])
-                explanation = detection.get('explanation', 'No explanation available.')
                 business_shortcode = detection.get('business_shortcode', 'N/A')
+                explanation = detection.get('explanation', 'No explanation available.')
 
-                lines.extend([
-                    f"[{idx}] {fraud_type} - {risk_level} RISK",
-                    f"    Account: {account_phone} ({account_name})",
-                    f"    Total Amount: KES {total_amount:,.2f}",
-                    f"    Business Shortcode: {business_shortcode}",
-                    f"    Receipt Numbers: {', '.join(receipt_nos[:5])}{'...' if len(receipt_nos) > 5 else ''}",
-                    ""
-                ])
-
-                # Add transaction details if available
-                txn_details = detection.get('transaction_details', [])
-                if txn_details:
-                    lines.append("    Transactions:")
-                    for txn in txn_details[:5]:  # Limit to 5 per detection
-                        lines.append(
-                            f"      - Receipt: {txn.get('receipt_no', 'N/A')} | "
-                            f"Amount: KES {txn.get('amount', 0):,.2f} | "
-                            f"Type: {txn.get('type', 'N/A')} | "
-                            f"Time: {txn.get('time', 'N/A')}"
-                        )
-                        if txn.get('party_name') or txn.get('party_phone'):
-                            lines.append(
-                                f"        Party: {txn.get('party_name', 'Unknown')} ({txn.get('party_phone', 'N/A')})"
-                            )
-                    if len(txn_details) > 5:
-                        lines.append(f"      ... and {len(txn_details) - 5} more transactions")
-                    lines.append("")
-
-                # Add agent/company info if available
+                # Agent company info
                 agent_info = detection.get('agent_info', {})
                 agent_companies = agent_info.get('agent_companies', [])
-                user_agents = agent_info.get('user_agents', [])
+                agent_col = ''
+                if agent_companies:
+                    for ac in agent_companies[:2]:
+                        agent_col += f"<div style='margin-bottom:6px;'><strong>{ac.get('company_name', 'N/A')}</strong><br/>"
+                        agent_col += f"<span style='color:#475569;'>SC: {ac.get('short_code', 'N/A')}</span><br/>"
+                        agent_col += f"<span style='color:#475569;'>Loc: {ac.get('location', 'N/A')}</span><br/>"
+                        agent_col += f"<span style='color:#475569;'>Agent/Store: {ac.get('agent_number', 'N/A')}/{ac.get('store_number', 'N/A')}</span></div>"
+                else:
+                    agent_col = '<span style="color:#64748b;">N/A</span>'
 
-                if agent_companies or user_agents:
-                    lines.append("    RESPONSIBLE AGENT/COMPANY:")
-                    for ac in agent_companies[:3]:
-                        lines.append(f"      Company: {ac.get('company_name', 'N/A')}")
-                        lines.append(f"        - Shortcode: {ac.get('short_code', 'N/A')}")
-                        lines.append(f"        - Location: {ac.get('location', 'N/A')}")
-                        lines.append(f"        - Agent/Store #: {ac.get('agent_number', 'N/A')} / {ac.get('store_number', 'N/A')}")
-                        lines.append(f"        - Risk Level: {ac.get('fraud_risk_level', 'N/A').upper()}")
+                # Transaction details mini-list
+                txn_details = detection.get('transaction_details', [])
+                txn_col = ''
+                if txn_details:
+                    for txn in txn_details[:5]:
+                        party = ''
+                        if txn.get('party_name') or txn.get('party_phone'):
+                            party = f"<span style='color:#475569;'> → {txn.get('party_name', '')} ({txn.get('party_phone', '')})</span>"
+                        txn_col += (
+                            f"<div style='margin-bottom:6px;padding-bottom:4px;border-bottom:1px dashed #e2e8f0;'>"
+                            f"<span style='font-weight:600;'>{txn.get('receipt_no', 'N/A')}</span> "
+                            f"<span style='font-weight:600;color:#0f172a;'>KES {txn.get('amount', 0):,.2f}</span> "
+                            f"<span style='background:#f1f5f9;padding:2px 6px;border-radius:4px;'>{txn.get('type', '')}</span> "
+                            f"<span style='color:#64748b;display:block;margin-top:2px;'>{txn.get('time', '')}</span>"
+                            f"{party}</div>"
+                        )
+                    if len(txn_details) > 5:
+                        txn_col += f"<div style='color:#64748b;font-style:italic;background:#f8fafc;padding:4px;border-radius:4px;'>+{len(txn_details)-5} more transactions</div>"
+                else:
+                    receipt_nos = detection.get('receipt_nos', [])
+                    txn_col = f"<span style='color:#0f172a;'>{', '.join(receipt_nos[:5])}</span>"
+                    if len(receipt_nos) > 5:
+                        txn_col += f'<span style="color:#64748b;display:block;margin-top:4px;">+{len(receipt_nos)-5} more</span>'
 
-                    if user_agents:
-                        lines.append("      Associated Personnel:")
-                        for ua in user_agents[:3]:
-                            verified = "✓ Verified" if ua.get('is_authentic') else "✗ Unverified"
-                            lines.append(f"        - {ua.get('name', 'N/A')} (ID: {ua.get('idnumber', 'N/A')}, {verified})")
-                            if ua.get('phone_number'):
-                                lines.append(f"          Phone: {ua.get('phone_number')}")
+                row_bg = '#ffffff' if idx % 2 == 1 else '#f8fafc'
+                html += f'''
+                <tr style="background:{row_bg};">
+                <td style="padding:12px 10px;border:1px solid #e2e8f0;text-align:center;font-weight:600;">{idx}</td>
+                <td style="padding:12px 10px;border:1px solid #e2e8f0;">{fraud_badge(fraud_type)}</td>
+                <td style="padding:12px 10px;border:1px solid #e2e8f0;">{risk_badge(risk_level)}</td>
+                <td style="padding:12px 10px;border:1px solid #e2e8f0;">
+                    <span style="font-weight:600;">{account_phone}</span><br/>
+                    <span style="color:#475569;font-size:11px;">{account_name}</span>
+                </td>
+                <td style="padding:12px 10px;border:1px solid #e2e8f0;text-align:right;font-weight:700;font-size:13px;">KES {total_amount:,.2f}</td>
+                <td style="padding:12px 10px;border:1px solid #e2e8f0;font-family:monospace;">{business_shortcode}</td>
+                <td style="padding:12px 10px;border:1px solid #e2e8f0;font-size:11px;line-height:1.5;">{agent_col}</td>
+                <td style="padding:12px 10px;border:1px solid #e2e8f0;font-size:11px;line-height:1.5;">{txn_col}</td>
+                <td style="padding:12px 10px;border:1px solid #e2e8f0;font-size:11px;line-height:1.5;word-wrap:break-word;max-width:300px;">{explanation}</td>
+                </tr>
+                '''
 
-                    lines.append("")
-
-                # Add explanation
-                lines.extend([
-                    "    REASON:",
-                    f"    {explanation}",
-                    "",
-                    "-" * 40,
-                    ""
-                ])
+            html += '</tbody></table></div>'
 
             if len(recent_detections) > 20:
-                lines.append(f"... and {len(recent_detections) - 20} more detections not shown")
-                lines.append("")
+                html += f'<p style="color:#64748b;font-size:12px;margin-top:12px;">... and {len(recent_detections) - 20} more detections not shown</p>'
 
-        # Add historical summary
-        historical_patterns = len(historical_report.get('detections', []))
-        if historical_patterns > 0:
-            lines.extend([
-                "-" * 60,
-                "HISTORICAL ANALYSIS",
-                "-" * 60,
-                f"Patterns Found: {historical_patterns}",
-                f"Split Transactions: {historical_report.get('summary', {}).get('split_transactions', 0)}",
-                f"Rollover Fraud: {historical_report.get('summary', {}).get('rollover_fraud', 0)}",
-                f"Rapid Patterns: {historical_report.get('summary', {}).get('rapid_patterns', 0)}",
-                ""
-            ])
 
-        # Add culpable agents section
+        # --- Culpable Agents Table ---
         culpable_data = historical_report.get('culpable_agents', {})
         culpable_agents = culpable_data.get('culpable_agents', [])
         if culpable_agents:
-            lines.extend([
-                "-" * 60,
-                "CULPABLE AGENTS ANALYSIS",
-                "-" * 60,
-                f"Total Agents Involved: {len(culpable_agents)}",
-                f"Total Amount at Risk: KES {culpable_data.get('total_fraud_amount', 0):,.2f}",
-                ""
-            ])
+            html += f'''
+            <h2 style="font-size:16px;color:#1e293b;margin:28px 0 12px;border-bottom:2px solid #e2e8f0;padding-bottom:8px;">
+              Culpable Agents &mdash; {len(culpable_agents)} involved, KES {culpable_data.get('total_fraud_amount', 0):,.2f} at risk
+            </h2>
+            <table style="width:100%;border-collapse:collapse;font-size:12px;border:1px solid #e2e8f0;">
+              <thead>
+                <tr style="background:#f1f5f9;">
+                  <th style="padding:8px;border:1px solid #e2e8f0;text-align:left;">#</th>
+                  <th style="padding:8px;border:1px solid #e2e8f0;text-align:left;">Company</th>
+                  <th style="padding:8px;border:1px solid #e2e8f0;text-align:left;">Shortcode</th>
+                  <th style="padding:8px;border:1px solid #e2e8f0;text-align:left;">Location</th>
+                  <th style="padding:8px;border:1px solid #e2e8f0;text-align:right;">Fraud Amount (KES)</th>
+                  <th style="padding:8px;border:1px solid #e2e8f0;text-align:center;">High/Med/Low</th>
+                  <th style="padding:8px;border:1px solid #e2e8f0;text-align:left;">Fraud Types</th>
+                  <th style="padding:8px;border:1px solid #e2e8f0;text-align:left;">Personnel</th>
+                </tr>
+              </thead>
+              <tbody>
+            '''
 
-            for idx, agent in enumerate(culpable_agents[:10], 1):  # Limit to 10 agents
-                lines.extend([
-                    f"[{idx}] {agent.get('company_name', 'Unknown Agent')}",
-                    f"    Shortcode: {agent.get('shortcode', 'N/A')}",
-                    f"    Agent/Store #: {agent.get('agent_number', 'N/A')} / {agent.get('store_number', 'N/A')}",
-                    f"    Location: {agent.get('location', 'N/A')}",
-                    f"    Contact: {agent.get('contact_phone', 'N/A')}",
-                    f"    Fraud Amount: KES {agent.get('total_fraud_amount', 0):,.2f}",
-                    f"    Risk Counts: HIGH={agent.get('high_risk_count', 0)}, MEDIUM={agent.get('medium_risk_count', 0)}, LOW={agent.get('low_risk_count', 0)}",
-                    f"    Fraud Types: {', '.join(agent.get('fraud_types', []))}",
-                ])
+            for idx, agent in enumerate(culpable_agents[:10], 1):
+                row_bg = '#ffffff' if idx % 2 == 1 else '#f8fafc'
+                fraud_types = ', '.join(agent.get('fraud_types', []))
+                personnel = ''
+                for ua in agent.get('user_agents', [])[:3]:
+                    verified = '&#10003;' if ua.get('is_verified') else '&#10007;'
+                    personnel += f"{ua.get('name', 'N/A')} (ID: {ua.get('id_number', 'N/A')}, {verified})<br/>"
 
-                # Add associated personnel
-                user_agents = agent.get('user_agents', [])
-                if user_agents:
-                    lines.append("    Associated Personnel:")
-                    for ua in user_agents[:3]:  # Limit to 3
-                        verified = "Verified" if ua.get('is_verified') else "Unverified"
-                        lines.append(f"      - {ua.get('name', 'N/A')} (ID: {ua.get('id_number', 'N/A')}, {verified})")
+                html += f'''
+                <tr style="background:{row_bg};">
+                  <td style="padding:8px;border:1px solid #e2e8f0;text-align:center;">{idx}</td>
+                  <td style="padding:8px;border:1px solid #e2e8f0;font-weight:600;">{agent.get('company_name', 'Unknown')}</td>
+                  <td style="padding:8px;border:1px solid #e2e8f0;">{agent.get('shortcode', 'N/A')}</td>
+                  <td style="padding:8px;border:1px solid #e2e8f0;">{agent.get('location', 'N/A')}</td>
+                  <td style="padding:8px;border:1px solid #e2e8f0;text-align:right;font-weight:600;">{agent.get('total_fraud_amount', 0):,.2f}</td>
+                  <td style="padding:8px;border:1px solid #e2e8f0;text-align:center;">
+                    <span style="color:#dc2626;">{agent.get('high_risk_count', 0)}</span> /
+                    <span style="color:#ea580c;">{agent.get('medium_risk_count', 0)}</span> /
+                    <span style="color:#ca8a04;">{agent.get('low_risk_count', 0)}</span>
+                  </td>
+                  <td style="padding:8px;border:1px solid #e2e8f0;font-size:11px;">{fraud_types}</td>
+                  <td style="padding:8px;border:1px solid #e2e8f0;font-size:11px;">{personnel or 'N/A'}</td>
+                </tr>
+                '''
 
-                lines.append("")
+            html += '</tbody></table>'
 
             if len(culpable_agents) > 10:
-                lines.append(f"... and {len(culpable_agents) - 10} more agents with suspicious activity")
-                lines.append("")
+                html += f'<p style="color:#64748b;font-size:12px;margin-top:8px;">... and {len(culpable_agents) - 10} more agents with suspicious activity</p>'
 
-        # Footer
-        lines.extend([
-            "=" * 60,
-            "ACTION REQUIRED: Please review flagged transactions",
-            f"Report ID: PFR-{now.strftime('%Y%m%d%H%M%S')}-{user.id}",
-            "=" * 60,
-        ])
+        # --- Historical Analysis ---
+        historical_patterns = len(historical_report.get('detections', []))
+        if historical_patterns > 0:
+            summary = historical_report.get('summary', {})
+            html += f'''
+            <h2 style="font-size:16px;color:#1e293b;margin:28px 0 12px;border-bottom:2px solid #e2e8f0;padding-bottom:8px;">
+              Historical Analysis
+            </h2>
+            <table style="border-collapse:collapse;font-size:13px;border:1px solid #e2e8f0;">
+              <tr style="background:#f1f5f9;">
+                <td style="padding:8px 16px;border:1px solid #e2e8f0;font-weight:600;">Patterns Found</td>
+                <td style="padding:8px 16px;border:1px solid #e2e8f0;">{historical_patterns}</td>
+              </tr>
+              <tr>
+                <td style="padding:8px 16px;border:1px solid #e2e8f0;font-weight:600;">Split Transactions</td>
+                <td style="padding:8px 16px;border:1px solid #e2e8f0;">{summary.get('split_transactions', 0)}</td>
+              </tr>
+              <tr style="background:#f1f5f9;">
+                <td style="padding:8px 16px;border:1px solid #e2e8f0;font-weight:600;">Rollover Fraud</td>
+                <td style="padding:8px 16px;border:1px solid #e2e8f0;">{summary.get('rollover_fraud', 0)}</td>
+              </tr>
+              <tr>
+                <td style="padding:8px 16px;border:1px solid #e2e8f0;font-weight:600;">Rapid Patterns</td>
+                <td style="padding:8px 16px;border:1px solid #e2e8f0;">{summary.get('rapid_patterns', 0)}</td>
+              </tr>
+            </table>
+            '''
 
-        body = "\n".join(lines)
+        # --- Footer ---
+        html += f'''
+            <div style="margin-top:32px;padding:16px;background:#fef2f2;border:1px solid #fecaca;border-radius:6px;text-align:center;">
+              <strong style="color:#991b1b;font-size:14px;">&#9888; ACTION REQUIRED: Please review flagged transactions</strong><br/>
+              <span style="color:#64748b;font-size:12px;">Report ID: {report_id}</span>
+            </div>
+          </div>
 
-        # Send email (plain text)
+          <div style="background:#1e293b;padding:16px 32px;border-radius:0 0 8px 8px;text-align:center;">
+            <p style="color:#64748b;font-size:11px;margin:0;">Kwamz AI Fraud Detection System &mdash; Automated Report</p>
+          </div>
+        </div>
+        '''
+
+        # Send HTML email
         try:
             _send_email(
                 subject=f"[FRAUD ALERT] Periodic Detection Report - {now.strftime('%Y-%m-%d %H:%M')}",
-                body=body,
+                html=html,
                 recipient=user.email,
-                is_html=False  # Plain text for lightweight processing
             )
-            logger.info(f"Sent lightweight fraud detection summary to {user.email}")
+            logger.info(f"Sent HTML fraud detection summary to {user.email}")
         except Exception as e:
             logger.error(f"Failed to send summary email: {str(e)}")
 
@@ -1601,15 +1714,21 @@ class TransactionService:
             return str(obj)
         return obj
 
-    def _record_report_history_sync(self, user, report_summary):
-        """Record report history synchronously."""
+    def _record_report_history_sync(self, user, report_summary, report_type: str = 'historical'):
+        """Record report history synchronously.
+
+        Args:
+            user: The User object.
+            report_summary: Summary dict from fraud detection.
+            report_type: 'historical' for the one-time full scan, 'periodic' for recurring.
+        """
         try:
-            # Serialize report_summary to handle datetime objects
             serialized_report = self._serialize_for_json(report_summary)
 
             history = FraudReportHistory(
                 user_id=user.id,
-                analysis_period_days=30,
+                report_type=report_type,
+                analysis_period_days=None,  # not applicable — we scan all data
                 total_transactions=report_summary.get('total_transactions_analyzed', 0),
                 suspicious_patterns=report_summary.get('suspicious_patterns_found', 0),
                 accounts_flagged=report_summary.get('accounts_flagged', 0),
@@ -1619,7 +1738,7 @@ class TransactionService:
             db.session.add(history)
             db.session.commit()
 
-            logger.info(f"Recorded fraud report history for user {user.email}")
+            logger.info(f"Recorded {report_type} fraud report history for user {user.email}")
 
         except Exception as e:
             db.session.rollback()
@@ -1799,9 +1918,13 @@ class TransactionService:
             logger.error(f"User {user_id} not found")
             return {'status': 'error', 'message': 'User not found'}
         
-        # Initialize fraud detection service
-        fraud_service = FraudDetectionService(user=user)
-        
+        # Load user's active fraud detection config
+        config_obj = ConfigService.get_active_config(user.id)
+        config_dict = config_obj.to_dict() if config_obj else {}
+
+        # Initialize fraud detection service with user's config
+        fraud_service = FraudDetectionService(user=user, config=config_dict)
+
         # Step 1: Historical analysis (first run only)
         historical_report = await self._run_historical_analysis(fraud_service, user)
         
@@ -1823,11 +1946,18 @@ class TransactionService:
     
     async def _run_historical_analysis(self, fraud_service: FraudDetectionService, user: User) -> Dict:
         """Run historical fraud analysis (first time for user)."""
-        # Check if user has already received historical report
-        report_count = FraudReportHistory.query.filter_by(user_id=user.id).count()
-        
-        if report_count > 0:
-            logger.info(f"User {user.email} already received historical report")
+        # Check if user has already received the historical report.
+        # NULL report_type rows are legacy records treated as 'historical'.
+        already_sent = FraudReportHistory.query.filter(
+            FraudReportHistory.user_id == user.id,
+            db.or_(
+                FraudReportHistory.report_type == 'historical',
+                FraudReportHistory.report_type == None  # noqa: E711
+            )
+        ).count()
+
+        if already_sent > 0:
+            logger.info(f"User {user.email} already received historical report — skipping")
             return {'summary': {}, 'detections': []}
         
         logger.info(f"Running historical analysis for {user.email}")
@@ -1967,108 +2097,185 @@ class TransactionService:
             executor,
             lambda: _send_email(
                 subject=f"Fraud Detection Summary - {datetime.now().strftime('%Y-%m-%d')}",
-                body=body,
+                html=body,
                 recipient=user.email,
-                is_html=True
             )
         )
-    
+
     def _check_recent_transactions_sync(self, user: User, fraud_service: FraudDetectionService) -> List[Dict]:
-        """Check recent transactions for fraud patterns - Synchronous version."""
+        """Periodic fraud check — only processes transactions that have NOT already been flagged.
+
+        Starts from the completion_time of the most recently flagged transaction
+        produced by the historical report, so there is no overlap with the historical scan.
+        Any transaction ID already present in a FraudAlert record is excluded before
+        running detection, guaranteeing a transaction is never flagged twice.
+        """
         logger.info(f"Checking recent transactions for fraud patterns for user: {user.email}")
-        
+
         try:
-            # Get shortcodes for this user
+            # Collect all transaction IDs that have already been flagged for this user
+            already_flagged_ids = self._get_already_flagged_transaction_ids(user.id)
+
+            # Determine the earliest point in time the periodic scan should cover.
+            # We start from right after the most-recent transaction flagged in the
+            # historical report so we do not re-analyse already-processed transactions.
+            after_date = self._get_latest_flagged_transaction_time(user.id)
+            if after_date:
+                logger.info(
+                    f"Periodic scan for {user.email} starts after {after_date} "
+                    f"({len(already_flagged_ids)} already-flagged transaction IDs excluded)"
+                )
+            else:
+                logger.info(
+                    f"No prior flagged transactions found for {user.email}; "
+                    "periodic scan covers all available transactions"
+                )
+
             shortcodes = self.get_all_shortcodes_in_txn_tbl(user)
             logger.info(f"Found {len(shortcodes)} shortcodes to check")
-            
+
             if not shortcodes:
                 logger.info("No shortcodes found for user")
                 return []
-            
+
             all_detections = []
             processed_count = 0
-            
-            # Process shortcodes in batches (synchronous version)
+
             batch_size = 3
             for i in range(0, len(shortcodes), batch_size):
                 batch = shortcodes[i:i + batch_size]
-                logger.info(f"Processing batch {i//batch_size + 1}/{(len(shortcodes) + batch_size - 1)//batch_size}: {batch}")
-                
-                # Process each shortcode in the current batch
+                logger.info(
+                    f"Processing batch {i // batch_size + 1}/"
+                    f"{(len(shortcodes) + batch_size - 1) // batch_size}: {batch}"
+                )
+
                 for shortcode in batch:
                     try:
                         logger.info(f"Processing shortcode: {shortcode}")
-                        detections = self._process_single_shortcode_sync(fraud_service, shortcode, user)
-                        
+                        detections = self._process_single_shortcode_sync(
+                            fraud_service,
+                            shortcode,
+                            user,
+                            after_date=after_date,
+                            already_flagged_ids=already_flagged_ids,
+                        )
+
                         if detections:
                             all_detections.extend(detections)
-                            logger.info(f"Found {len(detections)} suspicious patterns for shortcode {shortcode}")
-                        
+                            logger.info(
+                                f"Found {len(detections)} suspicious patterns for shortcode {shortcode}"
+                            )
+
                         processed_count += 1
-                        
-                        # Log progress
                         if processed_count % 10 == 0:
-                            logger.info(f"Progress: Processed {processed_count}/{len(shortcodes)} shortcodes")
-                            
+                            logger.info(
+                                f"Progress: Processed {processed_count}/{len(shortcodes)} shortcodes"
+                            )
+
                     except Exception as e:
                         logger.error(f"Error processing shortcode {shortcode}: {str(e)}")
                         continue
-            
-            logger.info(f"Completed checking recent transactions. Found {len(all_detections)} total suspicious patterns")
+
+            logger.info(
+                f"Completed periodic check. Found {len(all_detections)} total suspicious patterns"
+            )
             return all_detections
-            
+
         except Exception as e:
             logger.error(f"Error in _check_recent_transactions_sync: {str(e)}", exc_info=True)
             return []
 
-    def _process_single_shortcode_sync(self, fraud_service: FraudDetectionService, shortcode: str, user: User = None) -> List[Dict]:
-        """Process a single shortcode for fraud detection - Synchronous version."""
+    def _process_single_shortcode_sync(
+        self,
+        fraud_service: FraudDetectionService,
+        shortcode: str,
+        user: User = None,
+        after_date: Optional[datetime] = None,
+        already_flagged_ids: Optional[set] = None,
+    ) -> List[Dict]:
+        """Process a single shortcode for periodic fraud detection.
+
+        Args:
+            fraud_service: Initialised FraudDetectionService for the user.
+            shortcode: The business short-code to scan.
+            user: The User whose companies own this shortcode.
+            after_date: Only fetch transactions with completion_time > after_date.
+                        This anchors the periodic scan to start immediately after
+                        the most recent transaction flagged by the historical report.
+            already_flagged_ids: Set of transaction IDs already recorded in FraudAlert
+                        records. Any transaction in this set is removed before
+                        detection so it cannot be flagged a second time.
+        """
+        if already_flagged_ids is None:
+            already_flagged_ids = set()
+
         try:
-            logger.info(f"Getting recent transactions for shortcode: {shortcode}")
-            
-            # Get recent transactions for this shortcode
-            # Assuming you have a method that takes user_id or company filtering
-            transactions = self.get_recent_transactions_for_shortcode_sync(
+            logger.info(f"Getting transactions for shortcode: {shortcode} (after_date={after_date})")
+
+            # Fetch transactions starting from after_date (no hard limit on count)
+            transactions = self._get_periodic_transactions_for_shortcode_sync(
                 shortcode=shortcode,
                 user_id=user.id if user else None,
-                days=30,
-                limit=fraud_service.config.get('recent_transactions_limit', 100)
+                after_date=after_date,
             )
-            
+
             if not transactions:
-                logger.debug(f"No recent transactions found for shortcode: {shortcode}")
+                logger.debug(f"No new transactions found for shortcode: {shortcode}")
                 return []
-            
-            logger.info(f"Found {len(transactions)} recent transactions for shortcode {shortcode}")
-            
-            # Run fraud detection
+
+            # Remove transactions already flagged in a previous report
+            if already_flagged_ids:
+                before = len(transactions)
+                transactions = [
+                    t for t in transactions
+                    if t.get('id') not in already_flagged_ids
+                ]
+                skipped = before - len(transactions)
+                if skipped:
+                    logger.info(
+                        f"Shortcode {shortcode}: excluded {skipped} already-flagged "
+                        f"transactions; {len(transactions)} remain for analysis"
+                    )
+
+            if not transactions:
+                logger.debug(f"All transactions for shortcode {shortcode} already flagged — skipping")
+                return []
+
+            logger.info(f"Running fraud detection on {len(transactions)} transactions for {shortcode}")
+
             result = fraud_service.run_detection(transactions)
             detections = result.get('detections', [])
-            
+
             if not detections:
                 logger.debug(f"No fraud patterns detected for shortcode: {shortcode}")
                 return []
-            
-            # Send notifications for high-risk detections
+
+            # Record ALL detections (every fraud type, every risk level) in FraudAlert
+            # so they are excluded from all future periodic scans.
             high_risk_count = 0
             for detection in detections:
+                fraud_type = detection.get('fraud_type', 'unknown')
+                # Always persist (idempotent — skips if receipt_hash already exists)
+                self._record_fraud_alert_sync(detection, fraud_type, user)
+
+                # Send immediate email notification only for HIGH-risk detections
                 if detection.get('risk_level') == 'HIGH':
-                    # Check alert limit before sending
                     receipt_nos = detection.get('receipt_nos', [])
                     if not self._should_limit_alerts(receipt_nos):
                         try:
-                            # Use sync notification method
+                            # Note: _send_fraud_notification_sync also calls
+                            # _record_fraud_alert_sync internally, but the
+                            # duplicate guard in that method makes it a no-op.
                             self._send_fraud_notification_sync(detection, user)
                             high_risk_count += 1
                         except Exception as e:
                             logger.error(f"Failed to send notification for detection: {str(e)}")
-            
+
             if high_risk_count > 0:
                 logger.info(f"Sent {high_risk_count} high-risk notifications for shortcode {shortcode}")
-            
+
             return detections
-            
+
         except Exception as e:
             logger.error(f"Error processing shortcode {shortcode}: {str(e)}", exc_info=True)
             return []
@@ -2160,6 +2367,216 @@ class TransactionService:
                 exc_info=True
             )
             return []
+
+    # ------------------------------------------------------------------
+    # Historical fetch — no date cutoff, no row limit
+    # ------------------------------------------------------------------
+
+    def _get_all_transactions_for_shortcode_sync(
+        self,
+        shortcode: str,
+        user_id: Optional[int] = None,
+    ) -> List[Dict]:
+        """Fetch ALL completed transactions for a shortcode with no date or count limit.
+
+        Used exclusively by the one-time historical fraud report so that the
+        entire transaction history is analysed.
+        """
+        try:
+            base_query = """
+                SELECT
+                    id, receipt_no, completion_time, initiation_time,
+                    details, transaction_status, paid_in, withdrawn,
+                    balance, balance_confirmed, reason_type, other_party_info,
+                    linked_transaction_id, account_number, currency,
+                    transaction_type, business_shortcode, company_id, agent_id,
+                    created_at, updated_at
+                FROM transactions
+                WHERE business_shortcode = %s
+                AND transaction_status = 'Completed'
+            """
+            params: Tuple = (shortcode,)
+
+            if user_id:
+                company_ids = self._get_company_ids_for_user(user_id)
+                if not company_ids:
+                    logger.warning(f"No companies found for user {user_id}")
+                    return []
+                base_query += " AND company_id IN %s"
+                params += (tuple(company_ids),)
+
+            query = base_query + " ORDER BY completion_time ASC"
+
+            with db_pool.get_cursor() as cursor:
+                cursor.execute(query, params)
+                rows = cursor.fetchall()
+
+                transactions = []
+                for row in rows:
+                    tx_dict = dict(row)
+                    for key in ['paid_in', 'withdrawn', 'balance', 'balance_confirmed']:
+                        if key in tx_dict and isinstance(tx_dict[key], Decimal):
+                            tx_dict[key] = self._parse_decimal_to_float(tx_dict[key])
+                    for key in ['completion_time', 'initiation_time', 'created_at', 'updated_at']:
+                        if key in tx_dict and isinstance(tx_dict[key], datetime):
+                            tx_dict[key] = self._parse_date_to_string(tx_dict[key])
+                    for key in ['linked_transaction_id', 'account_number']:
+                        if tx_dict.get(key) == 'NaN':
+                            tx_dict[key] = None
+                    transactions.append(tx_dict)
+
+                logger.info(
+                    f"Retrieved {len(transactions)} historical transactions for shortcode {shortcode}"
+                )
+                return transactions
+
+        except Exception as e:
+            logger.error(
+                f"Failed to fetch all transactions for shortcode {shortcode} "
+                f"(user={user_id}): {str(e)}",
+                exc_info=True,
+            )
+            return []
+
+    # ------------------------------------------------------------------
+    # Periodic fetch — transactions strictly after a given datetime
+    # ------------------------------------------------------------------
+
+    def _get_periodic_transactions_for_shortcode_sync(
+        self,
+        shortcode: str,
+        user_id: Optional[int] = None,
+        after_date: Optional[datetime] = None,
+    ) -> List[Dict]:
+        """Fetch completed transactions for a shortcode that occurred after *after_date*.
+
+        When *after_date* is None the query returns all completed transactions
+        (fallback for when no historical report has been sent yet).
+        No row-count limit is applied so every new transaction is considered.
+        """
+        try:
+            base_query = """
+                SELECT
+                    id, receipt_no, completion_time, initiation_time,
+                    details, transaction_status, paid_in, withdrawn,
+                    balance, balance_confirmed, reason_type, other_party_info,
+                    linked_transaction_id, account_number, currency,
+                    transaction_type, business_shortcode, company_id, agent_id,
+                    created_at, updated_at
+                FROM transactions
+                WHERE business_shortcode = %s
+                AND transaction_status = 'Completed'
+            """
+            params: Tuple = (shortcode,)
+
+            if after_date:
+                base_query += " AND completion_time > %s"
+                params += (after_date,)
+
+            if user_id:
+                company_ids = self._get_company_ids_for_user(user_id)
+                if not company_ids:
+                    logger.warning(f"No companies found for user {user_id}")
+                    return []
+                base_query += " AND company_id IN %s"
+                params += (tuple(company_ids),)
+
+            query = base_query + " ORDER BY completion_time ASC"
+
+            with db_pool.get_cursor() as cursor:
+                cursor.execute(query, params)
+                rows = cursor.fetchall()
+
+                transactions = []
+                for row in rows:
+                    tx_dict = dict(row)
+                    for key in ['paid_in', 'withdrawn', 'balance', 'balance_confirmed']:
+                        if key in tx_dict and isinstance(tx_dict[key], Decimal):
+                            tx_dict[key] = self._parse_decimal_to_float(tx_dict[key])
+                    for key in ['completion_time', 'initiation_time', 'created_at', 'updated_at']:
+                        if key in tx_dict and isinstance(tx_dict[key], datetime):
+                            tx_dict[key] = self._parse_date_to_string(tx_dict[key])
+                    for key in ['linked_transaction_id', 'account_number']:
+                        if tx_dict.get(key) == 'NaN':
+                            tx_dict[key] = None
+                    transactions.append(tx_dict)
+
+                logger.info(
+                    f"Retrieved {len(transactions)} periodic transactions for shortcode {shortcode} "
+                    f"(after {after_date})"
+                )
+                return transactions
+
+        except Exception as e:
+            logger.error(
+                f"Failed to fetch periodic transactions for shortcode {shortcode} "
+                f"(user={user_id}, after={after_date}): {str(e)}",
+                exc_info=True,
+            )
+            return []
+
+    # ------------------------------------------------------------------
+    # Deduplication helpers
+    # ------------------------------------------------------------------
+
+    def _get_already_flagged_transaction_ids(self, user_id: int) -> set:
+        """Return a set of all transaction IDs that have already been recorded in a
+        FraudAlert for this user.  Any transaction present in this set should be
+        excluded from future fraud-detection runs to prevent double-flagging.
+        """
+        try:
+            alerts = FraudAlert.query.filter_by(user_id=user_id).all()
+            flagged: set = set()
+            for alert in alerts:
+                if alert.transaction_ids:
+                    for tid in alert.transaction_ids.split(','):
+                        tid = tid.strip()
+                        if tid:
+                            try:
+                                flagged.add(int(tid))
+                            except ValueError:
+                                pass
+            logger.debug(
+                f"Found {len(flagged)} already-flagged transaction IDs for user {user_id}"
+            )
+            return flagged
+        except Exception as e:
+            logger.error(
+                f"Error fetching already-flagged transaction IDs for user {user_id}: {str(e)}"
+            )
+            return set()
+
+    def _get_latest_flagged_transaction_time(self, user_id: int) -> Optional[datetime]:
+        """Return the completion_time of the most recently flagged transaction for a user.
+
+        The periodic scan starts immediately after this timestamp so it does not
+        re-analyse any transaction that was covered by the historical report.
+        Returns None if no transactions have been flagged yet.
+        """
+        try:
+            flagged_ids = self._get_already_flagged_transaction_ids(user_id)
+            if not flagged_ids:
+                return None
+
+            latest_txn = Transaction.query.filter(
+                Transaction.id.in_(flagged_ids)
+            ).order_by(Transaction.completion_time.desc()).first()
+
+            if latest_txn and latest_txn.completion_time:
+                logger.info(
+                    f"Latest flagged transaction time for user {user_id}: "
+                    f"{latest_txn.completion_time}"
+                )
+                return latest_txn.completion_time
+
+            return None
+
+        except Exception as e:
+            logger.error(
+                f"Error finding latest flagged transaction time for user {user_id}: {str(e)}"
+            )
+            return None
+
     def _send_fraud_notification_sync(self, detection: Dict, user: User = None):
         """Send fraud notification email synchronously."""
         if not user or not user.email:
@@ -2219,21 +2636,41 @@ class TransactionService:
         try:
             _send_email(
                 subject=subject,
-                body=body,
+                html=body,
                 recipient=user.email,
-                is_html=True
             )
             logger.info(f"Sent {fraud_type} alert to {user.email}")
-            
+
             # Record alert in database
             self._record_fraud_alert_sync(detection, fraud_type, user)
             
         except Exception as e:
             logger.error(f"Failed to send fraud notification: {str(e)}")
 
-    def _record_fraud_alert_sync(self, detection: Dict, fraud_type: str, user: User):
-        """Record fraud alert in database synchronously."""        
+    def _record_fraud_alert_sync(self, detection: Dict, fraud_type: str, user: User) -> bool:
+        """Record fraud alert in database synchronously.
+
+        Idempotent: skips insert if an alert with the same receipt_hash already
+        exists for this user, preventing double-recording when the same detection
+        is seen across multiple calls (e.g. historical + periodic overlap).
+
+        Returns True if a new record was inserted, False if it was skipped.
+        """
         try:
+            receipt_nos = detection.get('receipt_nos', [])
+            receipt_hash = hash(tuple(sorted(receipt_nos)))
+
+            # Guard: do not record the same alert twice
+            existing = FraudAlert.query.filter_by(
+                user_id=user.id,
+                receipt_hash=receipt_hash,
+            ).first()
+            if existing:
+                logger.debug(
+                    f"FraudAlert for receipt_hash={receipt_hash} already exists — skipping"
+                )
+                return False
+
             alert = FraudAlert(
                 user_id=user.id,
                 fraud_type=fraud_type,
@@ -2243,19 +2680,21 @@ class TransactionService:
                 total_amount=Decimal(str(detection.get('total_amount', 0))),
                 fraud_score=detection.get('fraud_score', 0),
                 risk_level=detection.get('risk_level', 'MEDIUM'),
-                receipt_nos=','.join(detection.get('receipt_nos', [])),
-                transaction_ids=','.join(str(id) for id in detection.get('transaction_ids', [])),
-                receipt_hash=hash(tuple(sorted(detection.get('receipt_nos', [])))),
-                detection_details=detection
+                receipt_nos=','.join(receipt_nos),
+                transaction_ids=','.join(str(tid) for tid in detection.get('transaction_ids', [])),
+                receipt_hash=receipt_hash,
+                detection_details=detection,
             )
-            
+
             db.session.add(alert)
             db.session.commit()
             logger.info(f"Recorded fraud alert for {fraud_type}")
-            
+            return True
+
         except Exception as e:
             db.session.rollback()
             logger.error(f"Failed to record fraud alert: {str(e)}")
+            return False
 
     def _get_company_ids_for_user(self, user_id: int) -> List[int]:
         """Get company IDs associated with a user."""
@@ -2401,18 +2840,21 @@ class TransactionService:
         # Send email
         _send_email(
             subject=f"Daily Fraud Report - {today.strftime('%Y-%m-%d')}",
-            body=body,
+            html=body,
             recipient=admin.email,
-            is_html=True
         )
     
     def run_fraud_detection_for_user(self, user) -> Dict:
         """Run fraud detection for a specific user."""
         logger.info(f"Starting fraud detection for user: {user.email}")
         
-        # Initialize fraud detection service
-        fraud_service = FraudDetectionService(user=user)
-        
+        # Load user's active fraud detection config
+        config_obj = ConfigService.get_active_config(user.id)
+        config_dict = config_obj.to_dict() if config_obj else {}
+
+        # Initialize fraud detection service with user's config
+        fraud_service = FraudDetectionService(user=user, config=config_dict)
+
         # Step 1: Get historical report (first run)
         historical_report = self._generate_historical_report(user, fraud_service)
         
@@ -3766,27 +4208,19 @@ class TransactionService:
 
     def get_dashboard_analytics(self, filters: Dict = None) -> Dict:
         """
-        Get comprehensive analytics data for the dashboard.
+        Get comprehensive analytics data for the dashboard using ORM queries.
         Provides KPIs, trends, and recent activity based on transaction data.
-
-        Args:
-            filters: Dictionary of filters including:
-                - company_id: Filter by company ID
-                - agent_id: Filter by agent ID
-                - days: Number of days to look back (default 30)
-
-        Returns:
-            Dict with dashboard analytics data
         """
         try:
             filters = filters or {}
             days = filters.get('days', 30)
 
-            # Calculate date ranges
-            end_date = datetime.now()
-            start_date = end_date - timedelta(days=days)
-            prev_start_date = start_date - timedelta(days=days)
-            prev_end_date = start_date
+            # Calculate date ranges - truncate to day boundaries for consistent results
+            now = datetime.now()
+            end_date = now.replace(hour=23, minute=59, second=59, microsecond=999999)
+            start_date = (now - timedelta(days=days)).replace(hour=0, minute=0, second=0, microsecond=0)
+            prev_end_date = (start_date - timedelta(seconds=1))  # end of the day before start
+            prev_start_date = (start_date - timedelta(days=days)).replace(hour=0, minute=0, second=0, microsecond=0)
 
             with db_pool.get_cursor() as cursor:
                 # Build WHERE conditions
@@ -3805,21 +4239,15 @@ class TransactionService:
 
                 # ============ KPI STATS ============
 
-                # Current period stats - properly separated by transaction_type
+                # Current period stats - float transactions
                 kpi_query = f"""
                     SELECT
                         COUNT(*) as total_transactions,
-                        -- Float transactions: deposits and withdrawals
                         COALESCE(SUM(CASE WHEN transaction_type = 'float' OR transaction_type IS NULL
                             THEN ABS(COALESCE(paid_in, 0)) ELSE 0 END), 0) as total_deposits,
                         COALESCE(SUM(CASE WHEN transaction_type = 'float' OR transaction_type IS NULL
                             THEN ABS(COALESCE(withdrawn, 0)) ELSE 0 END), 0) as total_withdrawals,
-                        -- Commission transactions only
-                        COALESCE(SUM(CASE WHEN transaction_type = 'commission'
-                            THEN COALESCE(commission_amount, 0) ELSE 0 END), 0) as total_commissions,
-                        -- Count by type
                         COUNT(CASE WHEN transaction_type = 'float' OR transaction_type IS NULL THEN 1 END) as float_transactions,
-                        COUNT(CASE WHEN transaction_type = 'commission' THEN 1 END) as commission_transactions,
                         COUNT(DISTINCT agent_id) as active_agents,
                         COUNT(DISTINCT company_id) as active_companies
                     FROM transactions
@@ -3829,9 +4257,24 @@ class TransactionService:
                 cursor.execute(kpi_query, params + [start_date, end_date])
                 current_stats = cursor.fetchone()
 
-                # Previous period stats for growth calculation
                 cursor.execute(kpi_query, params + [prev_start_date, prev_end_date])
                 prev_stats = cursor.fetchone()
+
+                # Commission stats - separate query matching commission report approach
+                commission_query = f"""
+                    SELECT
+                        COUNT(*) as commission_transactions,
+                        COALESCE(SUM(COALESCE(commission_amount, 0)), 0) as total_commissions
+                    FROM transactions
+                    WHERE {where_clause}
+                    AND transaction_type = 'commission'
+                    AND completion_time BETWEEN %s AND %s
+                """
+                cursor.execute(commission_query, params + [start_date, end_date])
+                current_commissions = cursor.fetchone()
+
+                cursor.execute(commission_query, params + [prev_start_date, prev_end_date])
+                prev_commissions = cursor.fetchone()
 
                 # Calculate growth percentages
                 def calc_growth(current, previous):
@@ -3854,9 +4297,9 @@ class TransactionService:
                         'trend': 'up' if (current_stats['total_transactions'] or 0) >= (prev_stats['total_transactions'] or 0) else 'down'
                     },
                     'total_commissions': {
-                        'value': float(current_stats['total_commissions'] or 0),
-                        'change': calc_growth(current_stats['total_commissions'] or 0, prev_stats['total_commissions'] or 0),
-                        'trend': 'up' if (current_stats['total_commissions'] or 0) >= (prev_stats['total_commissions'] or 0) else 'down'
+                        'value': float(current_commissions['total_commissions'] or 0),
+                        'change': calc_growth(current_commissions['total_commissions'] or 0, prev_commissions['total_commissions'] or 0),
+                        'trend': 'up' if (current_commissions['total_commissions'] or 0) >= (prev_commissions['total_commissions'] or 0) else 'down'
                     },
                     'active_agents': {
                         'value': int(current_stats['active_agents'] or 0),

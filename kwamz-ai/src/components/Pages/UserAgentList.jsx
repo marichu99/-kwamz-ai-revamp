@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
-import { Search, Filter, MoreVertical, Binoculars, Edit, Plus, Download, Upload, RefreshCw, ChevronRight } from 'lucide-react';
+import { Search, Filter, MoreVertical, Binoculars, Edit, Plus, Download, Upload, RefreshCw, ChevronRight, Database, Building2 } from 'lucide-react';
 import axios from 'axios';
 import * as XLSX from 'xlsx';
 import config from '../../Config';
@@ -553,6 +553,8 @@ function UserAgentList() {
               <th className="px-4 py-3 font-semibold">Last Name</th>
               <th className="px-4 py-3 font-semibold">ID Number</th>
               <th className="px-4 py-3 font-semibold">Phone Number</th>
+              <th className="px-4 py-3 font-semibold">Primary Company</th>
+              <th className="px-4 py-3 font-semibold">Companies</th>
               <th className="px-4 py-3 font-semibold">Authentic</th>
               <th className="px-4 py-3 font-semibold">Action</th>
             </tr>
@@ -576,6 +578,46 @@ function UserAgentList() {
                 <td className="px-4 py-3">{user.lastname}</td>
                 <td className="px-4 py-3">{user.idnumber}</td>
                 <td className="px-4 py-3">{user.phone_number || 'N/A'}</td>
+                <td className="px-4 py-3">
+                  {user.primary_company ? (
+                    <div className="flex flex-col">
+                      <span className="text-sm font-medium text-slate-800 dark:text-slate-200 flex items-center gap-1">
+                        <Building2 className="w-3.5 h-3.5 text-green-600" />
+                        {user.primary_company.company_name}
+                      </span>
+                      {user.primary_company.short_code && (
+                        <span className="text-xs text-slate-500 dark:text-slate-400">[{user.primary_company.short_code}]</span>
+                      )}
+                      <span className={`inline-flex items-center gap-1 text-xs mt-0.5 ${user.primary_company.is_scraped ? 'text-green-600 dark:text-green-400' : 'text-amber-500 dark:text-amber-400'}`}>
+                        <Database className="w-3 h-3" />
+                        {user.primary_company.is_scraped ? 'Scraped' : 'Not scraped'}
+                      </span>
+                    </div>
+                  ) : (
+                    <span className="text-xs text-slate-400">No primary company</span>
+                  )}
+                </td>
+                <td className="px-4 py-3">
+                  {user.agent_companies && user.agent_companies.length > 0 ? (
+                    <div className="flex flex-col gap-1">
+                      <span className="text-sm font-medium">{user.agent_companies.length} linked</span>
+                      <div className="flex flex-wrap gap-1">
+                        {user.agent_companies.slice(0, 2).map((c) => (
+                          <span key={c.id} className={`text-[10px] px-1.5 py-0.5 rounded ${c.is_scraped ? 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-300' : 'bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300'}`}>
+                            {c.company_name?.substring(0, 15)}{c.company_name?.length > 15 ? '...' : ''}
+                          </span>
+                        ))}
+                        {user.agent_companies.length > 2 && (
+                          <span className="text-[10px] px-1.5 py-0.5 rounded bg-slate-100 text-slate-600 dark:bg-slate-700 dark:text-slate-300">
+                            +{user.agent_companies.length - 2} more
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                  ) : (
+                    <span className="text-xs text-slate-400">None</span>
+                  )}
+                </td>
                 <td className="px-4 py-3">
                   <span
                     className={`px-2 py-1 rounded-full text-xs ${user.is_authentic ? 'bg-green-100 text-green-600 dark:bg-green-900/50 dark:text-green-400' : 'bg-red-100 text-red-600 dark:bg-red-900/50 dark:text-red-400'}`}

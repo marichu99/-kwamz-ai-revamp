@@ -12,25 +12,26 @@ class CommissionReportService:
         self.date_service = DateService()
     
     def generate_report(self, start_date=None, end_date=None, date_range='custom',
-                       transaction_type='commission', reason_type=None, transaction_status=None):
+                       transaction_type='commission', reason_type=None, transaction_status=None,
+                       company_id=None):
         """
         Generate comprehensive commission report
-        """        
+        """
         # Calculate date range
         start_date_obj, end_date_obj = self.date_service.calculate_date_range(
             date_range, start_date, end_date
         )
-        
+
         # Get commission transactions
         commission_transactions = self._get_commission_transactions(
-            start_date_obj, end_date_obj, reason_type, transaction_status
+            start_date_obj, end_date_obj, reason_type, transaction_status, company_id
         )
         
         if not commission_transactions:
             return self._get_empty_report(start_date_obj, end_date_obj)
         
         # Generate report sections
-        summary = self._generate_summary(commission_transactions, start_date_obj, end_date_obj)
+        summary = self._generate_summary(commission_transactions, start_date_obj, end_date_obj, company_id)
         categories = self._generate_category_analysis(commission_transactions)
         top_agents = self._generate_top_agents(commission_transactions)
         trends = self._generate_trends(commission_transactions, start_date_obj, end_date_obj)
@@ -46,34 +47,38 @@ class CommissionReportService:
         
         return report
     
-    def _get_commission_transactions(self, start_date, end_date, reason_type=None, transaction_status=None):
+    def _get_commission_transactions(self, start_date, end_date, reason_type=None,
+                                      transaction_status=None, company_id=None):
         """Get commission transactions with filters"""
         query = Transaction.query.filter(
             Transaction.transaction_type == 'commission',
-            Transaction.initiation_time >= start_date,
-            Transaction.initiation_time <= end_date
+            Transaction.completion_time >= start_date,
+            Transaction.completion_time <= end_date
         )
-        
+
+        if company_id:
+            query = query.filter(Transaction.company_id == company_id)
+
         if reason_type:
             query = query.filter(Transaction.reason_type == reason_type)
-        
+
         if transaction_status:
             query = query.filter(Transaction.transaction_status == transaction_status)
-        
+
         return query.all()
     
-    def _generate_summary(self, transactions, start_date, end_date):
+    def _generate_summary(self, transactions, start_date, end_date, company_id=None):
         """Generate summary statistics"""
         total_transactions = len(transactions)
         total_commission = sum(float(t.commission_amount or 0) for t in transactions)
         average_commission = total_commission / total_transactions if total_transactions > 0 else 0
-        
+
         # Find top agent
         top_agent = self._find_top_agent(transactions)
-        
+
         # Calculate growth
         previous_period_data = self._get_previous_period_data(
-            transactions[0].company_id, start_date, end_date
+            company_id, start_date, end_date
         )
         current_total = total_commission
         previous_total = previous_period_data.get('total_commission', 0)
@@ -209,8 +214,8 @@ class CommissionReportService:
             
             # Get transactions for this month
             month_transactions = [
-                t for t in transactions 
-                if current <= t.initiation_time < next_month
+                t for t in transactions
+                if current <= t.completion_time < next_month
             ]
             
             month_total = sum(float(t.commission_amount or 0) for t in month_transactions)
@@ -242,20 +247,26 @@ class CommissionReportService:
     
     def _get_previous_period_data(self, company_id, start_date, end_date):
         """Get data for previous period for comparison"""
-        period_days = (end_date - start_date).days
-        
-        previous_start = start_date - timedelta(days=period_days)
-        previous_end = start_date - timedelta(days=1)
-        
-        previous_transactions = Transaction.query.filter(
+        period_days = (end_date - start_date).days or 1
+
+        previous_start = (start_date - timedelta(days=period_days)).replace(
+            hour=0, minute=0, second=0, microsecond=0
+        )
+        previous_end = (start_date - timedelta(seconds=1))  # end of day before start
+
+        query = Transaction.query.filter(
             Transaction.transaction_type == 'commission',
-            Transaction.company_id == company_id,
-            Transaction.initiation_time >= previous_start,
-            Transaction.initiation_time <= previous_end
-        ).all()
-        
+            Transaction.completion_time >= previous_start,
+            Transaction.completion_time <= previous_end
+        )
+
+        if company_id:
+            query = query.filter(Transaction.company_id == company_id)
+
+        previous_transactions = query.all()
+
         total_commission = sum(float(t.commission_amount or 0) for t in previous_transactions)
-        
+
         return {
             'total_transactions': len(previous_transactions),
             'total_commission': total_commission

@@ -1,4 +1,5 @@
 from flask import Blueprint, request, jsonify, current_app
+from flask_jwt_extended import jwt_required, get_jwt_identity
 from app.service.config_service import DetectionService, ConfigService
 from app.service.fraud_detector import FraudDetectionSystem
 import json
@@ -8,49 +9,50 @@ import pandas as pd
 detection_bp = Blueprint('detection', __name__, url_prefix='/api/detection')
 
 @detection_bp.route('/run', methods=['POST'])
+@jwt_required()
 def run_detection():
     """Run fraud detection"""
     try:
+        user_id = get_jwt_identity()
         data = request.get_json()
-        transaction_data = data.get('transaction_data')
+        transaction_data = data.get('transaction_data') 
         config_id = data.get('config_id')
-        initiated_by = request.headers.get('X-User-Id', 'system')
-        
+
         if not transaction_data:
             return jsonify({
                 'success': False,
                 'message': 'Transaction data is required'
             }), 400
-        
-        # Get configuration
+
+        # Get configuration scoped to the authenticated user
         if config_id:
-            config = ConfigService.get_config_by_id(config_id)
+            config = ConfigService.get_config_by_id(config_id, user_id)
             if not config:
                 return jsonify({
                     'success': False,
                     'message': 'Configuration not found'
                 }), 404
         else:
-            config = ConfigService.get_active_config()
+            config = ConfigService.get_active_config(user_id)
             if not config:
                 return jsonify({
                     'success': False,
                     'message': 'No active configuration found'
                 }), 404
-        
+
         # Create detection log
         detection_log = DetectionService.create_detection_log(
-            config.id, 
-            initiated_by
+            config.id,
+            str(user_id)
         )
-        
+
         try:
             # Initialize fraud detector
             detector = FraudDetectionSystem(config.to_dict())
-            
+
             # Run detection
             results, report = detector.detect_all_fraud(transaction_data)
-            
+
             # Update detection log
             DetectionService.update_detection_log(detection_log.id, {
                 'status': 'completed',
@@ -63,7 +65,7 @@ def run_detection():
                 'high_risk_count': report['summary']['high_risk_count'],
                 'log_messages': 'Detection completed successfully'
             })
-            
+
             # Save suspicious accounts
             if not report['account_summary'].empty:
                 accounts_data = []
@@ -75,13 +77,13 @@ def run_detection():
                         'risk_level': row['Risk Level'],
                         'suspicious_transactions': int(row['Receipt No.']),
                         'total_amount': float(row['Absolute Amount']),
-                        'split_detected': False,  # You can refine this
+                        'split_detected': False,
                         'rollover_detected': False,
                         'rapid_detected': False
                     })
-                
+
                 DetectionService.save_suspicious_accounts(detection_log.id, accounts_data)
-            
+
             return jsonify({
                 'success': True,
                 'message': 'Fraud detection completed successfully',
@@ -91,7 +93,7 @@ def run_detection():
                     'suspicious_accounts_count': len(accounts_data) if 'accounts_data' in locals() else 0
                 }
             })
-            
+
         except Exception as e:
             # Update log with failure
             DetectionService.update_detection_log(detection_log.id, {
@@ -99,12 +101,12 @@ def run_detection():
                 'completed_at': datetime.utcnow(),
                 'log_messages': f'Detection failed: {str(e)}'
             })
-            
+
             return jsonify({
                 'success': False,
                 'message': f'Fraud detection failed: {str(e)}'
             }), 500
-            
+
     except Exception as e:
         return jsonify({
             'success': False,
@@ -112,13 +114,14 @@ def run_detection():
         }), 400
 
 @detection_bp.route('/logs', methods=['GET'])
+@jwt_required()
 def get_detection_logs():
     """Get detection logs"""
     page = request.args.get('page', 1, type=int)
     per_page = request.args.get('per_page', 20, type=int)
-    
+
     logs = DetectionService.get_detection_logs(page, per_page)
-    
+
     return jsonify({
         'success': True,
         'data': {
@@ -131,13 +134,14 @@ def get_detection_logs():
     })
 
 @detection_bp.route('/logs/<int:log_id>', methods=['GET'])
+@jwt_required()
 def get_detection_log(log_id):
     """Get specific detection log"""
     log = DetectionService.get_detection_log_by_id(log_id)
-    
+
     # Get suspicious accounts for this log
     suspicious_accounts = [acc.to_dict() for acc in log.suspicious_accounts]
-    
+
     return jsonify({
         'success': True,
         'data': {

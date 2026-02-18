@@ -8,40 +8,34 @@ from app import db
 
 class ConfigService:
     """Service for managing fraud detection configurations"""
-    
+
     @staticmethod
-    def get_all_configs():
-        """Get all configurations"""
-        return Config.query.order_by(Config.updated_at.desc()).all()
-    
+    def get_all_configs(user_id):
+        """Get all configurations for a specific user"""
+        return Config.query.filter_by(user_id=user_id).order_by(Config.updated_at.desc()).all()
+
     @staticmethod
-    def get_config_by_id(config_id):
-        """Get configuration by ID"""
-        return Config.query.get(config_id)
-    
+    def get_config_by_id(config_id, user_id):
+        """Get configuration by ID, scoped to user"""
+        return Config.query.filter_by(id=config_id, user_id=user_id).first()
+
     @staticmethod
-    def get_active_config():
-        """Get active configuration"""
-        return Config.query.filter_by(is_active=True).first()
-    
+    def get_active_config(user_id):
+        """Get active configuration for a specific user"""
+        return Config.query.filter_by(user_id=user_id, is_active=True).first()
+
     @staticmethod
-    def create_config(data, created_by=None):
-        """Create new configuration"""
-        # Ensure only one active config
+    def create_config(data, user_id, created_by=None):
+        """Create new configuration for a user"""
+        # Ensure only one active config per user
         if data.get('is_active', False):
-            ConfigService.deactivate_all_configs()
-        
+            ConfigService.deactivate_all_configs(user_id)
+
         config = Config(
+            user_id=user_id,
             name=data.get('name', 'New Configuration'),
             description=data.get('description', ''),
-            
-            # SMTP Configuration
-            smtp_server=data.get('smtp_server', 'smtp.gmail.com'),
-            smtp_port=data.get('smtp_port', 587),
-            sender_email=data.get('sender_email', ''),
-            sender_password=data.get('sender_password', ''),
-            recipient_emails=data.get('recipient_emails', 'fraud-team@company.com'),
-            
+
             # Detection Parameters
             time_window_minutes=data.get('time_window_minutes', 5),
             amount_variance=data.get('amount_variance', 0.1),
@@ -62,7 +56,7 @@ class ConfigService:
             # Risk Thresholds
             high_risk_score=data.get('high_risk_score', 50),
             medium_risk_score=data.get('medium_risk_score', 30),
-            
+
             # Notification Settings
             email_enabled=data.get('email_enabled', False),
             notify_high_risk=data.get('notify_high_risk', True),
@@ -70,80 +64,81 @@ class ConfigService:
             notify_split_transactions=data.get('notify_split_transactions', True),
             notify_rollover_fraud=data.get('notify_rollover_fraud', True),
             notify_rapid_patterns=data.get('notify_rapid_patterns', True),
-            
+
             # Email Settings
             email_subject_prefix=data.get('email_subject_prefix', '[Fraud Alert] '),
-            
+
             # System Settings
             is_active=data.get('is_active', False),
-            created_by=created_by
+            created_by=created_by,
+
+            # Per-fraud-type configuration
+            fraud_type_configs=data.get('fraud_type_configs'),
         )
-        
+
         db.session.add(config)
         db.session.commit()
         return config
-    
+
     @staticmethod
-    def update_config(config_id, data):
-        """Update existing configuration"""
-        config = Config.query.get_or_404(config_id)
-        
-        # Ensure only one active config
+    def update_config(config_id, user_id, data):
+        """Update existing configuration, verifying ownership"""
+        config = Config.query.filter_by(id=config_id, user_id=user_id).first()
+        if not config:
+            raise ValueError("Configuration not found")
+
+        # Ensure only one active config per user
         if data.get('is_active', False) and not config.is_active:
-            ConfigService.deactivate_all_configs()
-        
-        # Update fields
+            ConfigService.deactivate_all_configs(user_id)
+
+        # Update fields (SMTP fields are managed globally via SmtpConfig)
+        smtp_keys = {'smtp_server', 'smtp_port', 'sender_email', 'sender_password', 'recipient_emails'}
         for key, value in data.items():
-            if hasattr(config, key) and key not in ['id', 'created_at', 'created_by']:
+            if hasattr(config, key) and key not in ['id', 'created_at', 'created_by', 'user_id'] and key not in smtp_keys:
                 setattr(config, key, value)
-        
+
         config.updated_at = datetime.utcnow()
         db.session.commit()
         return config
-    
+
     @staticmethod
-    def delete_config(config_id):
-        """Delete configuration"""
-        config = Config.query.get_or_404(config_id)
-        
+    def delete_config(config_id, user_id):
+        """Delete configuration, verifying ownership"""
+        config = Config.query.filter_by(id=config_id, user_id=user_id).first()
+        if not config:
+            raise ValueError("Configuration not found")
+
         # Don't delete if it's active
         if config.is_active:
             raise ValueError("Cannot delete active configuration")
-        
+
         db.session.delete(config)
         db.session.commit()
         return True
-    
+
     @staticmethod
-    def deactivate_all_configs():
-        """Deactivate all configurations"""
-        Config.query.update({'is_active': False})
+    def deactivate_all_configs(user_id):
+        """Deactivate all configurations for a specific user"""
+        Config.query.filter_by(user_id=user_id).update({'is_active': False})
         db.session.commit()
-    
+
     @staticmethod
-    def activate_config(config_id):
-        """Activate a specific configuration"""
-        ConfigService.deactivate_all_configs()
-        
-        config = Config.query.get_or_404(config_id)
+    def activate_config(config_id, user_id):
+        """Activate a specific configuration, scoped to user"""
+        ConfigService.deactivate_all_configs(user_id)
+
+        config = Config.query.filter_by(id=config_id, user_id=user_id).first()
+        if not config:
+            raise ValueError("Configuration not found")
         config.is_active = True
         config.updated_at = datetime.utcnow()
         db.session.commit()
         return config
-    
+
     @staticmethod
     def validate_config_data(data):
         """Validate configuration data"""
         errors = []
-
-        # SMTP Validation
-        if data.get('email_enabled', False):
-            if not data.get('smtp_server'):
-                errors.append('SMTP server is required when email is enabled')
-            if not data.get('sender_email'):
-                errors.append('Sender email is required when email is enabled')
-            if not data.get('recipient_emails'):
-                errors.append('At least one recipient email is required')
 
         # Detection Parameters Validation
         time_window = data.get('time_window_minutes', 5)
@@ -177,17 +172,49 @@ class ConfigService:
         periodic_interval = data.get('periodic_check_interval_minutes', 30)
         if periodic_interval < 1 or periodic_interval > 1440:
             errors.append('Periodic check interval must be between 1 and 1440 minutes (24 hours)')
-        
+
         # Risk Thresholds Validation
         if data.get('high_risk_score', 0) < data.get('medium_risk_score', 0):
             errors.append('High risk score must be greater than medium risk score')
-        
+
+        # Fraud Type Configs Validation
+        fraud_type_configs = data.get('fraud_type_configs')
+        if fraud_type_configs and isinstance(fraud_type_configs, dict):
+            valid_types = set(Config.FRAUD_TYPE_DEFAULTS.keys())
+            for fraud_type, type_config in fraud_type_configs.items():
+                if fraud_type not in valid_types:
+                    errors.append(f'Unknown fraud type: {fraud_type}')
+                    continue
+                if not isinstance(type_config, dict):
+                    errors.append(f'Config for {fraud_type} must be an object')
+                    continue
+                # Validate time_window_minutes if present
+                tw = type_config.get('time_window_minutes')
+                if tw is not None and (tw < 1 or tw > 60):
+                    errors.append(f'{fraud_type}: Time window must be between 1 and 60 minutes')
+                # Validate amount_variance if present
+                av = type_config.get('amount_variance')
+                if av is not None and (av < 0.01 or av > 1.0):
+                    errors.append(f'{fraud_type}: Amount variance must be between 0.01 and 1.0')
+
         return errors
+
+    @staticmethod
+    def get_fraud_type_info():
+        """Return fraud type metadata for the frontend."""
+        result = {}
+        for fraud_type, info in Config.FRAUD_TYPE_INFO.items():
+            defaults = Config.FRAUD_TYPE_DEFAULTS.get(fraud_type, {})
+            result[fraud_type] = {
+                **info,
+                'defaults': defaults,
+            }
+        return result
 
 
 class DetectionService:
     """Service for managing fraud detection runs"""
-    
+
     @staticmethod
     def create_detection_log(config_id, initiated_by=None):
         """Create a new detection log"""
@@ -199,19 +226,19 @@ class DetectionService:
         db.session.add(log)
         db.session.commit()
         return log
-    
+
     @staticmethod
     def update_detection_log(log_id, data):
         """Update detection log"""
         log = DetectionLog.query.get_or_404(log_id)
-        
+
         for key, value in data.items():
             if hasattr(log, key):
                 setattr(log, key, value)
-        
+
         db.session.commit()
         return log
-    
+
     @staticmethod
     def save_suspicious_accounts(detection_log_id, accounts_data):
         """Save suspicious accounts from detection run"""
@@ -229,16 +256,16 @@ class DetectionService:
                 rapid_detected=account_data.get('rapid_detected', False)
             )
             db.session.add(account)
-        
+
         db.session.commit()
-    
+
     @staticmethod
     def get_detection_logs(page=1, per_page=20):
         """Get paginated detection logs"""
         return DetectionLog.query.order_by(
             DetectionLog.started_at.desc()
         ).paginate(page=page, per_page=per_page, error_out=False)
-    
+
     @staticmethod
     def get_detection_log_by_id(log_id):
         """Get detection log by ID"""

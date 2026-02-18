@@ -1,11 +1,12 @@
 import { useState, useEffect, useRef } from 'react';
-import { Search, MoreVertical, Edit, Plus, Download, Upload, RefreshCw, Trash2, Power, ChevronRight, Filter, X, AlertTriangle } from 'lucide-react';
+import { Search, MoreVertical, Edit, Plus, Download, Upload, RefreshCw, Trash2, Power, ChevronRight, Filter, X, AlertTriangle, Clock, ShieldCheck, ShieldAlert, ShieldX, ArrowRightLeft } from 'lucide-react';
 import axios from 'axios';
 import * as XLSX from 'xlsx';
 import config from '../../Config';
 import { useToast } from './ToastProvider';
 import AgentCompanyDetailsModal from './AgentCompanyDetailsModal';
 import BatchUploadModal from './BatchUploadModal';
+import SwapInitiationModal from './SwapInitiationModal';
 
 function AgentCompanyList() {
   const [agentCompanies, setAgentCompanies] = useState([]);
@@ -26,13 +27,17 @@ function AgentCompanyList() {
   const [floatThreshold, setFloatThreshold] = useState('');
   const [commissionThreshold, setCommissionThreshold] = useState('');
   const [fraudFilter, setFraudFilter] = useState('all'); // 'all', 'flagged', 'not_flagged'
+  const [fraudAlertData, setFraudAlertData] = useState({});
+  const [fraudPopupCompanyId, setFraudPopupCompanyId] = useState(null);
+  const [isSwapModalOpen, setIsSwapModalOpen] = useState(false);
   const { showToast } = useToast();
   const fileInputRef = useRef(null);
   const dropdownRef = useRef(null);
   const filterPanelRef = useRef(null);
+  const fraudPopupRef = useRef(null);
 
   // Fetch agent companies from API
-  const fetchAgentCompanies = async () => {
+  const fetchAgentCompanies = async (showNotification = false) => {
     setIsLoading(true);
     try {
       const token = localStorage.getItem('token');
@@ -43,7 +48,9 @@ function AgentCompanyList() {
       setFilteredAgentCompanies(response.data);
       setSelectedAgentCompanyIds([]);
       setCurrentPage(1);
-      showToast('Agent companies reloaded successfully', 'success');
+      if (showNotification) {
+        showToast('Agent companies reloaded successfully', 'success');
+      }
     } catch (error) {
       console.error('Error fetching agent companies:', error.response?.data || error.message);
       showToast('Failed to fetch agent companies', 'error');
@@ -52,8 +59,51 @@ function AgentCompanyList() {
     }
   };
 
+  // Fetch fraud alerts grouped by agent company
+  const fetchFraudAlerts = async () => {
+    try {
+      const token = localStorage.getItem('token');
+      const response = await axios.get(`${config.API_URL}/fraud/alerts/by-agent-company`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      const alertMap = {};
+      if (Array.isArray(response.data)) {
+        response.data.forEach((item) => {
+          alertMap[item.agent_company?.id] = {
+            fraud_risk: item.fraud_risk,
+            total_alerts: item.total_alerts,
+            fraud_alerts: item.fraud_alerts || [],
+          };
+        });
+      }
+      setFraudAlertData(alertMap);
+    } catch (error) {
+      console.error('Error fetching fraud alerts:', error.response?.data || error.message);
+    }
+  };
+
+  // Format a date string as relative time (e.g., "3h ago", "2d ago")
+  const formatRelativeTime = (dateStr) => {
+    if (!dateStr) return null;
+    const now = new Date();
+    const date = new Date(dateStr);
+    const diffMs = now - date;
+    const diffSecs = Math.floor(diffMs / 1000);
+    const diffMins = Math.floor(diffSecs / 60);
+    const diffHours = Math.floor(diffMins / 60);
+    const diffDays = Math.floor(diffHours / 24);
+
+    if (diffSecs < 60) return 'just now';
+    if (diffMins < 60) return `${diffMins}m ago`;
+    if (diffHours < 24) return `${diffHours}h ago`;
+    if (diffDays < 30) return `${diffDays}d ago`;
+    const diffMonths = Math.floor(diffDays / 30);
+    return `${diffMonths}mo ago`;
+  };
+
   useEffect(() => {
     fetchAgentCompanies();
+    fetchFraudAlerts();
   }, []);
 
   // Helper function to get balance from account
@@ -194,6 +244,25 @@ function AgentCompanyList() {
     document.addEventListener('mousedown', handleClickOutside);
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
+
+  // Close fraud popup on click outside or Escape
+  useEffect(() => {
+    if (!fraudPopupCompanyId) return;
+    const handleClickOutside = (event) => {
+      if (fraudPopupRef.current && !fraudPopupRef.current.contains(event.target)) {
+        setFraudPopupCompanyId(null);
+      }
+    };
+    const handleEscape = (event) => {
+      if (event.key === 'Escape') setFraudPopupCompanyId(null);
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    document.addEventListener('keydown', handleEscape);
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+      document.removeEventListener('keydown', handleEscape);
+    };
+  }, [fraudPopupCompanyId]);
 
   // Pagination calculations
   const totalItems = filteredAgentCompanies.length;
@@ -457,7 +526,6 @@ function AgentCompanyList() {
       showToast(error.message, 'error');
     } finally {
       setIsLoading(false);
-      fetchAgentCompanies();
     }
   };
 
@@ -466,7 +534,7 @@ function AgentCompanyList() {
       {/* Action Buttons */}
       <div className="flex justify-end mb-4 space-x-4">
         <button
-          onClick={fetchAgentCompanies}
+          onClick={() => fetchAgentCompanies(true)}
           disabled={isLoading}
           className="flex items-center space-x-2 py-2 px-4 bg-green-500 text-white rounded-xl hover:bg-green-600 transition-colors disabled:bg-green-300 disabled:cursor-not-allowed"
         >
@@ -516,6 +584,23 @@ function AgentCompanyList() {
                 {selectedAgentCompanyIds.length > 0 && agentCompanies.find(ac => selectedAgentCompanyIds.includes(ac.id) && ac.status === 'active')
                   ? 'Deactivate Selected'
                   : 'Activate Selected'}
+              </button>
+
+              <button
+                onClick={() => {
+                  if (selectedAgentCompanyIds.length !== 1) {
+                    showToast('Please select exactly one agent company to swap', 'error');
+                    return;
+                  }
+                  setIsSwapModalOpen(true);
+                  setIsDropdownOpen(false);
+                  setIsTemplatesSubMenuOpen(false);
+                }}
+                disabled={selectedAgentCompanyIds.length !== 1}
+                className="w-full flex items-center px-4 py-3 text-sm text-slate-800 dark:text-slate-200 hover:bg-orange-50 dark:hover:bg-orange-900/30 disabled:opacity-50 disabled:cursor-not-allowed transition-colors duration-150"
+              >
+                <ArrowRightLeft className="w-4 h-4 mr-2" />
+                Initiate Swap
               </button>
 
               {/* Templates submenu with better positioning */}
@@ -742,6 +827,8 @@ function AgentCompanyList() {
               <th className="px-4 py-3 font-semibold">Till Short Code</th>
               <th className="px-4 py-3 font-semibold">Float Account</th>
               <th className="px-4 py-3 font-semibold">Commission Account</th>
+              <th className="px-4 py-3 font-semibold">Last Updated</th>
+              <th className="px-4 py-3 font-semibold">Fraud Status</th>
             </tr>
           </thead>
           <tbody>
@@ -854,6 +941,139 @@ function AgentCompanyList() {
                       </div>
                     </div>
                   </td>
+
+                  {/* Last Updated */}
+                  <td className="px-4 py-3">
+                    {(() => {
+                      const timestamp = agentCompany.last_scraped_at || agentCompany.updated_at;
+                      const relative = formatRelativeTime(timestamp);
+                      return relative ? (
+                        <span
+                          className="inline-flex items-center gap-1 text-sm text-slate-600 dark:text-slate-400"
+                          title={new Date(timestamp).toLocaleString()}
+                        >
+                          <Clock className="w-3.5 h-3.5" />
+                          {relative}
+                        </span>
+                      ) : (
+                        <span className="text-sm text-slate-400 dark:text-slate-500">Never</span>
+                      );
+                    })()}
+                  </td>
+
+                  {/* Fraud Status */}
+                  <td className="px-4 py-3 relative">
+                    {(() => {
+                      const alertInfo = fraudAlertData[agentCompany.id];
+                      const risk = alertInfo?.fraud_risk?.toUpperCase();
+                      const totalAlerts = alertInfo?.total_alerts || 0;
+
+                      let badgeColor, BadgeIcon, badgeLabel;
+                      if (risk === 'HIGH') {
+                        badgeColor = 'bg-red-100 text-red-700 dark:bg-red-900/50 dark:text-red-400 hover:bg-red-200 dark:hover:bg-red-900/70';
+                        BadgeIcon = ShieldX;
+                        badgeLabel = 'High Risk';
+                      } else if (risk === 'MEDIUM') {
+                        badgeColor = 'bg-yellow-100 text-yellow-700 dark:bg-yellow-900/50 dark:text-yellow-400 hover:bg-yellow-200 dark:hover:bg-yellow-900/70';
+                        BadgeIcon = ShieldAlert;
+                        badgeLabel = 'Medium';
+                      } else {
+                        badgeColor = 'bg-green-100 text-green-700 dark:bg-green-900/50 dark:text-green-400 hover:bg-green-200 dark:hover:bg-green-900/70';
+                        BadgeIcon = ShieldCheck;
+                        badgeLabel = 'Clear';
+                      }
+
+                      return (
+                        <>
+                          <button
+                            onClick={() => setFraudPopupCompanyId(
+                              fraudPopupCompanyId === agentCompany.id ? null : agentCompany.id
+                            )}
+                            className={`inline-flex items-center gap-1 px-2 py-1 rounded-full text-xs font-medium transition-colors cursor-pointer ${badgeColor}`}
+                          >
+                            <BadgeIcon className="w-3.5 h-3.5" />
+                            {badgeLabel}
+                            {totalAlerts > 0 && (
+                              <span className="ml-1 px-1.5 py-0.5 rounded-full bg-white/50 dark:bg-black/20 text-[10px] font-bold">
+                                {totalAlerts}
+                              </span>
+                            )}
+                          </button>
+
+                          {/* Fraud Alert Popup */}
+                          {fraudPopupCompanyId === agentCompany.id && (
+                            <div
+                              ref={fraudPopupRef}
+                              className="absolute right-0 top-full mt-1 w-80 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl shadow-2xl z-50 overflow-hidden"
+                            >
+                              <div className="flex items-center justify-between px-4 py-3 bg-slate-50 dark:bg-slate-700/50 border-b border-slate-200 dark:border-slate-600">
+                                <h4 className="text-sm font-semibold text-slate-700 dark:text-slate-200 truncate">
+                                  Fraud Alerts — {agentCompany.company_name}
+                                </h4>
+                                <button
+                                  onClick={() => setFraudPopupCompanyId(null)}
+                                  className="text-slate-400 hover:text-slate-600 dark:hover:text-slate-300"
+                                >
+                                  <X className="w-4 h-4" />
+                                </button>
+                              </div>
+
+                              <div className="px-4 py-3 max-h-64 overflow-y-auto">
+                                {!alertInfo || totalAlerts === 0 ? (
+                                  <div className="flex items-center gap-2 text-sm text-slate-500 dark:text-slate-400 py-2">
+                                    <ShieldCheck className="w-4 h-4 text-green-500" />
+                                    No fraud alerts detected
+                                  </div>
+                                ) : (
+                                  <div className="space-y-2">
+                                    {alertInfo.fraud_alerts.slice(0, 5).map((alert, i) => (
+                                      <div
+                                        key={alert.id || i}
+                                        className="flex items-start gap-2 p-2 rounded-lg bg-slate-50 dark:bg-slate-700/50 text-xs"
+                                      >
+                                        <div className="flex-1 min-w-0">
+                                          <div className="font-medium text-slate-700 dark:text-slate-300">
+                                            {alert.fraud_type?.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase()) || 'Unknown'}
+                                          </div>
+                                          <div className="flex items-center gap-2 mt-1">
+                                            <span className={`px-1.5 py-0.5 rounded text-[10px] font-bold ${
+                                              alert.risk_level?.toUpperCase() === 'HIGH'
+                                                ? 'bg-red-100 text-red-700 dark:bg-red-900/50 dark:text-red-400'
+                                                : alert.risk_level?.toUpperCase() === 'MEDIUM'
+                                                  ? 'bg-yellow-100 text-yellow-700 dark:bg-yellow-900/50 dark:text-yellow-400'
+                                                  : 'bg-green-100 text-green-700 dark:bg-green-900/50 dark:text-green-400'
+                                            }`}>
+                                              {alert.risk_level || 'LOW'}
+                                            </span>
+                                            {alert.amount != null && (
+                                              <span className="text-slate-500 dark:text-slate-400">
+                                                KES {parseFloat(alert.amount).toLocaleString()}
+                                              </span>
+                                            )}
+                                            {alert.created_at && (
+                                              <span className="text-slate-400 dark:text-slate-500">
+                                                {formatRelativeTime(alert.created_at)}
+                                              </span>
+                                            )}
+                                          </div>
+                                        </div>
+                                      </div>
+                                    ))}
+                                  </div>
+                                )}
+                              </div>
+
+                              {totalAlerts > 5 && (
+                                <div className="px-4 py-2 border-t border-slate-200 dark:border-slate-600 text-xs text-slate-500 dark:text-slate-400">
+                                  {totalAlerts} total alerts
+                                </div>
+                              )}
+                            </div>
+                          )}
+                        </>
+                      );
+                    })()}
+                  </td>
                 </tr>
               );
             })}
@@ -939,6 +1159,20 @@ function AgentCompanyList() {
         onSubmit={handleCreateOrUpdateAgentCompany}
         isLoading={isLoading}
         agentCompany={selectedAgentCompanyIds.length === 1 ? agentCompanies.find((ac) => ac.id === selectedAgentCompanyIds[0]) : null}
+      />
+
+      {/* Swap Initiation Modal */}
+      <SwapInitiationModal
+        isOpen={isSwapModalOpen}
+        onClose={() => {
+          setIsSwapModalOpen(false);
+          setSelectedAgentCompanyIds([]);
+        }}
+        agentCompany={selectedAgentCompanyIds.length === 1 ? agentCompanies.find((ac) => ac.id === selectedAgentCompanyIds[0]) : null}
+        onSwapComplete={() => {
+          showToast('Swap completed successfully!', 'success');
+          fetchAgentCompanies();
+        }}
       />
     </div>
   );

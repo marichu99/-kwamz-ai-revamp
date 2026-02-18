@@ -30,8 +30,12 @@ COPY requirements.txt .
 # Install Python dependencies (as root for system-wide access)
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Install Playwright system dependencies as root
-RUN pip install playwright && playwright install-deps
+# Install Playwright system dependencies as root.
+# Scope to chromium only (fewer packages) and retry once on transient network failures.
+RUN pip install playwright && \
+    playwright install-deps chromium || \
+    (echo "Retrying playwright install-deps after transient failure..." && \
+     apt-get update && playwright install-deps chromium)
 
 # Copy application code
 COPY . .
