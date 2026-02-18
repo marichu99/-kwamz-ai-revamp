@@ -8,7 +8,7 @@ from app import db
 from app.model.transaction import Transaction, TransactionStats
 from app.database.connection_pool import db_pool
 from app.model.company import Company
-from sqlalchemy import and_, case, extract, or_, func
+from sqlalchemy import and_, extract, or_, func
 import logging
 from typing import Generator, List, Dict, Any, Optional, Tuple,Union
 from werkzeug.utils import secure_filename
@@ -3855,27 +3855,19 @@ class TransactionService:
 
     def get_dashboard_analytics(self, filters: Dict = None) -> Dict:
         """
-        Get comprehensive analytics data for the dashboard.
+        Get comprehensive analytics data for the dashboard using ORM queries.
         Provides KPIs, trends, and recent activity based on transaction data.
-
-        Args:
-            filters: Dictionary of filters including:
-                - company_id: Filter by company ID
-                - agent_id: Filter by agent ID
-                - days: Number of days to look back (default 30)
-
-        Returns:
-            Dict with dashboard analytics data
         """
         try:
             filters = filters or {}
             days = filters.get('days', 30)
 
-            # Calculate date ranges
-            end_date = datetime.now()
-            start_date = end_date - timedelta(days=days)
-            prev_start_date = start_date - timedelta(days=days)
-            prev_end_date = start_date
+            # Calculate date ranges - truncate to day boundaries for consistent results
+            now = datetime.now()
+            end_date = now.replace(hour=23, minute=59, second=59, microsecond=999999)
+            start_date = (now - timedelta(days=days)).replace(hour=0, minute=0, second=0, microsecond=0)
+            prev_end_date = (start_date - timedelta(seconds=1))  # end of the day before start
+            prev_start_date = (start_date - timedelta(days=days)).replace(hour=0, minute=0, second=0, microsecond=0)
 
             with db_pool.get_cursor() as cursor:
                 # Build WHERE conditions
@@ -3894,21 +3886,15 @@ class TransactionService:
 
                 # ============ KPI STATS ============
 
-                # Current period stats - properly separated by transaction_type
+                # Current period stats - float transactions
                 kpi_query = f"""
                     SELECT
                         COUNT(*) as total_transactions,
-                        -- Float transactions: deposits and withdrawals
                         COALESCE(SUM(CASE WHEN transaction_type = 'float' OR transaction_type IS NULL
                             THEN ABS(COALESCE(paid_in, 0)) ELSE 0 END), 0) as total_deposits,
                         COALESCE(SUM(CASE WHEN transaction_type = 'float' OR transaction_type IS NULL
                             THEN ABS(COALESCE(withdrawn, 0)) ELSE 0 END), 0) as total_withdrawals,
-                        -- Commission transactions only
-                        COALESCE(SUM(CASE WHEN transaction_type = 'commission'
-                            THEN COALESCE(commission_amount, 0) ELSE 0 END), 0) as total_commissions,
-                        -- Count by type
                         COUNT(CASE WHEN transaction_type = 'float' OR transaction_type IS NULL THEN 1 END) as float_transactions,
-                        COUNT(CASE WHEN transaction_type = 'commission' THEN 1 END) as commission_transactions,
                         COUNT(DISTINCT agent_id) as active_agents,
                         COUNT(DISTINCT company_id) as active_companies
                     FROM transactions
@@ -3918,9 +3904,24 @@ class TransactionService:
                 cursor.execute(kpi_query, params + [start_date, end_date])
                 current_stats = cursor.fetchone()
 
-                # Previous period stats for growth calculation
                 cursor.execute(kpi_query, params + [prev_start_date, prev_end_date])
                 prev_stats = cursor.fetchone()
+
+                # Commission stats - separate query matching commission report approach
+                commission_query = f"""
+                    SELECT
+                        COUNT(*) as commission_transactions,
+                        COALESCE(SUM(COALESCE(commission_amount, 0)), 0) as total_commissions
+                    FROM transactions
+                    WHERE {where_clause}
+                    AND transaction_type = 'commission'
+                    AND completion_time BETWEEN %s AND %s
+                """
+                cursor.execute(commission_query, params + [start_date, end_date])
+                current_commissions = cursor.fetchone()
+
+                cursor.execute(commission_query, params + [prev_start_date, prev_end_date])
+                prev_commissions = cursor.fetchone()
 
                 # Calculate growth percentages
                 def calc_growth(current, previous):
@@ -3943,9 +3944,9 @@ class TransactionService:
                         'trend': 'up' if (current_stats['total_transactions'] or 0) >= (prev_stats['total_transactions'] or 0) else 'down'
                     },
                     'total_commissions': {
-                        'value': float(current_stats['total_commissions'] or 0),
-                        'change': calc_growth(current_stats['total_commissions'] or 0, prev_stats['total_commissions'] or 0),
-                        'trend': 'up' if (current_stats['total_commissions'] or 0) >= (prev_stats['total_commissions'] or 0) else 'down'
+                        'value': float(current_commissions['total_commissions'] or 0),
+                        'change': calc_growth(current_commissions['total_commissions'] or 0, prev_commissions['total_commissions'] or 0),
+                        'trend': 'up' if (current_commissions['total_commissions'] or 0) >= (prev_commissions['total_commissions'] or 0) else 'down'
                     },
                     'active_agents': {
                         'value': int(current_stats['active_agents'] or 0),

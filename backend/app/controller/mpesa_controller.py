@@ -1,6 +1,7 @@
 from flask import Flask,Blueprint, jsonify, request
 from app.service.mpesa_service import MpesaService
 from app.service.payments_service import PaymentService
+from app.service.b2c_payout_service import B2CPayoutService
 from app.model.payment import Payment
 from flask_cors import CORS
 from flask_jwt_extended import jwt_required,get_jwt_identity
@@ -105,4 +106,67 @@ def mpesa_callback():
     db.session.commit()
 
     return jsonify({"status": "ok"}), 200
+
+
+# ─── B2C Payout Endpoints ───────────────────────────────────────────
+
+@mpesa_bp.route('/b2c/payout', methods=['POST'])
+@jwt_required()
+def initiate_b2c_payout():
+    user_id = get_jwt_identity()
+    data = request.get_json()
+    swap_id = data.get('swap_id')
+
+    if not swap_id:
+        return jsonify({"error": "swap_id is required"}), 400
+
+    try:
+        service = B2CPayoutService()
+        payouts = service.initiate_swap_payout(swap_id=swap_id, user_id=user_id)
+        return jsonify({"message": "Payout initiated", "payouts": payouts}), 200
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+    except Exception as e:
+        print(f"B2C payout error: {e}")
+        return jsonify({"error": "Failed to initiate payout"}), 500
+
+
+@mpesa_bp.route('/b2c/result', methods=['POST'])
+def b2c_result_callback():
+    data = request.json
+    print("B2C Result callback data:", data)
+
+    try:
+        service = B2CPayoutService()
+        service.process_b2c_result(data)
+    except Exception as e:
+        print(f"B2C result processing error: {e}")
+
+    return jsonify({"ResultCode": 0, "ResultDesc": "Accepted"}), 200
+
+
+@mpesa_bp.route('/b2c/timeout', methods=['POST'])
+def b2c_timeout_callback():
+    data = request.json
+    print("B2C Timeout callback data:", data)
+
+    try:
+        service = B2CPayoutService()
+        service.process_b2c_timeout(data)
+    except Exception as e:
+        print(f"B2C timeout processing error: {e}")
+
+    return jsonify({"ResultCode": 0, "ResultDesc": "Accepted"}), 200
+
+
+@mpesa_bp.route('/b2c/payouts/<int:swap_id>', methods=['GET'])
+@jwt_required()
+def get_swap_payouts(swap_id):
+    try:
+        service = B2CPayoutService()
+        payouts = service.get_payouts_by_swap(swap_id)
+        return jsonify(payouts), 200
+    except Exception as e:
+        print(f"Error fetching payouts: {e}")
+        return jsonify({"error": "Failed to fetch payouts"}), 500
 

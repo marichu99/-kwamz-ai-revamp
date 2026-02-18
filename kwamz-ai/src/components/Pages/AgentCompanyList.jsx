@@ -1,11 +1,12 @@
 import { useState, useEffect, useRef } from 'react';
-import { Search, MoreVertical, Edit, Plus, Download, Upload, RefreshCw, Trash2, Power, ChevronRight, Filter, X, AlertTriangle, Clock, ShieldCheck, ShieldAlert, ShieldX } from 'lucide-react';
+import { Search, MoreVertical, Edit, Plus, Download, Upload, RefreshCw, Trash2, Power, ChevronRight, Filter, X, AlertTriangle, Clock, ShieldCheck, ShieldAlert, ShieldX, ArrowRightLeft } from 'lucide-react';
 import axios from 'axios';
 import * as XLSX from 'xlsx';
 import config from '../../Config';
 import { useToast } from './ToastProvider';
 import AgentCompanyDetailsModal from './AgentCompanyDetailsModal';
 import BatchUploadModal from './BatchUploadModal';
+import SwapInitiationModal from './SwapInitiationModal';
 
 function AgentCompanyList() {
   const [agentCompanies, setAgentCompanies] = useState([]);
@@ -28,6 +29,7 @@ function AgentCompanyList() {
   const [fraudFilter, setFraudFilter] = useState('all'); // 'all', 'flagged', 'not_flagged'
   const [fraudAlertData, setFraudAlertData] = useState({});
   const [fraudPopupCompanyId, setFraudPopupCompanyId] = useState(null);
+  const [isSwapModalOpen, setIsSwapModalOpen] = useState(false);
   const { showToast } = useToast();
   const fileInputRef = useRef(null);
   const dropdownRef = useRef(null);
@@ -35,7 +37,7 @@ function AgentCompanyList() {
   const fraudPopupRef = useRef(null);
 
   // Fetch agent companies from API
-  const fetchAgentCompanies = async () => {
+  const fetchAgentCompanies = async (showNotification = false) => {
     setIsLoading(true);
     try {
       const token = localStorage.getItem('token');
@@ -46,7 +48,9 @@ function AgentCompanyList() {
       setFilteredAgentCompanies(response.data);
       setSelectedAgentCompanyIds([]);
       setCurrentPage(1);
-      showToast('Agent companies reloaded successfully', 'success');
+      if (showNotification) {
+        showToast('Agent companies reloaded successfully', 'success');
+      }
     } catch (error) {
       console.error('Error fetching agent companies:', error.response?.data || error.message);
       showToast('Failed to fetch agent companies', 'error');
@@ -522,7 +526,6 @@ function AgentCompanyList() {
       showToast(error.message, 'error');
     } finally {
       setIsLoading(false);
-      fetchAgentCompanies();
     }
   };
 
@@ -531,7 +534,7 @@ function AgentCompanyList() {
       {/* Action Buttons */}
       <div className="flex justify-end mb-4 space-x-4">
         <button
-          onClick={fetchAgentCompanies}
+          onClick={() => fetchAgentCompanies(true)}
           disabled={isLoading}
           className="flex items-center space-x-2 py-2 px-4 bg-green-500 text-white rounded-xl hover:bg-green-600 transition-colors disabled:bg-green-300 disabled:cursor-not-allowed"
         >
@@ -581,6 +584,23 @@ function AgentCompanyList() {
                 {selectedAgentCompanyIds.length > 0 && agentCompanies.find(ac => selectedAgentCompanyIds.includes(ac.id) && ac.status === 'active')
                   ? 'Deactivate Selected'
                   : 'Activate Selected'}
+              </button>
+
+              <button
+                onClick={() => {
+                  if (selectedAgentCompanyIds.length !== 1) {
+                    showToast('Please select exactly one agent company to swap', 'error');
+                    return;
+                  }
+                  setIsSwapModalOpen(true);
+                  setIsDropdownOpen(false);
+                  setIsTemplatesSubMenuOpen(false);
+                }}
+                disabled={selectedAgentCompanyIds.length !== 1}
+                className="w-full flex items-center px-4 py-3 text-sm text-slate-800 dark:text-slate-200 hover:bg-orange-50 dark:hover:bg-orange-900/30 disabled:opacity-50 disabled:cursor-not-allowed transition-colors duration-150"
+              >
+                <ArrowRightLeft className="w-4 h-4 mr-2" />
+                Initiate Swap
               </button>
 
               {/* Templates submenu with better positioning */}
@@ -1139,6 +1159,20 @@ function AgentCompanyList() {
         onSubmit={handleCreateOrUpdateAgentCompany}
         isLoading={isLoading}
         agentCompany={selectedAgentCompanyIds.length === 1 ? agentCompanies.find((ac) => ac.id === selectedAgentCompanyIds[0]) : null}
+      />
+
+      {/* Swap Initiation Modal */}
+      <SwapInitiationModal
+        isOpen={isSwapModalOpen}
+        onClose={() => {
+          setIsSwapModalOpen(false);
+          setSelectedAgentCompanyIds([]);
+        }}
+        agentCompany={selectedAgentCompanyIds.length === 1 ? agentCompanies.find((ac) => ac.id === selectedAgentCompanyIds[0]) : null}
+        onSwapComplete={() => {
+          showToast('Swap completed successfully!', 'success');
+          fetchAgentCompanies();
+        }}
       />
     </div>
   );

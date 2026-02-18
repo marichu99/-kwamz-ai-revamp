@@ -85,6 +85,8 @@ def create_app():
     from app.model.config import Config,DetectionLog,SuspiciousAccount
     from app.model.user_report_config import UserReportConfig
     from app.model.subscription import Subscription
+    from app.model.agent_swap import AgentSwap
+    from app.model.swap_payout import SwapPayout
     
     # Initialize Pesapal Client and Payment Service
     from app.utils.pesapalclient import PesapalClient, PesapalConfig, FlaskIPNStorage
@@ -139,6 +141,7 @@ def create_app():
     from app.controller.confg_controller import config_bp
     from app.controller.fraud_alert_controller import fraud_alert_bp
     from app.controller.health_controller import health_bp
+    from app.controller.swap_controller import swap_bp
 
     app.register_blueprint(health_bp, url_prefix='/api')
     app.register_blueprint(user_bp, url_prefix='/users')
@@ -153,5 +156,6 @@ def create_app():
     app.register_blueprint(user_report_config_bp)
     app.register_blueprint(config_bp, url_prefix='/fraud/config')
     app.register_blueprint(fraud_alert_bp, url_prefix='/fraud/alerts')
+    app.register_blueprint(swap_bp, url_prefix='/swaps')
 
     return app

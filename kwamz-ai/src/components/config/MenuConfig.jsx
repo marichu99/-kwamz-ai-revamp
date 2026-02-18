@@ -7,6 +7,7 @@ import {
     Wrench,
     Clock,
     Shield,
+    Repeat,
 } from 'lucide-react';
 
 export const adminMenuItems = [
@@ -78,9 +79,17 @@ const userMenuItems = [
         label: "Users",
         count: "12",
         submenu: [
-            { id: "user-list", label: "Agents" },           
-            { id: "agent-list", label: "Tills" },           
-            { id: "company-list", label: "Companies" },           
+            { id: "user-list", label: "Agents" },
+            { id: "agent-list", label: "Tills" },
+            { id: "company-list", label: "Companies" },
+        ]
+    },
+    {
+        id: "operations",
+        icon: Repeat,
+        label: "Operations",
+        submenu: [
+            { id: "swap-history", label: "Swap History" },
         ]
     },
     {
