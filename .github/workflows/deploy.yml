@@ -103,7 +103,7 @@ jobs:
           key: ${{ secrets.DO_SSH_KEY }}
           envs: GITHUB_TOKEN
           script: |
-            cd ~/kwamz-ai
+            set -e
 
             # --- Docker login ---
             echo "$GITHUB_TOKEN" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
@@ -141,11 +141,12 @@ jobs:
             cd ~/projects/-kwamz-ai-revamp/backend
 
             source ~/miniconda3/etc/profile.d/conda.sh
-            conda activate kwamz || conda create -n kwamz python=3.11 -y && conda activate kwamz
-            pip install -q -r requirements.txt
+
+            # Install dependencies using conda run (works in non-interactive SSH sessions)
+            conda run -n kwamz pip install -q -r requirements.txt
 
             # Run database migrations
-            flask db upgrade
+            conda run -n kwamz flask db upgrade
 
             # Restart gunicorn via supervisor
             sudo supervisorctl restart kwamz-backend
