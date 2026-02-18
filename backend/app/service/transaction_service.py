@@ -1250,46 +1250,75 @@ class TransactionService:
             return {'status': 'error', 'message': str(e)}
 
     def _run_historical_analysis_sync(self, fraud_service, user):
-        """Synchronous historical analysis. Returns (result, transactions)."""
+        """Synchronous historical analysis. Returns (result, transactions).
+
+        Runs once per user — covers ALL historical transactions with no date or
+        count limit, then records a 'historical' FraudReportHistory entry so
+        it is never triggered again.
+        """
         logger.info(f"Running historical analysis for {user.email}")
 
-        # Check if user has already received historical report
-        report_count = FraudReportHistory.query.filter_by(user_id=user.id).count()
+        # Check if user has already received the historical report.
+        # NULL report_type rows are legacy records treated as 'historical'.
+        already_sent = FraudReportHistory.query.filter(
+            FraudReportHistory.user_id == user.id,
+            db.or_(
+                FraudReportHistory.report_type == 'historical',
+                FraudReportHistory.report_type == None  # noqa: E711
+            )
+        ).count()
 
-        if report_count > 0:
-            logger.info(f"User {user.email} already received historical report")
+        if already_sent > 0:
+            logger.info(f"User {user.email} already received historical report — skipping")
             return {'summary': {}, 'detections': []}, []
 
-        # Get all shortcodes
+        # Get all shortcodes for this user
         shortcodes = self.get_all_shortcodes_in_txn_tbl(user)
         all_transactions = []
 
-        # Fetch historical transactions
+        # Fetch ALL historical transactions — no date cutoff, no row limit
         for shortcode in shortcodes:
-            transactions = self.get_recent_transactions_for_shortcode_sync(
-                shortcode,
-                user.id,
-                days=30,
-                limit=100
-            )
+            transactions = self._get_all_transactions_for_shortcode_sync(shortcode, user.id)
             all_transactions.extend(transactions)
 
+        logger.info(
+            f"Historical analysis: {len(all_transactions)} total transactions "
+            f"across {len(shortcodes)} shortcodes for {user.email}"
+        )
+
         if all_transactions:
-            # Run detection
+            # Run all fraud-type detections
             result = fraud_service.run_detection(all_transactions)
 
-            # Send historical report email with transactions and detections
+            # Persist a FraudAlert record for EVERY detection (all types, all risk
+            # levels) so the deduplication logic can exclude these transaction IDs
+            # from all future periodic scans.
+            detections = result.get('detections', [])
+            recorded = 0
+            for detection in detections:
+                fraud_type = detection.get('fraud_type', 'unknown')
+                if self._record_fraud_alert_sync(detection, fraud_type, user):
+                    recorded += 1
+            logger.info(
+                f"Historical report: recorded {recorded}/{len(detections)} new "
+                f"FraudAlert entries for user {user.email}"
+            )
+
+            # Send the one-time historical fraud report email
             fraud_service.send_historical_report(
                 result['summary'],
                 transactions=all_transactions,
-                detections=result.get('detections', [])
+                detections=detections,
             )
 
-            # Record in database
-            self._record_report_history_sync(user, result['summary'])
+            # Persist the history record so we never re-send the historical report
+            self._record_report_history_sync(user, result['summary'], report_type='historical')
 
             return result, all_transactions
 
+        # No transactions found — still record the fact that we ran the historical check
+        # so the periodic scan can start immediately when transactions arrive later.
+        self._record_report_history_sync(user, {}, report_type='historical')
         return {'summary': {}, 'detections': []}, []
 
     def _send_detection_summary_sync(self, user, historical_report, recent_detections, transactions=None):
@@ -1685,15 +1714,21 @@ class TransactionService:
             return str(obj)
         return obj
 
-    def _record_report_history_sync(self, user, report_summary):
-        """Record report history synchronously."""
+    def _record_report_history_sync(self, user, report_summary, report_type: str = 'historical'):
+        """Record report history synchronously.
+
+        Args:
+            user: The User object.
+            report_summary: Summary dict from fraud detection.
+            report_type: 'historical' for the one-time full scan, 'periodic' for recurring.
+        """
         try:
-            # Serialize report_summary to handle datetime objects
             serialized_report = self._serialize_for_json(report_summary)
 
             history = FraudReportHistory(
                 user_id=user.id,
-                analysis_period_days=30,
+                report_type=report_type,
+                analysis_period_days=None,  # not applicable — we scan all data
                 total_transactions=report_summary.get('total_transactions_analyzed', 0),
                 suspicious_patterns=report_summary.get('suspicious_patterns_found', 0),
                 accounts_flagged=report_summary.get('accounts_flagged', 0),
@@ -1703,7 +1738,7 @@ class TransactionService:
             db.session.add(history)
             db.session.commit()
 
-            logger.info(f"Recorded fraud report history for user {user.email}")
+            logger.info(f"Recorded {report_type} fraud report history for user {user.email}")
 
         except Exception as e:
             db.session.rollback()
@@ -1911,11 +1946,18 @@ class TransactionService:
     
     async def _run_historical_analysis(self, fraud_service: FraudDetectionService, user: User) -> Dict:
         """Run historical fraud analysis (first time for user)."""
-        # Check if user has already received historical report
-        report_count = FraudReportHistory.query.filter_by(user_id=user.id).count()
-        
-        if report_count > 0:
-            logger.info(f"User {user.email} already received historical report")
+        # Check if user has already received the historical report.
+        # NULL report_type rows are legacy records treated as 'historical'.
+        already_sent = FraudReportHistory.query.filter(
+            FraudReportHistory.user_id == user.id,
+            db.or_(
+                FraudReportHistory.report_type == 'historical',
+                FraudReportHistory.report_type == None  # noqa: E711
+            )
+        ).count()
+
+        if already_sent > 0:
+            logger.info(f"User {user.email} already received historical report — skipping")
             return {'summary': {}, 'detections': []}
         
         logger.info(f"Running historical analysis for {user.email}")
@@ -2061,101 +2103,179 @@ class TransactionService:
         )
 
     def _check_recent_transactions_sync(self, user: User, fraud_service: FraudDetectionService) -> List[Dict]:
-        """Check recent transactions for fraud patterns - Synchronous version."""
+        """Periodic fraud check — only processes transactions that have NOT already been flagged.
+
+        Starts from the completion_time of the most recently flagged transaction
+        produced by the historical report, so there is no overlap with the historical scan.
+        Any transaction ID already present in a FraudAlert record is excluded before
+        running detection, guaranteeing a transaction is never flagged twice.
+        """
         logger.info(f"Checking recent transactions for fraud patterns for user: {user.email}")
-        
+
         try:
-            # Get shortcodes for this user
+            # Collect all transaction IDs that have already been flagged for this user
+            already_flagged_ids = self._get_already_flagged_transaction_ids(user.id)
+
+            # Determine the earliest point in time the periodic scan should cover.
+            # We start from right after the most-recent transaction flagged in the
+            # historical report so we do not re-analyse already-processed transactions.
+            after_date = self._get_latest_flagged_transaction_time(user.id)
+            if after_date:
+                logger.info(
+                    f"Periodic scan for {user.email} starts after {after_date} "
+                    f"({len(already_flagged_ids)} already-flagged transaction IDs excluded)"
+                )
+            else:
+                logger.info(
+                    f"No prior flagged transactions found for {user.email}; "
+                    "periodic scan covers all available transactions"
+                )
+
             shortcodes = self.get_all_shortcodes_in_txn_tbl(user)
             logger.info(f"Found {len(shortcodes)} shortcodes to check")
-            
+
             if not shortcodes:
                 logger.info("No shortcodes found for user")
                 return []
-            
+
             all_detections = []
             processed_count = 0
-            
-            # Process shortcodes in batches (synchronous version)
+
             batch_size = 3
             for i in range(0, len(shortcodes), batch_size):
                 batch = shortcodes[i:i + batch_size]
-                logger.info(f"Processing batch {i//batch_size + 1}/{(len(shortcodes) + batch_size - 1)//batch_size}: {batch}")
-                
-                # Process each shortcode in the current batch
+                logger.info(
+                    f"Processing batch {i // batch_size + 1}/"
+                    f"{(len(shortcodes) + batch_size - 1) // batch_size}: {batch}"
+                )
+
                 for shortcode in batch:
                     try:
                         logger.info(f"Processing shortcode: {shortcode}")
-                        detections = self._process_single_shortcode_sync(fraud_service, shortcode, user)
-                        
+                        detections = self._process_single_shortcode_sync(
+                            fraud_service,
+                            shortcode,
+                            user,
+                            after_date=after_date,
+                            already_flagged_ids=already_flagged_ids,
+                        )
+
                         if detections:
                             all_detections.extend(detections)
-                            logger.info(f"Found {len(detections)} suspicious patterns for shortcode {shortcode}")
-                        
+                            logger.info(
+                                f"Found {len(detections)} suspicious patterns for shortcode {shortcode}"
+                            )
+
                         processed_count += 1
-                        
-                        # Log progress
                         if processed_count % 10 == 0:
-                            logger.info(f"Progress: Processed {processed_count}/{len(shortcodes)} shortcodes")
-                            
+                            logger.info(
+                                f"Progress: Processed {processed_count}/{len(shortcodes)} shortcodes"
+                            )
+
                     except Exception as e:
                         logger.error(f"Error processing shortcode {shortcode}: {str(e)}")
                         continue
-            
-            logger.info(f"Completed checking recent transactions. Found {len(all_detections)} total suspicious patterns")
+
+            logger.info(
+                f"Completed periodic check. Found {len(all_detections)} total suspicious patterns"
+            )
             return all_detections
-            
+
         except Exception as e:
             logger.error(f"Error in _check_recent_transactions_sync: {str(e)}", exc_info=True)
             return []
 
-    def _process_single_shortcode_sync(self, fraud_service: FraudDetectionService, shortcode: str, user: User = None) -> List[Dict]:
-        """Process a single shortcode for fraud detection - Synchronous version."""
+    def _process_single_shortcode_sync(
+        self,
+        fraud_service: FraudDetectionService,
+        shortcode: str,
+        user: User = None,
+        after_date: Optional[datetime] = None,
+        already_flagged_ids: Optional[set] = None,
+    ) -> List[Dict]:
+        """Process a single shortcode for periodic fraud detection.
+
+        Args:
+            fraud_service: Initialised FraudDetectionService for the user.
+            shortcode: The business short-code to scan.
+            user: The User whose companies own this shortcode.
+            after_date: Only fetch transactions with completion_time > after_date.
+                        This anchors the periodic scan to start immediately after
+                        the most recent transaction flagged by the historical report.
+            already_flagged_ids: Set of transaction IDs already recorded in FraudAlert
+                        records. Any transaction in this set is removed before
+                        detection so it cannot be flagged a second time.
+        """
+        if already_flagged_ids is None:
+            already_flagged_ids = set()
+
         try:
-            logger.info(f"Getting recent transactions for shortcode: {shortcode}")
-            
-            # Get recent transactions for this shortcode
-            # Assuming you have a method that takes user_id or company filtering
-            transactions = self.get_recent_transactions_for_shortcode_sync(
+            logger.info(f"Getting transactions for shortcode: {shortcode} (after_date={after_date})")
+
+            # Fetch transactions starting from after_date (no hard limit on count)
+            transactions = self._get_periodic_transactions_for_shortcode_sync(
                 shortcode=shortcode,
                 user_id=user.id if user else None,
-                days=30,
-                limit=fraud_service.config.get('recent_transactions_limit', 100)
+                after_date=after_date,
             )
-            
+
             if not transactions:
-                logger.debug(f"No recent transactions found for shortcode: {shortcode}")
+                logger.debug(f"No new transactions found for shortcode: {shortcode}")
                 return []
-            
-            logger.info(f"Found {len(transactions)} recent transactions for shortcode {shortcode}")
-            
-            # Run fraud detection
+
+            # Remove transactions already flagged in a previous report
+            if already_flagged_ids:
+                before = len(transactions)
+                transactions = [
+                    t for t in transactions
+                    if t.get('id') not in already_flagged_ids
+                ]
+                skipped = before - len(transactions)
+                if skipped:
+                    logger.info(
+                        f"Shortcode {shortcode}: excluded {skipped} already-flagged "
+                        f"transactions; {len(transactions)} remain for analysis"
+                    )
+
+            if not transactions:
+                logger.debug(f"All transactions for shortcode {shortcode} already flagged — skipping")
+                return []
+
+            logger.info(f"Running fraud detection on {len(transactions)} transactions for {shortcode}")
+
             result = fraud_service.run_detection(transactions)
             detections = result.get('detections', [])
-            
+
             if not detections:
                 logger.debug(f"No fraud patterns detected for shortcode: {shortcode}")
                 return []
-            
-            # Send notifications for high-risk detections
+
+            # Record ALL detections (every fraud type, every risk level) in FraudAlert
+            # so they are excluded from all future periodic scans.
             high_risk_count = 0
             for detection in detections:
+                fraud_type = detection.get('fraud_type', 'unknown')
+                # Always persist (idempotent — skips if receipt_hash already exists)
+                self._record_fraud_alert_sync(detection, fraud_type, user)
+
+                # Send immediate email notification only for HIGH-risk detections
                 if detection.get('risk_level') == 'HIGH':
-                    # Check alert limit before sending
                     receipt_nos = detection.get('receipt_nos', [])
                     if not self._should_limit_alerts(receipt_nos):
                         try:
-                            # Use sync notification method
+                            # Note: _send_fraud_notification_sync also calls
+                            # _record_fraud_alert_sync internally, but the
+                            # duplicate guard in that method makes it a no-op.
                             self._send_fraud_notification_sync(detection, user)
                             high_risk_count += 1
                         except Exception as e:
                             logger.error(f"Failed to send notification for detection: {str(e)}")
-            
+
             if high_risk_count > 0:
                 logger.info(f"Sent {high_risk_count} high-risk notifications for shortcode {shortcode}")
-            
+
             return detections
-            
+
         except Exception as e:
             logger.error(f"Error processing shortcode {shortcode}: {str(e)}", exc_info=True)
             return []
@@ -2247,6 +2367,216 @@ class TransactionService:
                 exc_info=True
             )
             return []
+
+    # ------------------------------------------------------------------
+    # Historical fetch — no date cutoff, no row limit
+    # ------------------------------------------------------------------
+
+    def _get_all_transactions_for_shortcode_sync(
+        self,
+        shortcode: str,
+        user_id: Optional[int] = None,
+    ) -> List[Dict]:
+        """Fetch ALL completed transactions for a shortcode with no date or count limit.
+
+        Used exclusively by the one-time historical fraud report so that the
+        entire transaction history is analysed.
+        """
+        try:
+            base_query = """
+                SELECT
+                    id, receipt_no, completion_time, initiation_time,
+                    details, transaction_status, paid_in, withdrawn,
+                    balance, balance_confirmed, reason_type, other_party_info,
+                    linked_transaction_id, account_number, currency,
+                    transaction_type, business_shortcode, company_id, agent_id,
+                    created_at, updated_at
+                FROM transactions
+                WHERE business_shortcode = %s
+                AND transaction_status = 'Completed'
+            """
+            params: Tuple = (shortcode,)
+
+            if user_id:
+                company_ids = self._get_company_ids_for_user(user_id)
+                if not company_ids:
+                    logger.warning(f"No companies found for user {user_id}")
+                    return []
+                base_query += " AND company_id IN %s"
+                params += (tuple(company_ids),)
+
+            query = base_query + " ORDER BY completion_time ASC"
+
+            with db_pool.get_cursor() as cursor:
+                cursor.execute(query, params)
+                rows = cursor.fetchall()
+
+                transactions = []
+                for row in rows:
+                    tx_dict = dict(row)
+                    for key in ['paid_in', 'withdrawn', 'balance', 'balance_confirmed']:
+                        if key in tx_dict and isinstance(tx_dict[key], Decimal):
+                            tx_dict[key] = self._parse_decimal_to_float(tx_dict[key])
+                    for key in ['completion_time', 'initiation_time', 'created_at', 'updated_at']:
+                        if key in tx_dict and isinstance(tx_dict[key], datetime):
+                            tx_dict[key] = self._parse_date_to_string(tx_dict[key])
+                    for key in ['linked_transaction_id', 'account_number']:
+                        if tx_dict.get(key) == 'NaN':
+                            tx_dict[key] = None
+                    transactions.append(tx_dict)
+
+                logger.info(
+                    f"Retrieved {len(transactions)} historical transactions for shortcode {shortcode}"
+                )
+                return transactions
+
+        except Exception as e:
+            logger.error(
+                f"Failed to fetch all transactions for shortcode {shortcode} "
+                f"(user={user_id}): {str(e)}",
+                exc_info=True,
+            )
+            return []
+
+    # ------------------------------------------------------------------
+    # Periodic fetch — transactions strictly after a given datetime
+    # ------------------------------------------------------------------
+
+    def _get_periodic_transactions_for_shortcode_sync(
+        self,
+        shortcode: str,
+        user_id: Optional[int] = None,
+        after_date: Optional[datetime] = None,
+    ) -> List[Dict]:
+        """Fetch completed transactions for a shortcode that occurred after *after_date*.
+
+        When *after_date* is None the query returns all completed transactions
+        (fallback for when no historical report has been sent yet).
+        No row-count limit is applied so every new transaction is considered.
+        """
+        try:
+            base_query = """
+                SELECT
+                    id, receipt_no, completion_time, initiation_time,
+                    details, transaction_status, paid_in, withdrawn,
+                    balance, balance_confirmed, reason_type, other_party_info,
+                    linked_transaction_id, account_number, currency,
+                    transaction_type, business_shortcode, company_id, agent_id,
+                    created_at, updated_at
+                FROM transactions
+                WHERE business_shortcode = %s
+                AND transaction_status = 'Completed'
+            """
+            params: Tuple = (shortcode,)
+
+            if after_date:
+                base_query += " AND completion_time > %s"
+                params += (after_date,)
+
+            if user_id:
+                company_ids = self._get_company_ids_for_user(user_id)
+                if not company_ids:
+                    logger.warning(f"No companies found for user {user_id}")
+                    return []
+                base_query += " AND company_id IN %s"
+                params += (tuple(company_ids),)
+
+            query = base_query + " ORDER BY completion_time ASC"
+
+            with db_pool.get_cursor() as cursor:
+                cursor.execute(query, params)
+                rows = cursor.fetchall()
+
+                transactions = []
+                for row in rows:
+                    tx_dict = dict(row)
+                    for key in ['paid_in', 'withdrawn', 'balance', 'balance_confirmed']:
+                        if key in tx_dict and isinstance(tx_dict[key], Decimal):
+                            tx_dict[key] = self._parse_decimal_to_float(tx_dict[key])
+                    for key in ['completion_time', 'initiation_time', 'created_at', 'updated_at']:
+                        if key in tx_dict and isinstance(tx_dict[key], datetime):
+                            tx_dict[key] = self._parse_date_to_string(tx_dict[key])
+                    for key in ['linked_transaction_id', 'account_number']:
+                        if tx_dict.get(key) == 'NaN':
+                            tx_dict[key] = None
+                    transactions.append(tx_dict)
+
+                logger.info(
+                    f"Retrieved {len(transactions)} periodic transactions for shortcode {shortcode} "
+                    f"(after {after_date})"
+                )
+                return transactions
+
+        except Exception as e:
+            logger.error(
+                f"Failed to fetch periodic transactions for shortcode {shortcode} "
+                f"(user={user_id}, after={after_date}): {str(e)}",
+                exc_info=True,
+            )
+            return []
+
+    # ------------------------------------------------------------------
+    # Deduplication helpers
+    # ------------------------------------------------------------------
+
+    def _get_already_flagged_transaction_ids(self, user_id: int) -> set:
+        """Return a set of all transaction IDs that have already been recorded in a
+        FraudAlert for this user.  Any transaction present in this set should be
+        excluded from future fraud-detection runs to prevent double-flagging.
+        """
+        try:
+            alerts = FraudAlert.query.filter_by(user_id=user_id).all()
+            flagged: set = set()
+            for alert in alerts:
+                if alert.transaction_ids:
+                    for tid in alert.transaction_ids.split(','):
+                        tid = tid.strip()
+                        if tid:
+                            try:
+                                flagged.add(int(tid))
+                            except ValueError:
+                                pass
+            logger.debug(
+                f"Found {len(flagged)} already-flagged transaction IDs for user {user_id}"
+            )
+            return flagged
+        except Exception as e:
+            logger.error(
+                f"Error fetching already-flagged transaction IDs for user {user_id}: {str(e)}"
+            )
+            return set()
+
+    def _get_latest_flagged_transaction_time(self, user_id: int) -> Optional[datetime]:
+        """Return the completion_time of the most recently flagged transaction for a user.
+
+        The periodic scan starts immediately after this timestamp so it does not
+        re-analyse any transaction that was covered by the historical report.
+        Returns None if no transactions have been flagged yet.
+        """
+        try:
+            flagged_ids = self._get_already_flagged_transaction_ids(user_id)
+            if not flagged_ids:
+                return None
+
+            latest_txn = Transaction.query.filter(
+                Transaction.id.in_(flagged_ids)
+            ).order_by(Transaction.completion_time.desc()).first()
+
+            if latest_txn and latest_txn.completion_time:
+                logger.info(
+                    f"Latest flagged transaction time for user {user_id}: "
+                    f"{latest_txn.completion_time}"
+                )
+                return latest_txn.completion_time
+
+            return None
+
+        except Exception as e:
+            logger.error(
+                f"Error finding latest flagged transaction time for user {user_id}: {str(e)}"
+            )
+            return None
+
     def _send_fraud_notification_sync(self, detection: Dict, user: User = None):
         """Send fraud notification email synchronously."""
         if not user or not user.email:
@@ -2317,9 +2647,30 @@ class TransactionService:
         except Exception as e:
             logger.error(f"Failed to send fraud notification: {str(e)}")
 
-    def _record_fraud_alert_sync(self, detection: Dict, fraud_type: str, user: User):
-        """Record fraud alert in database synchronously."""        
+    def _record_fraud_alert_sync(self, detection: Dict, fraud_type: str, user: User) -> bool:
+        """Record fraud alert in database synchronously.
+
+        Idempotent: skips insert if an alert with the same receipt_hash already
+        exists for this user, preventing double-recording when the same detection
+        is seen across multiple calls (e.g. historical + periodic overlap).
+
+        Returns True if a new record was inserted, False if it was skipped.
+        """
         try:
+            receipt_nos = detection.get('receipt_nos', [])
+            receipt_hash = hash(tuple(sorted(receipt_nos)))
+
+            # Guard: do not record the same alert twice
+            existing = FraudAlert.query.filter_by(
+                user_id=user.id,
+                receipt_hash=receipt_hash,
+            ).first()
+            if existing:
+                logger.debug(
+                    f"FraudAlert for receipt_hash={receipt_hash} already exists — skipping"
+                )
+                return False
+
             alert = FraudAlert(
                 user_id=user.id,
                 fraud_type=fraud_type,
@@ -2329,19 +2680,21 @@ class TransactionService:
                 total_amount=Decimal(str(detection.get('total_amount', 0))),
                 fraud_score=detection.get('fraud_score', 0),
                 risk_level=detection.get('risk_level', 'MEDIUM'),
-                receipt_nos=','.join(detection.get('receipt_nos', [])),
-                transaction_ids=','.join(str(id) for id in detection.get('transaction_ids', [])),
-                receipt_hash=hash(tuple(sorted(detection.get('receipt_nos', [])))),
-                detection_details=detection
+                receipt_nos=','.join(receipt_nos),
+                transaction_ids=','.join(str(tid) for tid in detection.get('transaction_ids', [])),
+                receipt_hash=receipt_hash,
+                detection_details=detection,
             )
-            
+
             db.session.add(alert)
             db.session.commit()
             logger.info(f"Recorded fraud alert for {fraud_type}")
-            
+            return True
+
         except Exception as e:
             db.session.rollback()
             logger.error(f"Failed to record fraud alert: {str(e)}")
+            return False
 
     def _get_company_ids_for_user(self, user_id: int) -> List[int]:
         """Get company IDs associated with a user."""
