@@ -60,12 +60,11 @@ def login_to_mpesa(password: str = None, username: str = None, short_code: str =
 
     with sync_playwright() as p:
         browser = p.chromium.launch(
-            headless=False,
-            args=['--start-maximized']  # Use --start-maximized instead
+            headless=True,
+            args=['--no-sandbox', '--disable-dev-shm-usage']
         )
-        
-        # Create context with no default viewport to use full screen
-        context = browser.new_context(no_viewport=True)
+
+        context = browser.new_context(viewport={'width': 1920, 'height': 1080})
         page = context.new_page()
         
         page.goto(url, timeout=600000)
