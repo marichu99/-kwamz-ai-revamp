@@ -108,41 +108,16 @@ jobs:
             # --- Docker login ---
             echo "$GITHUB_TOKEN" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
 
-            # --- Frontend (Docker) ---
+            # --- Pull new images ---
             docker pull ${{ env.FRONTEND_IMAGE }}:latest
-            docker stop frontend 2>/dev/null || true
-            docker rm frontend 2>/dev/null || true
+            docker pull ${{ env.CELERY_IMAGE }}:latest
+
+            # --- Stop all containers first to free DB connections before migrations ---
+            docker stop celery-worker celery-beat frontend 2>/dev/null || true
+            docker rm celery-worker celery-beat frontend 2>/dev/null || true
             # Kill any other container still holding port 3000
             docker ps -q --filter "publish=3000" | xargs -r docker stop
             docker ps -aq --filter "publish=3000" | xargs -r docker rm
-            docker run -d --name frontend \
-              -p 3000:80 \
-              --restart unless-stopped \
-              ${{ env.FRONTEND_IMAGE }}:latest
-
-            # --- Celery Worker (Docker) ---
-            docker pull ${{ env.CELERY_IMAGE }}:latest
-            docker stop celery-worker 2>/dev/null || true
-            docker rm celery-worker 2>/dev/null || true
-            docker run -d --name celery-worker \
-              --network host \
-              --env-file ~/projects/-kwamz-ai-revamp/backend/.env \
-              -e DB_MIN_CONNECTIONS=1 \
-              -e DB_MAX_CONNECTIONS=2 \
-              --restart unless-stopped \
-              ${{ env.CELERY_IMAGE }}:latest
-
-            # --- Celery Beat (Docker, same image) ---
-            docker stop celery-beat 2>/dev/null || true
-            docker rm celery-beat 2>/dev/null || true
-            docker run -d --name celery-beat \
-              --network host \
-              --env-file ~/projects/-kwamz-ai-revamp/backend/.env \
-              -e DB_MIN_CONNECTIONS=1 \
-              -e DB_MAX_CONNECTIONS=2 \
-              --restart unless-stopped \
-              ${{ env.CELERY_IMAGE }}:latest \
-              celery -A worker:celery beat --loglevel=info
 
             # --- Backend (bare metal with conda) ---
             cd ~/projects/-kwamz-ai-revamp/backend
@@ -160,6 +135,31 @@ jobs:
 
             # Reload nginx config
             sudo nginx -t && sudo systemctl reload nginx
+
+            # --- Start Frontend (Docker) ---
+            docker run -d --name frontend \
+              -p 3000:80 \
+              --restart unless-stopped \
+              ${{ env.FRONTEND_IMAGE }}:latest
+
+            # --- Start Celery Worker (Docker) ---
+            docker run -d --name celery-worker \
+              --network host \
+              --env-file ~/projects/-kwamz-ai-revamp/backend/.env \
+              -e DB_MIN_CONNECTIONS=1 \
+              -e DB_MAX_CONNECTIONS=2 \
+              --restart unless-stopped \
+              ${{ env.CELERY_IMAGE }}:latest
+
+            # --- Start Celery Beat (Docker) ---
+            docker run -d --name celery-beat \
+              --network host \
+              --env-file ~/projects/-kwamz-ai-revamp/backend/.env \
+              -e DB_MIN_CONNECTIONS=1 \
+              -e DB_MAX_CONNECTIONS=2 \
+              --restart unless-stopped \
+              ${{ env.CELERY_IMAGE }}:latest \
+              celery -A worker:celery beat --loglevel=info
 
             # Cleanup old Docker images
             docker image prune -af --filter "until=24h"
