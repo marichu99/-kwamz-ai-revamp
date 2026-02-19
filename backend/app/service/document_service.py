@@ -129,12 +129,15 @@ class DocumentProcessingService:
                 if extracted.get("error"):
                     raise ValueError(extracted["error"])
 
-            # 4. Upload
-            file.seek(0)  # Reset for upload
-            gcp_url, gcp_path = self._upload_to_gcp(file, company_id, agent_id, doc_type, filename)
+            gcp_url, gcp_path = None, None
 
-            # 5. Save to DB
-            self._save_to_db(agent_id, company_id, doc_type, filename, gcp_url, gcp_path, extracted)
+            if self.storage_client:
+                # 4. Upload
+                file.seek(0)  # Reset for upload
+                gcp_url, gcp_path = self._upload_to_gcp(file, company_id, agent_id, doc_type, filename)
+
+                # 5. Save to DB
+                self._save_to_db(agent_id, company_id, doc_type, filename, gcp_url, gcp_path, extracted)
 
             # 6. Return
             return {

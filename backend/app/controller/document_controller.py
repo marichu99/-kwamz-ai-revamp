@@ -49,46 +49,64 @@ def extract_kra_pin():
         return jsonify({"error": "File and agent_id are required"}), 400
 
     try:
-        # Check if document already exists (for re-upload)
-        existing_doc = AgentDocuments.query.filter_by(
-            agent_id=agent_id,
-            doc_type='kra_pin'
-        ).first()
-        
-        # If re-uploading, delete old file from GCP
-        if existing_doc:
-            try:
-                bucket = current_app.document_service.storage_client.bucket(current_app.document_service.bucket_name)
-                blob = bucket.blob(existing_doc.gcp_path)
-                if blob.exists():
-                    blob.delete()
-            except Exception as e:
-                print(f"Warning: Failed to delete old file: {str(e)}")
-            
-            # Delete old database record
-            db.session.delete(existing_doc)
-            db.session.commit()
-        
-        # Process the document
-        result = current_app.document_service.process(
-            file=file,
-            agent_id=agent_id,
-            doc_type='kra_pin',
-            extract_func=extract_taxpayer_details
-        )
+        document_service = current_app.document_service
 
-        # Get the newly created document ID
-        new_doc = AgentDocuments.query.filter_by(
-            agent_id=agent_id,
-            doc_type='kra_pin'
-        ).order_by(AgentDocuments.uploaded_at.desc()).first()
+        if document_service:
+            # Check if document already exists (for re-upload)
+            existing_doc = AgentDocuments.query.filter_by(
+                agent_id=agent_id,
+                doc_type='kra_pin'
+            ).first()
+
+            # If re-uploading, delete old file from GCP
+            if existing_doc:
+                try:
+                    bucket = document_service.storage_client.bucket(document_service.bucket_name)
+                    blob = bucket.blob(existing_doc.gcp_path)
+                    if blob.exists():
+                        blob.delete()
+                except Exception as e:
+                    print(f"Warning: Failed to delete old file: {str(e)}")
+
+                # Delete old database record
+                db.session.delete(existing_doc)
+                db.session.commit()
+
+            result = document_service.process(
+                file=file,
+                agent_id=agent_id,
+                doc_type='kra_pin',
+                extract_func=extract_taxpayer_details
+            )
+
+            new_doc = AgentDocuments.query.filter_by(
+                agent_id=agent_id,
+                doc_type='kra_pin'
+            ).order_by(AgentDocuments.uploaded_at.desc()).first()
+            document_id = new_doc.id if new_doc else None
+        else:
+            # GCS not configured — extract only, no upload/DB save
+            import tempfile, os
+            filename = file.filename
+            with tempfile.NamedTemporaryFile(delete=False, suffix='.pdf') as tmp:
+                file.save(tmp.name)
+                temp_path = tmp.name
+            try:
+                extracted = extract_taxpayer_details(temp_path)
+                if extracted.get("error"):
+                    raise ValueError(extracted["error"])
+                result = {"gcp_url": None, **extracted}
+            finally:
+                if os.path.exists(temp_path):
+                    os.remove(temp_path)
+            document_id = None
 
         return jsonify({
             "kraPin": result.get("PIN", ""),
             "taxPayerName": result.get("Taxpayer Name", ""),
             "email": result.get("Email Address", ""),
             "gcp_url": result.get("gcp_url", ""),
-            "documentId": new_doc.id if new_doc else None
+            "documentId": document_id
         }), 200
 
     except Exception as e:
