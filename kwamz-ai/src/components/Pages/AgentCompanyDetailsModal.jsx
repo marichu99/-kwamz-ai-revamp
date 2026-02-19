@@ -88,7 +88,7 @@ function AgentCompanyDetailsModal({ isOpen, onClose, onSubmit, isLoading, agentC
         agent_number: agentCompany.agent_number || '',
         short_code: agentCompany.short_code || '',
         agentcompany_code: agentCompany.agentcompany_code || '',
-        selected_company: agentCompany.selected_company|| null,
+        selected_company: agentCompany.company_id || null,
       });
     } else {
       setFormData({

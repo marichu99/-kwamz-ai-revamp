@@ -39,7 +39,7 @@ def create_agent_company():
 @agent_company_bp.route('/<int:id>', methods=['PUT'])
 @jwt_required()
 def update_agent_company(id):
-    current_user_id = get_jwt_identity()
+    current_user_id = int(get_jwt_identity())
     data = request.get_json(silent=True) or request.form or {}
     service = AgentCompanyService()
     agent_company, error = service.update_agent_company(id, data, current_user_id)
@@ -53,8 +53,9 @@ def update_agent_company(id):
 @agent_company_bp.route('/<int:id>', methods=['DELETE'])
 @jwt_required()
 def delete_agent_company(id):
+    current_user_id = int(get_jwt_identity())
     service = AgentCompanyService()
-    success, error = service.delete_agent_company(id)
+    success, error = service.delete_agent_company(id, current_user_id)
     if error:
         return jsonify({'error': error}), 400
     return jsonify({'message': 'Agent company deleted successfully'}), 200

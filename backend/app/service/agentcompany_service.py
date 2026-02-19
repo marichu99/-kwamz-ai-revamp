@@ -244,13 +244,14 @@ class AgentCompanyService:
             if company_id and not Company.query.get(company_id):
                 return None, 'Invalid company_id'
 
+            short_code = data.get('short_code')
             agent_company = AgentCompany(
                 company_name=data.get('company_name'),
                 registration_number=f"REG-{uuid.uuid4().hex[:8]}",
                 location=data.get('location'),
                 contact_phone=data.get('contact_phone'),
                 email=data.get('email'),
-                agentcompany_code=agent_company_code,
+                agentcompany_code=short_code or agent_company_code,
                 till_number=data.get('till_number'),
                 location_details=data.get('location_details'),
                 store_number=data.get('store_number'),
@@ -264,7 +265,7 @@ class AgentCompanyService:
                 daily_transaction_limit=float(data.get('daily_transaction_limit', 0.0)),
                 commission_rate=float(data.get('commission_rate', 0.0)),
                 last_audit_date=datetime.strptime(data.get('last_audit_date'), '%Y-%m-%d').date() if data.get('last_audit_date') else None,
-                short_code=data.get('short_code'),
+                short_code=short_code,
                 commission_account_status='pending',
                 user_id=user_id
             )
@@ -284,6 +285,8 @@ class AgentCompanyService:
         """Update an existing agent company."""
         try:
             agent_company = AgentCompany.query.get_or_404(id)
+            
+            print(f"Updating agent company {id} with user_id {agent_company.user_id} for user {user_id} with data: {data}")
             if agent_company.user_id != user_id:
                 return None, 'Unauthorized: You can only update your own agent companies'
 
@@ -301,6 +304,7 @@ class AgentCompanyService:
             agent_company.store_number = data.get('store_number', agent_company.store_number)
             agent_company.till_number = data.get('till_number', agent_company.till_number)
             agent_company.short_code = data.get('short_code', agent_company.short_code)
+            agent_company.agentcompany_code = data.get('short_code', agent_company.short_code)
             agent_company.company_id = company_id or agent_company.company_id
             agent_company.established_date = datetime.strptime(data.get('established_date'), '%Y-%m-%d').date() if data.get('established_date') else agent_company.established_date
             agent_company.float_balance = float(data.get('float_balance', agent_company.float_balance))
