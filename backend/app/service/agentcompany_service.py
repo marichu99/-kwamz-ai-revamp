@@ -300,6 +300,7 @@ class AgentCompanyService:
             agent_company.location_details = data.get('location_details', agent_company.location_details)
             agent_company.store_number = data.get('store_number', agent_company.store_number)
             agent_company.till_number = data.get('till_number', agent_company.till_number)
+            agent_company.short_code = data.get('short_code', agent_company.short_code)
             agent_company.company_id = company_id or agent_company.company_id
             agent_company.established_date = datetime.strptime(data.get('established_date'), '%Y-%m-%d').date() if data.get('established_date') else agent_company.established_date
             agent_company.float_balance = float(data.get('float_balance', agent_company.float_balance))
@@ -315,7 +316,21 @@ class AgentCompanyService:
             return {
                 'id': agent_company.id,
                 'company_name': agent_company.company_name,
-                'status': agent_company.status
+                'location': agent_company.location,
+                'location_details': agent_company.location_details,
+                'contact_phone': agent_company.contact_phone,
+                'store_number': agent_company.store_number,
+                'agent_number': agent_company.agent_number,
+                'short_code': agent_company.short_code,
+                'till_number': agent_company.till_number,
+                'agentcompany_code': agent_company.agentcompany_code,
+                'company_id': agent_company.company_id,
+                'selected_company': agent_company.company_id,
+                'status': agent_company.status,
+                'email': agent_company.email,
+                'float_balance': str(agent_company.float_balance) if agent_company.float_balance is not None else None,
+                'fraud_risk_level': agent_company.fraud_risk_level,
+                'fraud_risk_description': agent_company.fraud_risk_description,
             }, None
         except Exception as e:
             db.session.rollback()

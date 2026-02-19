@@ -505,18 +505,7 @@ function AgentCompanyList() {
         throw new Error(result.error || `Failed to ${agentCompanyId ? 'update' : 'create'} agent company`);
       }
 
-      if (agentCompanyId) {
-        setAgentCompanies((prev) =>
-          prev.map((ac) => (ac.id === agentCompanyId ? { ...ac, ...result.agentCompany } : ac))
-        );
-        setFilteredAgentCompanies((prev) =>
-          prev.map((ac) => (ac.id === agentCompanyId ? { ...ac, ...result.agentCompany } : ac))
-        );
-      } else {
-        setAgentCompanies((prev) => [...prev, result.agentCompany]);
-        setFilteredAgentCompanies((prev) => [...prev, result.agentCompany]);
-      }
-
+      await fetchAgentCompanies();
       setIsAgentCompanyModalOpen(false);
       setSelectedAgentCompanyIds([]);
       resetForm();
