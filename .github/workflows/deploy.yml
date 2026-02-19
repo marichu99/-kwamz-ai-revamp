@@ -112,6 +112,9 @@ jobs:
             docker pull ${{ env.FRONTEND_IMAGE }}:latest
             docker stop frontend 2>/dev/null || true
             docker rm frontend 2>/dev/null || true
+            # Kill any other container still holding port 3000
+            docker ps -q --filter "publish=3000" | xargs -r docker stop
+            docker ps -aq --filter "publish=3000" | xargs -r docker rm
             docker run -d --name frontend \
               -p 3000:80 \
               --restart unless-stopped \
