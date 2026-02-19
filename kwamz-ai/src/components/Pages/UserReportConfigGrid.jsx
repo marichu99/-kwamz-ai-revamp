@@ -31,7 +31,7 @@ function UserReportConfigGrid() {
     setIsLoading(true);
     try {
       const token = localStorage.getItem('token');
-      const response = await axios.get(`${config.API_URL}/api/user-report-config/`, {
+      const response = await axios.get(`${config.API_URL}/user-report-config/`, {
         headers: { Authorization: `Bearer ${token}` },
       });
       setConfigs(response.data.data || []);
@@ -144,7 +144,7 @@ function UserReportConfigGrid() {
     try {
       const token = localStorage.getItem('token');
       await axios.post(
-        `${config.API_URL}/api/user-report-config/${selectedConfigIds[0]}/toggle`,
+        `${config.API_URL}/user-report-config/${selectedConfigIds[0]}/toggle`,
         {},
         {
           headers: { Authorization: `Bearer ${token}` },
@@ -178,7 +178,7 @@ function UserReportConfigGrid() {
       const token = localStorage.getItem('token');
       await Promise.all(
         selectedConfigIds.map((id) =>
-          axios.delete(`${config.API_URL}/api/user-report-config/${id}`, {
+          axios.delete(`${config.API_URL}/user-report-config/${id}`, {
             headers: { Authorization: `Bearer ${token}` },
           })
         )
@@ -207,8 +207,8 @@ function UserReportConfigGrid() {
     try {
       const token = localStorage.getItem('token');
       const url = configId
-        ? `${config.API_URL}/api/user-report-config/${configId}`
-        : `${config.API_URL}/api/user-report-config/`;
+        ? `${config.API_URL}/user-report-config/${configId}`
+        : `${config.API_URL}/user-report-config/`;
       const method = configId ? 'PUT' : 'POST';
 
       await axios({
