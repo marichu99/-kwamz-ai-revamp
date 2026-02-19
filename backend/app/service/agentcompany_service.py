@@ -264,6 +264,8 @@ class AgentCompanyService:
                 daily_transaction_limit=float(data.get('daily_transaction_limit', 0.0)),
                 commission_rate=float(data.get('commission_rate', 0.0)),
                 last_audit_date=datetime.strptime(data.get('last_audit_date'), '%Y-%m-%d').date() if data.get('last_audit_date') else None,
+                short_code=data.get('short_code'),
+                commission_account_status='pending',
                 user_id=user_id
             )
             db.session.add(agent_company)
@@ -670,89 +672,6 @@ class AgentCompanyService:
             return {
                 'success': False,
                 'error': f"Failed to update agent company: {str(e)}"
-            }
-    
-    def create_agent_company(self, data: dict, user_id: int = None) -> dict:
-        """
-        Create a new agent company (manual creation)
-        """
-        try:
-            agent_company_code, error = self.get_latest_company_code()
-            if error:
-                return {
-                    'success': False,
-                    'error': f"Failed to generate company code: {error}"
-                }
-            
-            company_id = data.get('company_id')
-            if company_id and not Company.query.get(company_id):
-                return {
-                    'success': False,
-                    'error': 'Invalid company_id'
-                }
-            
-            # Parse dates
-            established_date = None
-            if data.get('established_date'):
-                try:
-                    established_date = datetime.strptime(data['established_date'], '%Y-%m-%d').date()
-                except ValueError:
-                    pass
-            
-            last_audit_date = None
-            if data.get('last_audit_date'):
-                try:
-                    last_audit_date = datetime.strptime(data['last_audit_date'], '%Y-%m-%d').date()
-                except ValueError:
-                    pass
-            
-            # Parse decimal values
-            float_balance = Decimal(str(data.get('float_balance', '0.0')))
-            daily_transaction_limit = Decimal(str(data.get('daily_transaction_limit', '0.0')))
-            commission_rate = Decimal(str(data.get('commission_rate', '0.0')))
-            
-            # Create agent company
-            agent_company = AgentCompany(
-                company_name=data.get('company_name'),
-                registration_number=f"REG-{uuid.uuid4().hex[:8]}",
-                location=data.get('location'),
-                contact_phone=data.get('contact_phone'),
-                email=data.get('email'),
-                agentcompany_code=agent_company_code,
-                till_number=data.get('till_number'),
-                location_details=data.get('location_details'),
-                store_number=data.get('store_number'),
-                agent_number=data.get('agent_number'),
-                company_id=company_id,
-                established_date=established_date,
-                float_balance=float_balance,
-                status=data.get('status', 'active'),
-                fraud_risk_level=data.get('fraud_risk_level', 'low'),
-                fraud_risk_description=data.get('fraud_risk_description'),
-                daily_transaction_limit=daily_transaction_limit,
-                commission_rate=commission_rate,
-                last_audit_date=last_audit_date,
-                user_id=user_id,
-                data_source='manual',
-                is_verified=True  # Manual entries are verified by default
-            )
-            
-            db.session.add(agent_company)
-            db.session.commit()
-            
-            return {
-                'success': True,
-                'message': 'Agent company created successfully',
-                'agent_company': agent_company.to_dict(),
-                'action': 'created'
-            }
-            
-        except Exception as e:
-            db.session.rollback()
-            current_app.logger.error(f"Error creating agent company: {str(e)}")
-            return {
-                'success': False,
-                'error': f"Failed to create agent company: {str(e)}"
             }
     
     def get_agent_company_by_shortcode(self, short_code: str) -> dict:

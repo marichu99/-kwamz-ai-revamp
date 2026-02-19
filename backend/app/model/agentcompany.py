@@ -51,7 +51,8 @@ class AgentCompany(db.Model):
     parent_short_code = db.Column(db.String(50), nullable=True)  # Parent organization's short code
     portal_status = db.Column(db.String(50), nullable=True)  # Status from portal
     business_short_code = db.Column(db.String(50), nullable=True)  # Original business short code used for scraping
-    
+    commission_account_status = db.Column(db.String(50), nullable=True)  # e.g. pending, active, rejected
+
     # Timestamps
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
@@ -117,6 +118,7 @@ class AgentCompany(db.Model):
     parent_short_code=None,
     portal_status=None,
     business_short_code=None,
+    commission_account_status=None,
 
     # Timestamps
     created_at=None,
@@ -153,6 +155,7 @@ class AgentCompany(db.Model):
         self.short_code = short_code
         self.business_short_code = business_short_code
         self.parent_short_code = parent_short_code
+        self.commission_account_status = commission_account_status
 
         # Relationships
         self.company_id = company_id
@@ -247,6 +250,7 @@ class AgentCompany(db.Model):
             'rule_profile': self.rule_profile,
             'trust_level': self.trust_level,
             'parent_short_code': self.parent_short_code,
+            'commission_account_status': self.commission_account_status,
             'is_verified': self.is_verified,
             'data_source': self.data_source,
 

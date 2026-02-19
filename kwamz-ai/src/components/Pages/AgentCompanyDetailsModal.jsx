@@ -11,6 +11,7 @@ function AgentCompanyDetailsModal({ isOpen, onClose, onSubmit, isLoading, agentC
     contact_phone: '',
     store_number: '',
     agent_number: '',
+    short_code: '',
     agentcompany_code: '',
     selected_company: null,
   });
@@ -85,6 +86,7 @@ function AgentCompanyDetailsModal({ isOpen, onClose, onSubmit, isLoading, agentC
         contact_phone: agentCompany.contact_phone || '',
         store_number: agentCompany.store_number || '',
         agent_number: agentCompany.agent_number || '',
+        short_code: agentCompany.short_code || '',
         agentcompany_code: agentCompany.agentcompany_code || '',
         selected_company: agentCompany.selected_company|| null,
       });
@@ -96,6 +98,7 @@ function AgentCompanyDetailsModal({ isOpen, onClose, onSubmit, isLoading, agentC
         contact_phone: '',
         store_number: '',
         agent_number: '',
+        short_code: '',
         agentcompany_code: '',
         selected_company: null,
       });
@@ -206,6 +209,7 @@ function AgentCompanyDetailsModal({ isOpen, onClose, onSubmit, isLoading, agentC
         contact_phone: '',
         store_number: '',
         agent_number: '',
+        short_code: '',
         agentcompany_code: '',
         selected_company: null,
       });
@@ -525,6 +529,22 @@ function AgentCompanyDetailsModal({ isOpen, onClose, onSubmit, isLoading, agentC
                   </p>
                 )}
               </div>
+            </div>
+
+            <div>
+              <label className="flex items-center space-x-2 text-sm font-bold text-slate-700 dark:text-slate-300 mb-3">
+                <Hash className="w-4 h-4 text-violet-600 dark:text-violet-400" />
+                <span>Till Short Code</span>
+              </label>
+              <input
+                type="text"
+                name="short_code"
+                value={formData.short_code}
+                onChange={handleChange}
+                className="w-full px-4 py-3.5 border-2 rounded-xl focus:outline-none focus:ring-2 focus:ring-violet-500 dark:bg-slate-800 dark:text-white transition-all font-medium border-slate-200 dark:border-slate-700 hover:border-slate-300 dark:hover:border-slate-600"
+                placeholder="e.g. 247247"
+                disabled={isLoading}
+              />
             </div>
           </div>
 
