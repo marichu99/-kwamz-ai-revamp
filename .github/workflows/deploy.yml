@@ -133,7 +133,8 @@ jobs:
             # Restart gunicorn via supervisor
             sudo supervisorctl restart kwamz-backend
 
-            # Reload nginx config
+            # Copy updated nginx config and reload
+            sudo cp ~/projects/-kwamz-ai-revamp/nginx/nginx.conf /etc/nginx/nginx.conf
             sudo nginx -t && sudo systemctl reload nginx
 
             # --- Start Frontend (Docker) ---
