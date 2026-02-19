@@ -13,7 +13,7 @@ from datetime import datetime
 import json
 
 
-company_bp = Blueprint('company', __name__, url_prefix='/company')
+company_bp = Blueprint('company', __name__, url_prefix='/company', strict_slashes=False)
 
 company_service = CompanyService(db)
 
