@@ -127,6 +127,8 @@ jobs:
             docker run -d --name celery-worker \
               --network host \
               --env-file ~/projects/-kwamz-ai-revamp/backend/.env \
+              -e DB_MIN_CONNECTIONS=1 \
+              -e DB_MAX_CONNECTIONS=2 \
               --restart unless-stopped \
               ${{ env.CELERY_IMAGE }}:latest
 
@@ -136,6 +138,8 @@ jobs:
             docker run -d --name celery-beat \
               --network host \
               --env-file ~/projects/-kwamz-ai-revamp/backend/.env \
+              -e DB_MIN_CONNECTIONS=1 \
+              -e DB_MAX_CONNECTIONS=2 \
               --restart unless-stopped \
               ${{ env.CELERY_IMAGE }}:latest \
               celery -A worker:celery beat --loglevel=info
