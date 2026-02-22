@@ -38,6 +38,8 @@ jobs:
         run: |
           cd agent
           pyinstaller mpesa_agent.spec
+          # Pre-install Chromium into the dist browsers/ folder
+          PLAYWRIGHT_BROWSERS_PATH=dist/mpesa_agent/browsers playwright install chromium
           mkdir -p ../dist-release
           cp -r dist/mpesa_agent ../dist-release/mpesa_agent-linux
 
@@ -46,6 +48,9 @@ jobs:
         run: |
           cd agent
           pyinstaller mpesa_agent.spec
+          # Pre-install Chromium into the dist browsers/ folder
+          $env:PLAYWRIGHT_BROWSERS_PATH = "dist\mpesa_agent\browsers"
+          playwright install chromium
           mkdir -p ../dist-release
           cp -r dist/mpesa_agent ../dist-release/mpesa_agent-windows
 
