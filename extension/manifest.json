@@ -1,0 +1,42 @@
+{
+  "manifest_version": 3,
+  "name": "Kwamz AI Verifier",
+  "version": "1.0.0",
+  "description": "Client-side KRA PIN and Police Clearance verification for Kwamz AI",
+
+  "permissions": [
+    "tabs",
+    "storage",
+    "scripting",
+    "activeTab",
+    "alarms"
+  ],
+
+  "host_permissions": [
+    "https://kwamz-ai.org/*",
+    "https://itax.kra.go.ke/*",
+    "https://dci.ecitizen.go.ke/*"
+  ],
+
+  "background": {
+    "service_worker": "background.js"
+  },
+
+  "content_scripts": [
+    {
+      "matches": ["https://itax.kra.go.ke/*"],
+      "js": ["content-kra.js"],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": ["https://dci.ecitizen.go.ke/*"],
+      "js": ["content-dci.js"],
+      "run_at": "document_idle"
+    }
+  ],
+
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "Kwamz AI Verifier"
+  }
+}

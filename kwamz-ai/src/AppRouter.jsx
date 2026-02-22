@@ -10,12 +10,16 @@ import AdminSignUpForm from './components/Pages/AdminSignUpForm';
 import SignUpForm from './components/Pages/Signup';
 import ForgotPassword from './components/Pages/ForgotPassword';
 import LandingPage from './components/Pages/LandingPage';
+import ExtensionDownloadPage from './components/Pages/ExtensionDownloadPage';
 
 function AppRouter({ isAuthenticated, currentPage, setCurrentPage }) {
   return (
     <Routes>
       {/* Landing page is always accessible */}
       <Route path="/" element={<LandingPage />} />
+
+      {/* Extension download — always accessible, no login required */}
+      <Route path="/extension" element={<ExtensionDownloadPage />} />
 
       {isAuthenticated ? (
         <>

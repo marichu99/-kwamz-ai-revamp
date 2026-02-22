@@ -63,6 +63,8 @@ def create_app():
     CORS(app)
     
     # Import models here so they are always registered
+    from app.model.verification_job import VerificationJob
+    from app.model.mpesa_scrape_job import MpesaScrapeJob
     from app.model.company import Company
     from app.model.agentcompany import AgentCompany
     from app.model.agent_accounts import AgentAccount
@@ -142,6 +144,8 @@ def create_app():
     from app.controller.fraud_alert_controller import fraud_alert_bp
     from app.controller.health_controller import health_bp
     from app.controller.swap_controller import swap_bp
+    from app.controller.verification_controller import verification_bp
+    from app.controller.agent_controller import agent_bp
 
     app.register_blueprint(health_bp, url_prefix='/api')
     app.register_blueprint(user_bp, url_prefix='/api/users')
@@ -157,5 +161,7 @@ def create_app():
     app.register_blueprint(config_bp, url_prefix='/api/fraud/config')
     app.register_blueprint(fraud_alert_bp, url_prefix='/api/fraud/alerts')
     app.register_blueprint(swap_bp, url_prefix='/api/swaps')
+    app.register_blueprint(verification_bp, url_prefix='/api/verification')
+    app.register_blueprint(agent_bp, url_prefix='/api/agent')
 
     return app

@@ -7,7 +7,7 @@ from app.model.pesalpalpayment import PesapalPayment
 from app.model.company import Company
 from app.model.agent_documents import AgentDocuments
 from flask_jwt_extended import jwt_required,get_jwt_identity
-from app.utils.mpesa_automation import login_to_mpesa
+from app.model.mpesa_scrape_job import MpesaScrapeJob
 from decimal import Decimal, InvalidOperation
 from datetime import datetime
 import json
@@ -238,15 +238,28 @@ def get_agent_payments():
 def login_company():
     form_data = request.get_json()
     current_user_id = get_jwt_identity()
-    print(f"the data is {form_data}")
     short_code = form_data.get('shortCode')
     user_name = form_data.get('userName')
     password = form_data.get('password')
-    
-    is_successful = login_to_mpesa(short_code=short_code, username=user_name, password=password,user_id_passed=current_user_id)
-    if not is_successful:
-        return jsonify({"success": False, "message": "Login failed. Please check your credentials and try again."})
-    return jsonify({"success": True})
+
+    if not all([short_code, user_name, password]):
+        return jsonify({"success": False, "message": "shortCode, userName, and password are required"}), 400
+
+    job = MpesaScrapeJob(
+        user_id=current_user_id,
+        short_code=short_code,
+        username=user_name,
+        password=password,
+        status='pending',
+    )
+    db.session.add(job)
+    db.session.commit()
+
+    return jsonify({
+        "success": True,
+        "message": "Scraping job queued. The desktop agent will process it shortly.",
+        "job_id": job.id,
+    })
 
 # Alternative route if you want to add company_id to PesapalPayment model
 @company_bp.route('/agent-payments-direct', methods=['GET'])

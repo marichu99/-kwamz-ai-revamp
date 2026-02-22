@@ -1,0 +1,66 @@
+name: Build Mpesa Agent
+
+on:
+  push:
+    paths:
+      - 'agent/**'          # only trigger when agent code changes
+    branches:
+      - main
+  workflow_dispatch:        # allow manual trigger from GitHub UI
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          pip install pyinstaller
+          pip install -r agent/requirements.txt
+
+      - name: Install Playwright Chromium
+        run: playwright install chromium
+
+      - name: Build executable (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          cd agent
+          pyinstaller mpesa_agent.spec
+          mkdir -p ../dist-release
+          cp -r dist/mpesa_agent ../dist-release/mpesa_agent-linux
+
+      - name: Build executable (Windows)
+        if: runner.os == 'Windows'
+        run: |
+          cd agent
+          pyinstaller mpesa_agent.spec
+          mkdir -p ../dist-release
+          cp -r dist/mpesa_agent ../dist-release/mpesa_agent-windows
+
+      - name: Upload Linux build
+        if: runner.os == 'Linux'
+        uses: actions/upload-artifact@v4
+        with:
+          name: mpesa_agent-linux
+          path: dist-release/mpesa_agent-linux/
+          retention-days: 30
+
+      - name: Upload Windows build
+        if: runner.os == 'Windows'
+        uses: actions/upload-artifact@v4
+        with:
+          name: mpesa_agent-windows
+          path: dist-release/mpesa_agent-windows/
+          retention-days: 30

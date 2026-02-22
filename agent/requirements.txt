@@ -1,0 +1,8 @@
+playwright==1.44.0
+Pillow
+beautifulsoup4
+pandas
+openpyxl
+requests
+numpy
+python-dotenv
