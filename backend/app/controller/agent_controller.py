@@ -6,7 +6,7 @@ Set AGENT_SECRET in the server .env.  The agent reads the same value from its
 own config so no user-level token management is needed.
 """
 
-from flask import Blueprint, jsonify, request
+from flask import Blueprint, jsonify, request, send_from_directory
 from app import db
 from app.model.mpesa_scrape_job import MpesaScrapeJob
 from app.model.verification_job import VerificationJob
@@ -531,3 +531,36 @@ def solve_arithmetic_captcha():
     finally:
         if tmp_path and os.path.exists(tmp_path):
             os.remove(tmp_path)
+
+
+# ── Agent binary downloads ─────────────────────────────────────────────────────
+
+ALLOWED_DOWNLOADS = {'mpesa_agent-linux.zip', 'mpesa_agent-windows.zip'}
+
+
+@agent_bp.route('/downloads/<filename>', methods=['GET'])
+def download_agent(filename):
+    """
+    Serve pre-built agent binaries from AGENT_DOWNLOADS_DIR.
+    No auth required — these are public downloads.
+
+    Place zip files at:
+      $AGENT_DOWNLOADS_DIR/mpesa_agent-linux.zip
+      $AGENT_DOWNLOADS_DIR/mpesa_agent-windows.zip
+
+    Accessible at:
+      GET /api/agent/downloads/mpesa_agent-linux.zip
+      GET /api/agent/downloads/mpesa_agent-windows.zip
+    """
+    if filename not in ALLOWED_DOWNLOADS:
+        return jsonify({'error': 'File not found'}), 404
+
+    downloads_dir = os.getenv('AGENT_DOWNLOADS_DIR', '/opt/kwamz-downloads')
+    if not os.path.isdir(downloads_dir):
+        return jsonify({'error': 'Downloads directory not configured on server'}), 503
+
+    file_path = os.path.join(downloads_dir, filename)
+    if not os.path.isfile(file_path):
+        return jsonify({'error': 'File not yet available'}), 404
+
+    return send_from_directory(downloads_dir, filename, as_attachment=True)
