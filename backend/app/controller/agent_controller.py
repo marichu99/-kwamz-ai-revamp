@@ -9,6 +9,7 @@ own config so no user-level token management is needed.
 from flask import Blueprint, jsonify, request
 from app import db
 from app.model.mpesa_scrape_job import MpesaScrapeJob
+from app.model.verification_job import VerificationJob
 from app.service.transaction_service import TransactionService
 from app.service.agentcompany_service import AgentCompanyService
 from app.service.email_outbox_service import EmailOutboxService
@@ -21,9 +22,12 @@ from app.tasks.fraud_detection_tasks import run_fraud_detection_for_user
 from datetime import datetime
 from functools import wraps
 from openai import OpenAI
+from PIL import Image
+import pytesseract
 import pandas as pd
 import base64
 import tempfile
+import re
 import os
 
 agent_bp = Blueprint('agent', __name__)
@@ -411,3 +415,119 @@ def trigger_fraud_detection():
     except Exception as e:
         # Celery may be unavailable — not fatal
         return jsonify({'ok': False, 'error': str(e)}), 200
+
+
+# ── KRA / DCI verification job endpoints ──────────────────────────────────────
+
+@agent_bp.route('/verification/pending', methods=['GET'])
+@agent_auth_required
+def get_pending_verification_job():
+    """
+    Returns the oldest pending verification job and marks it as running.
+    Uses skip_locked so multiple agent instances don't double-claim.
+    """
+    job = (
+        VerificationJob.query
+        .filter_by(status='pending')
+        .order_by(VerificationJob.created_at.asc())
+        .with_for_update(skip_locked=True)
+        .first()
+    )
+    if not job:
+        return jsonify({'job': None}), 200
+
+    job.status = 'running'
+    db.session.commit()
+
+    return jsonify({
+        'job': {
+            'job_id': job.id,
+            'kra_pin': job.kra_pin,
+            'police_clearance': job.police_clearance,
+            'id_number': job.id_number,
+            'taxpayer_name': job.taxpayer_name,
+        }
+    }), 200
+
+
+@agent_bp.route('/verification/<job_id>/complete', methods=['POST'])
+@agent_auth_required
+def verification_complete(job_id):
+    """Body: { "kra_result": "...", "police_result": "..." }"""
+    job = VerificationJob.query.get(job_id)
+    if not job:
+        return jsonify({'error': 'Job not found'}), 404
+
+    data = request.json or {}
+    job.kra_result = data.get('kra_result')
+    job.police_result = data.get('police_result')
+    job.status = 'completed'
+    job.completed_at = datetime.utcnow()
+    db.session.commit()
+    return jsonify({'ok': True}), 200
+
+
+@agent_bp.route('/verification/<job_id>/failed', methods=['POST'])
+@agent_auth_required
+def verification_failed(job_id):
+    """Body: { "error": "..." }"""
+    job = VerificationJob.query.get(job_id)
+    if not job:
+        return jsonify({'error': 'Job not found'}), 404
+
+    data = request.json or {}
+    job.status = 'failed'
+    job.completed_at = datetime.utcnow()
+    db.session.commit()
+    return jsonify({'ok': True}), 200
+
+
+@agent_bp.route('/captcha/solve-arithmetic', methods=['POST'])
+@agent_auth_required
+def solve_arithmetic_captcha():
+    """
+    Solves a math CAPTCHA image (e.g. "3 + 5") using pytesseract OCR.
+    Used by the agent for KRA PIN checker captchas.
+
+    Body: { "image_b64": "..." }
+    """
+    data = request.json or {}
+    image_b64 = data.get('image_b64')
+    if not image_b64:
+        return jsonify({'error': 'image_b64 is required'}), 400
+
+    tmp_path = None
+    try:
+        image_data = base64.b64decode(image_b64)
+        with tempfile.NamedTemporaryFile(delete=False, suffix='.png') as tmp:
+            tmp.write(image_data)
+            tmp_path = tmp.name
+
+        captcha_image = Image.open(tmp_path)
+        captcha_text = pytesseract.image_to_string(captcha_image, config='--psm 7').strip()
+
+        match = re.match(r'(\d+)\s*([\+\-\*/xX])\s*(\d+)', captcha_text)
+        if not match:
+            return jsonify({'error': f'Could not parse CAPTCHA: {captcha_text}'}), 422
+
+        num1, operator, num2 = match.groups()
+        num1, num2 = int(num1), int(num2)
+
+        if operator == '+':
+            result = num1 + num2
+        elif operator == '-':
+            result = num1 - num2
+        elif operator in ('*', 'x', 'X'):
+            result = num1 * num2
+        elif operator == '/':
+            result = num1 // num2
+        else:
+            return jsonify({'error': f'Unsupported operator: {operator}'}), 422
+
+        return jsonify({'answer': str(result)}), 200
+
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+    finally:
+        if tmp_path and os.path.exists(tmp_path):
+            os.remove(tmp_path)

@@ -205,6 +205,29 @@ class BackendClient:
         except Exception as e:
             print(f'[WARN] trigger_fraud_detection failed: {e}')
 
+    # ── Verification job lifecycle ──────────────────────────────────────────
+
+    def poll_verification_job(self) -> Optional[dict]:
+        data = self.get('/api/agent/verification/pending')
+        return data.get('job')
+
+    def complete_verification_job(self, job_id: str, kra_result: str, police_result: str):
+        self.post(f'/api/agent/verification/{job_id}/complete', {
+            'kra_result': kra_result,
+            'police_result': police_result,
+        })
+
+    def fail_verification_job(self, job_id: str, error: str):
+        try:
+            self.post(f'/api/agent/verification/{job_id}/failed', {'error': error})
+        except Exception:
+            pass
+
+    def solve_arithmetic_captcha(self, image_b64: str) -> str:
+        """Send a KRA math CAPTCHA image to the backend; returns the computed answer."""
+        result = self.post('/api/agent/captcha/solve-arithmetic', {'image_b64': image_b64})
+        return result.get('answer', '')
+
 
 # ── Global agent state (scoped per job run) ───────────────────────────────────
 
@@ -1385,6 +1408,120 @@ def run_scrape_job(job: dict) -> None:
         browser.close()
 
 
+# ── KRA / DCI verification ────────────────────────────────────────────────────
+
+def run_kra_verification(page: Page, kra_pin: str) -> str:
+    """Verify a KRA PIN via the iTax PIN checker portal."""
+    try:
+        page.goto('https://itax.kra.go.ke/KRA-Portal/pinChecker.htm', timeout=30000)
+        # ID 'vo.pinNo' — use XPath to avoid CSS dot-escaping issues
+        page.wait_for_selector("//input[@id='vo.pinNo']", state='visible', timeout=10000)
+        page.fill("//input[@id='vo.pinNo']", kra_pin)
+
+        captcha_img = page.wait_for_selector('#captcha_img', state='visible', timeout=10000)
+        time.sleep(1)
+
+        captcha_path = os.path.join(tempfile.gettempdir(), 'kra_captcha.png')
+        captcha_img.screenshot(path=captcha_path)
+
+        with open(captcha_path, 'rb') as f:
+            image_b64 = base64.b64encode(f.read()).decode()
+
+        answer = api.solve_arithmetic_captcha(image_b64)
+        print(f'[KRA] Captcha solved: {answer}')
+
+        # ID 'captcahText' — this is the actual DOM ID on the KRA portal (typo preserved)
+        page.fill('#captcahText', answer)
+        page.click('#consult')
+        time.sleep(3)
+
+        result = page.evaluate('''() => {
+            const tables = document.querySelectorAll("table.tab3.whitepapartdBig");
+            const table = tables[1] || tables[0];
+            if (!table) return "No result table found";
+            const rows = table.querySelectorAll("tr");
+            for (const row of rows) {
+                const cells = row.querySelectorAll("td");
+                if (cells.length >= 2 && cells[0].innerText.trim() === "PIN Status")
+                    return cells[1].innerText.trim();
+            }
+            return "PIN Status not found";
+        }''')
+        print(f'[KRA] Result: {result}')
+        return result
+
+    except Exception as e:
+        print(f'[ERROR] run_kra_verification: {e}')
+        return f'Error: {e}'
+
+
+def run_dci_verification(page: Page, police_clearance: str, id_number: str) -> str:
+    """Verify a police clearance certificate via the DCI eCitizen portal."""
+    try:
+        page.goto('https://dci.ecitizen.go.ke/verify', timeout=30000)
+        page.wait_for_selector('#q_service_id', state='visible', timeout=10000)
+        page.select_option('#q_service_id', '1')  # "Police Clearance"
+        time.sleep(0.5)
+
+        page.wait_for_selector('#q_ref_number', state='visible', timeout=5000)
+        page.fill('#q_ref_number', police_clearance)
+
+        page.wait_for_selector('#q_security_question', state='visible', timeout=5000)
+        page.fill('#q_security_question', id_number)
+
+        page.click('.btn.btn-primary.btn-sm')
+        page.evaluate('window.scrollBy(0, 300)')
+        time.sleep(5)
+
+        if page.locator('table h1').count() > 0:
+            result = page.locator('table h1').first.inner_text().strip()
+        elif page.locator('.alert').count() > 0:
+            result = page.locator('.alert').first.inner_text().strip()
+        else:
+            result = 'Result not found'
+
+        print(f'[DCI] Result: {result}')
+        return result
+
+    except Exception as e:
+        print(f'[ERROR] run_dci_verification: {e}')
+        return f'Error: {e}'
+
+
+def run_verification_job(job: dict) -> None:
+    """Run KRA PIN + DCI police clearance verification in a single browser session."""
+    job_id = job['job_id']
+    kra_pin = job['kra_pin']
+    police_clearance = job['police_clearance']
+    id_number = job['id_number']
+
+    print(f'[VERIFY] Starting verification job {job_id} — KRA PIN: {kra_pin}')
+
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=False, args=['--start-maximized'])
+        context = browser.new_context(no_viewport=True)
+        try:
+            kra_page = context.new_page()
+            kra_result = run_kra_verification(kra_page, kra_pin)
+            kra_page.close()
+
+            dci_page = context.new_page()
+            dci_result = run_dci_verification(dci_page, police_clearance, id_number)
+            dci_page.close()
+
+            api.complete_verification_job(job_id, kra_result=kra_result, police_result=dci_result)
+            print(f'[VERIFY] Job {job_id} completed — KRA: {kra_result} | DCI: {dci_result}')
+
+        except Exception as e:
+            error_msg = traceback.format_exc()
+            print(f'[VERIFY] Job {job_id} failed:\n{error_msg}')
+            api.fail_verification_job(job_id, str(e))
+            raise
+        finally:
+            context.close()
+            browser.close()
+
+
 # ── Polling loop ──────────────────────────────────────────────────────────────
 
 def main():
@@ -1399,6 +1536,7 @@ def main():
 
     while True:
         try:
+            # ── Mpesa scrape jobs ──────────────────────────────────────────
             job = api.poll_job()
             if job:
                 job_id = job['job_id']
@@ -1410,9 +1548,19 @@ def main():
                     error_msg = traceback.format_exc()
                     print(f'[JOB] {job_id} failed:\n{error_msg}')
                     api.fail_job(job_id, str(e))
-            else:
-                print(f'[IDLE] No pending jobs. Sleeping {POLL_INTERVAL}s...')
-                time.sleep(POLL_INTERVAL)
+                continue  # re-poll immediately
+
+            # ── KRA / DCI verification jobs ────────────────────────────────
+            v_job = api.poll_verification_job()
+            if v_job:
+                try:
+                    run_verification_job(v_job)
+                except Exception:
+                    pass  # error already logged and reported inside run_verification_job
+                continue  # re-poll immediately
+
+            print(f'[IDLE] No pending jobs. Sleeping {POLL_INTERVAL}s...')
+            time.sleep(POLL_INTERVAL)
 
         except KeyboardInterrupt:
             print('\n[INFO] Agent stopped by user.')
