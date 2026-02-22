@@ -22,16 +22,39 @@ load_dotenv(dotenv_path=os.path.join(os.path.dirname(__file__), '.env'))
 
 def _ensure_chromium():
     """Install Playwright's Chromium on first run if not already present."""
-    try:
-        from playwright.sync_api import sync_playwright
-        with sync_playwright() as p:
-            p.chromium.launch(headless=True).close()
-    except Exception:
+
+    # Determine base path — different when frozen by PyInstaller
+    if getattr(sys, 'frozen', False):
+        base_path = os.path.dirname(sys.executable)
+        # Playwright bundles its own Node-based CLI inside _internal/
+        if os.name == 'nt':
+            playwright_cli = os.path.join(base_path, '_internal', 'playwright', 'driver', 'playwright.cmd')
+        else:
+            playwright_cli = os.path.join(base_path, '_internal', 'playwright', 'driver', 'playwright.sh')
+    else:
+        base_path = os.path.dirname(os.path.abspath(__file__))
+        playwright_cli = None  # use python -m playwright when not frozen
+
+    # Store browsers next to the executable so they survive restarts
+    browsers_path = os.path.join(base_path, 'browsers')
+    os.environ['PLAYWRIGHT_BROWSERS_PATH'] = browsers_path
+
+    # Check if chromium is already installed
+    chromium_exists = (
+        os.path.isdir(browsers_path) and
+        any('chromium' in d for d in os.listdir(browsers_path))
+    )
+
+    if not chromium_exists:
         print('[SETUP] Chromium not found — installing now (one-time, ~150MB)...')
-        subprocess.run(
-            [sys.executable, '-m', 'playwright', 'install', 'chromium'],
-            check=True
-        )
+        if playwright_cli and os.path.exists(playwright_cli):
+            subprocess.run([playwright_cli, 'install', 'chromium'], check=True)
+        else:
+            # Not frozen — standard python -m playwright works fine
+            subprocess.run(
+                [sys.executable, '-m', 'playwright', 'install', 'chromium'],
+                check=True
+            )
         print('[SETUP] Chromium installed successfully.')
 
 _ensure_chromium()
