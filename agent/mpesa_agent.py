@@ -18,23 +18,13 @@ import os
 import subprocess
 import sys
 from dotenv import load_dotenv
-load_dotenv(dotenv_path=os.path.join(os.path.dirname(__file__), '.env'))
 
-def _set_browsers_path():
-    """
-    Point Playwright at the browsers/ folder next to the executable.
-    When frozen by PyInstaller the CI build pre-installs Chromium there,
-    so no download is needed at runtime.
-    """
-    if getattr(sys, 'frozen', False):
-        base_path = os.path.dirname(sys.executable)
-    else:
-        base_path = os.path.dirname(os.path.abspath(__file__))
+# When frozen by PyInstaller, __file__ points inside _internal/ not next to the exe
+_base_path = os.path.dirname(sys.executable) if getattr(sys, 'frozen', False) \
+             else os.path.dirname(os.path.abspath(__file__))
+load_dotenv(dotenv_path=os.path.join(_base_path, '.env'))
 
-    browsers_path = os.path.join(base_path, 'browsers')
-    os.environ['PLAYWRIGHT_BROWSERS_PATH'] = browsers_path
-
-_set_browsers_path()
+os.environ['PLAYWRIGHT_BROWSERS_PATH'] = os.path.join(_base_path, 'browsers')
 
 from playwright.sync_api import sync_playwright, Page, Locator, Download, TimeoutError as PlaywrightTimeoutError
 from PIL import Image
