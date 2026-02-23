@@ -11,6 +11,7 @@ import SignUpForm from './components/Pages/Signup';
 import ForgotPassword from './components/Pages/ForgotPassword';
 import LandingPage from './components/Pages/LandingPage';
 import ExtensionDownloadPage from './components/Pages/ExtensionDownloadPage';
+import AgentDownloadPage from './components/Pages/AgentDownloadPage';
 
 function AppRouter({ isAuthenticated, currentPage, setCurrentPage }) {
   return (
@@ -20,6 +21,9 @@ function AppRouter({ isAuthenticated, currentPage, setCurrentPage }) {
 
       {/* Extension download — always accessible, no login required */}
       <Route path="/extension" element={<ExtensionDownloadPage />} />
+
+      {/* Agent download — always accessible, no login required */}
+      <Route path="/agent/download" element={<AgentDownloadPage />} />
 
       {isAuthenticated ? (
         <>
