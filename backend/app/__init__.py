@@ -24,22 +24,25 @@ def create_app():
     app.config['SQLALCHEMY_DATABASE_URI'] = os.getenv('DATABASE_URL')
     app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 
-    # Connection pool settings - use smaller pools for Celery workers
+    # Connection pool settings
+    # Celery workers use NullPool — connections are never pooled, each task
+    # opens and immediately closes its own connection. This prevents Celery
+    # from exhausting PostgreSQL's max_connections across many concurrent workers.
     is_celery = 'celery' in sys.argv[0] if sys.argv else False
     if is_celery:
-        pool_size = int(os.getenv('CELERY_DB_POOL_SIZE', '2'))
-        max_overflow = int(os.getenv('CELERY_DB_MAX_OVERFLOW', '3'))
+        from sqlalchemy.pool import NullPool
+        app.config['SQLALCHEMY_ENGINE_OPTIONS'] = {
+            'poolclass': NullPool,
+            'pool_pre_ping': True,
+        }
     else:
-        pool_size = int(os.getenv('DB_POOL_SIZE', '5'))
-        max_overflow = int(os.getenv('DB_MAX_OVERFLOW', '5'))
-
-    app.config['SQLALCHEMY_ENGINE_OPTIONS'] = {
-        'pool_size': pool_size,
-        'max_overflow': max_overflow,
-        'pool_timeout': int(os.getenv('DB_POOL_TIMEOUT', '30')),
-        'pool_recycle': int(os.getenv('DB_POOL_RECYCLE', '1800')),
-        'pool_pre_ping': True,
-    }
+        app.config['SQLALCHEMY_ENGINE_OPTIONS'] = {
+            'pool_size': int(os.getenv('DB_POOL_SIZE', '5')),
+            'max_overflow': int(os.getenv('DB_MAX_OVERFLOW', '5')),
+            'pool_timeout': int(os.getenv('DB_POOL_TIMEOUT', '30')),
+            'pool_recycle': int(os.getenv('DB_POOL_RECYCLE', '1800')),
+            'pool_pre_ping': True,
+        }
     app.config['JWT_SECRET_KEY'] = os.getenv('JWT_SECRET_KEY', 'your-secret-key')
     app.config['JWT_ACCESS_TOKEN_EXPIRES'] = 3600
     app.config['GCP_BUCKET'] = os.getenv('GCP_BUCKET', 'trovana-docs')
