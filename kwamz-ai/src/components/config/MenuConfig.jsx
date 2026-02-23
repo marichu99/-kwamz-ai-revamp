@@ -50,7 +50,6 @@ export const adminMenuItems = [
         id: "agent-download",
         icon: Download,
         label: "Download Agent",
-        href: "/agent/download",
     },
 ];
 
@@ -74,7 +73,6 @@ export const agentMenuItems = [
         id: "agent-download",
         icon: Download,
         label: "Download Agent",
-        href: "/agent/download",
     },
 ];
 
@@ -136,7 +134,6 @@ const userMenuItems = [
         id: "agent-download",
         icon: Download,
         label: "Download Agent",
-        href: "/agent/download",
     },
 ];
 

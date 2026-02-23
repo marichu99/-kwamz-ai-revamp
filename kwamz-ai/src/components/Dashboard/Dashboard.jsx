@@ -18,6 +18,7 @@ import ConfigGrid from '../Pages/ConfigGrid';
 import UserReportConfigGrid from '../Pages/UserReportConfigGrid';
 import FraudAlertsGrid from '../Pages/FraudAlertsGrid';
 import SwapHistoryGrid from '../Pages/SwapHistoryGrid';
+import AgentDownloadPage from '../Pages/AgentDownloadPage';
 import { analyticsApi } from '../../service/AnalyticsApi';
 import { Loader2, AlertCircle, RefreshCw } from 'lucide-react';
 
@@ -136,6 +137,7 @@ function Dashboard({ currentPage, setCurrentPage }) {
         {currentPage === 'report-schedules' && <UserReportConfigGrid />}
         {currentPage === 'fraud-alerts' && <FraudAlertsGrid />}
         {currentPage === 'swap-history' && <SwapHistoryGrid />}
+        {currentPage === 'agent-download' && <AgentDownloadPage />}
       </div>
     </div>
   );
