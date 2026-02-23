@@ -1433,7 +1433,8 @@ def run_kra_verification(page: Page, kra_pin: str) -> str:
         # ID 'captcahText' — this is the actual DOM ID on the KRA portal (typo preserved)
         page.fill('#captcahText', answer)
         page.click('#consult')
-        time.sleep(3)
+        page.evaluate('window.scrollTo(0, document.body.scrollHeight)')
+        time.sleep(5)
 
         result = page.evaluate('''() => {
             const tables = document.querySelectorAll("table.tab3.whitepapartdBig");
@@ -1470,7 +1471,7 @@ def run_dci_verification(page: Page, police_clearance: str, id_number: str) -> s
         page.fill('#q_security_question', id_number)
 
         page.click('.btn.btn-primary.btn-sm')
-        page.evaluate('window.scrollBy(0, 300)')
+        page.evaluate('window.scrollTo(0, document.body.scrollHeight)')
         time.sleep(5)
 
         if page.locator('table h1').count() > 0:
