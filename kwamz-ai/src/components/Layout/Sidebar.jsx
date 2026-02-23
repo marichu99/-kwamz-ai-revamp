@@ -92,7 +92,10 @@ function Sidebar({ collapsed, onToggle, currentPage, onPageChange }) {
     };
 
     const handleItemClick = (itemId) => {
-        if (menuItems.find(item => item.id === itemId)?.submenu) {
+        const item = menuItems.find(i => i.id === itemId);
+        if (item?.href) {
+            navigate(item.href);
+        } else if (item?.submenu) {
             toggleSubmenu(itemId);
         } else {
             onPageChange(itemId);

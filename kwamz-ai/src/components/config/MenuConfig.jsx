@@ -8,6 +8,7 @@ import {
     Clock,
     Shield,
     Repeat,
+    Download,
 } from 'lucide-react';
 
 export const adminMenuItems = [
@@ -45,6 +46,12 @@ export const adminMenuItems = [
         icon: Wallet,
         label: "Transactions",
     },
+    {
+        id: "agent-download",
+        icon: Download,
+        label: "Download Agent",
+        href: "/agent/download",
+    },
 ];
 
 export const agentMenuItems = [
@@ -62,6 +69,12 @@ export const agentMenuItems = [
         id: "transactions",
         icon: Wallet,
         label: "My Transactions",
+    },
+    {
+        id: "agent-download",
+        icon: Download,
+        label: "Download Agent",
+        href: "/agent/download",
     },
 ];
 
@@ -118,6 +131,12 @@ const userMenuItems = [
         submenu: [
             { id: "report-schedules", label: "Report Schedules" },
         ]
+    },
+    {
+        id: "agent-download",
+        icon: Download,
+        label: "Download Agent",
+        href: "/agent/download",
     },
 ];
 
