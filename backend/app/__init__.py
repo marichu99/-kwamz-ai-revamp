@@ -122,6 +122,17 @@ def create_app():
 
     with app.app_context():
         db.create_all()
+        # Apply any saved Pesapal config from DB before initializing
+        try:
+            from app.model.config import SmtpConfig
+            smtp_cfg = SmtpConfig.get_global()
+            if smtp_cfg.pesapal_callback_url:
+                pesapal_client.config.callback_url = smtp_cfg.pesapal_callback_url
+            if smtp_cfg.pesapal_environment:
+                pesapal_client.config.environment = smtp_cfg.pesapal_environment
+        except Exception as _e:
+            db.session.rollback()
+            print(f"Warning: Could not apply Pesapal config from DB: {_e}")
         pesapal_client.initialize()
 
     # Attach to app for access in blueprints

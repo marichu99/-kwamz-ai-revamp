@@ -4,9 +4,28 @@ from app import db
 from app.model.user import User
 from app.model.agentcompany import AgentCompany
 from app.model.subscription import Subscription
+from app.model.config import SmtpConfig
 
-RATE_PER_TILL = Decimal('200.00')
-TRIAL_DAYS = 30
+_DEFAULT_RATE_PER_TILL = Decimal('200.00')
+_DEFAULT_TRIAL_DAYS = 30
+
+
+def _get_trial_days():
+    try:
+        cfg = SmtpConfig.get_global()
+        return cfg.trial_days if cfg.trial_days is not None else _DEFAULT_TRIAL_DAYS
+    except Exception:
+        db.session.rollback()
+        return _DEFAULT_TRIAL_DAYS
+
+
+def _get_rate_per_till():
+    try:
+        cfg = SmtpConfig.get_global()
+        return Decimal(str(cfg.rate_per_till)) if cfg.rate_per_till is not None else _DEFAULT_RATE_PER_TILL
+    except Exception:
+        db.session.rollback()
+        return _DEFAULT_RATE_PER_TILL
 
 
 class BillingService:
@@ -22,7 +41,7 @@ class BillingService:
     @staticmethod
     def calculate_monthly_bill(user_id):
         count = BillingService.get_active_tills_count(user_id)
-        return count, count * RATE_PER_TILL
+        return count, count * _get_rate_per_till()
 
     @staticmethod
     def get_current_billing_period():
@@ -39,20 +58,20 @@ class BillingService:
     def is_in_trial(user):
         if not user.created_at:
             return False
-        trial_end = user.created_at + timedelta(days=TRIAL_DAYS)
+        trial_end = user.created_at + timedelta(days=_get_trial_days())
         return datetime.utcnow() <= trial_end
 
     @staticmethod
     def get_trial_end_date(user):
         if not user.created_at:
             return None
-        return (user.created_at + timedelta(days=TRIAL_DAYS)).date()
+        return (user.created_at + timedelta(days=_get_trial_days())).date()
 
     @staticmethod
     def get_trial_days_remaining(user):
         if not user.created_at:
             return 0
-        trial_end = user.created_at + timedelta(days=TRIAL_DAYS)
+        trial_end = user.created_at + timedelta(days=_get_trial_days())
         remaining = (trial_end - datetime.utcnow()).days
         return max(0, remaining)
 
@@ -80,7 +99,7 @@ class BillingService:
                 'trial_days_remaining': BillingService.get_trial_days_remaining(user),
                 'active_tills_count': tills_count,
                 'amount_due': float(amount),
-                'rate_per_till': float(RATE_PER_TILL),
+                'rate_per_till': float(_get_rate_per_till()),
                 'subscription': None,
             }
 
@@ -95,7 +114,7 @@ class BillingService:
                 'trial_days_remaining': 0,
                 'active_tills_count': tills_count,
                 'amount_due': float(amount),
-                'rate_per_till': float(RATE_PER_TILL),
+                'rate_per_till': float(_get_rate_per_till()),
                 'subscription': subscription.to_dict(),
             }
 
@@ -105,7 +124,7 @@ class BillingService:
             'trial_days_remaining': 0,
             'active_tills_count': tills_count,
             'amount_due': float(amount),
-            'rate_per_till': float(RATE_PER_TILL),
+            'rate_per_till': float(_get_rate_per_till()),
             'subscription': subscription.to_dict() if subscription else None,
         }
 
@@ -153,7 +172,7 @@ class BillingService:
 
         tills = BillingService.get_active_tills(user_id)
         tills_count = len(tills)
-        amount = tills_count * RATE_PER_TILL
+        amount = tills_count * _get_rate_per_till()
 
         # Payment history (last 6 months)
         recent_subscriptions = Subscription.query.filter_by(
@@ -170,7 +189,7 @@ class BillingService:
                 'till_number': t.till_number,
             } for t in tills],
             'active_tills_count': tills_count,
-            'rate_per_till': float(RATE_PER_TILL),
+            'rate_per_till': float(_get_rate_per_till()),
             'total_amount_due': float(amount),
             'currency': 'KES',
             'is_trial': BillingService.is_in_trial(user),

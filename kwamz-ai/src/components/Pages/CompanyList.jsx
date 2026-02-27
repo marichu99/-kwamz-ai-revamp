@@ -33,7 +33,7 @@ function CompanyList() {
     setIsLoading(true);
     try {
       const token = localStorage.getItem('token');
-      const response = await axios.get(`${config.API_URL}/company`, {
+      const response = await axios.get(`${config.API_URL}/company/`, {
         headers: { Authorization: `Bearer ${token}` },
       });
       setCompanies(response.data);
@@ -298,7 +298,7 @@ function CompanyList() {
       }
 
       const token = localStorage.getItem('token');
-      const url = companyId ? `${config.API_URL}/company/${companyId}` : `${config.API_URL}/company`;
+      const url = companyId ? `${config.API_URL}/company/${companyId}` : `${config.API_URL}/company/`;
       const method = companyId ? 'PUT' : 'POST';
 
       const res = await fetch(url, {

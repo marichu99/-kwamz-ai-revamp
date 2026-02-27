@@ -8,7 +8,9 @@ from datetime import datetime, timedelta
 from app.model.user import User
 from app.model.company import Company
 from app.model.pesalpalpayment import PesapalPayment
+from app.model.pesapalipnconfig import PesapalIPNConfig
 from app.model.subscription import Subscription
+from app.model.config import SmtpConfig
 from app import db
 
 import os
@@ -318,6 +320,123 @@ def admin_update_payment_status(target_user_id):
     except Exception as e:
         db.session.rollback()
         return jsonify({'success': False, 'error': str(e)}), 400
+
+
+@payment_bp.route('/admin/ipn-configs', methods=['GET'])
+@jwt_required()
+def admin_list_ipn_configs():
+    current_user_id = get_jwt_identity()
+    current_user = UserService.get_user_by_id(user_id=current_user_id)
+    if not current_user or current_user.role != 'admin':
+        return jsonify({'success': False, 'error': 'Admin access required'}), 403
+
+    configs = PesapalIPNConfig.query.order_by(PesapalIPNConfig.created_at.desc()).all()
+    return jsonify({'success': True, 'configs': [c.to_dict() for c in configs]})
+
+
+@payment_bp.route('/admin/ipn-configs/register', methods=['POST'])
+@jwt_required()
+def admin_register_ipn():
+    current_user_id = get_jwt_identity()
+    current_user = UserService.get_user_by_id(user_id=current_user_id)
+    if not current_user or current_user.role != 'admin':
+        return jsonify({'success': False, 'error': 'Admin access required'}), 403
+
+    data = request.json or {}
+    ipn_url = data.get('ipn_url', '').strip()
+    ipn_notification_type = data.get('ipn_notification_type', 'GET')
+
+    if not ipn_url:
+        return jsonify({'success': False, 'error': 'ipn_url is required'}), 400
+
+    try:
+        response = current_app.pesapal_client.ipn.register_ipn(ipn_url, ipn_notification_type)
+        return jsonify({'success': True, 'data': response})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 400
+
+
+@payment_bp.route('/admin/ipn-configs/<int:config_id>/activate', methods=['POST'])
+@jwt_required()
+def admin_activate_ipn_config(config_id):
+    current_user_id = get_jwt_identity()
+    current_user = UserService.get_user_by_id(user_id=current_user_id)
+    if not current_user or current_user.role != 'admin':
+        return jsonify({'success': False, 'error': 'Admin access required'}), 403
+
+    config = PesapalIPNConfig.query.get(config_id)
+    if not config:
+        return jsonify({'success': False, 'error': 'IPN config not found'}), 404
+
+    PesapalIPNConfig.query.filter(PesapalIPNConfig.id != config_id).update({'is_active': False})
+    config.is_active = True
+    db.session.commit()
+    return jsonify({'success': True, 'data': config.to_dict()})
+
+
+@payment_bp.route('/admin/ipn-configs/<int:config_id>', methods=['DELETE'])
+@jwt_required()
+def admin_delete_ipn_config(config_id):
+    current_user_id = get_jwt_identity()
+    current_user = UserService.get_user_by_id(user_id=current_user_id)
+    if not current_user or current_user.role != 'admin':
+        return jsonify({'success': False, 'error': 'Admin access required'}), 403
+
+    config = PesapalIPNConfig.query.get(config_id)
+    if not config:
+        return jsonify({'success': False, 'error': 'IPN config not found'}), 404
+
+    config.is_active = False
+    db.session.commit()
+    return jsonify({'success': True, 'message': 'IPN config deactivated'})
+
+
+@payment_bp.route('/admin/pesapal-config', methods=['GET'])
+@jwt_required()
+def admin_get_pesapal_config():
+    current_user_id = get_jwt_identity()
+    current_user = UserService.get_user_by_id(user_id=current_user_id)
+    if not current_user or current_user.role != 'admin':
+        return jsonify({'success': False, 'error': 'Admin access required'}), 403
+
+    smtp = SmtpConfig.get_global()
+    live_client = current_app.pesapal_client
+    return jsonify({
+        'success': True,
+        'data': {
+            'callback_url': smtp.pesapal_callback_url or live_client.config.callback_url or '',
+            'environment': smtp.pesapal_environment or live_client.config.environment or 'SANDBOX',
+        }
+    })
+
+
+@payment_bp.route('/admin/pesapal-config', methods=['PUT'])
+@jwt_required()
+def admin_update_pesapal_config():
+    current_user_id = get_jwt_identity()
+    current_user = UserService.get_user_by_id(user_id=current_user_id)
+    if not current_user or current_user.role != 'admin':
+        return jsonify({'success': False, 'error': 'Admin access required'}), 403
+
+    data = request.json or {}
+    smtp = SmtpConfig.get_global()
+
+    if 'callback_url' in data:
+        smtp.pesapal_callback_url = data['callback_url'].strip()
+        current_app.pesapal_client.config.callback_url = smtp.pesapal_callback_url
+    if 'environment' in data and data['environment'] in ('SANDBOX', 'PRODUCTION'):
+        smtp.pesapal_environment = data['environment']
+        current_app.pesapal_client.config.environment = smtp.pesapal_environment
+
+    db.session.commit()
+    return jsonify({
+        'success': True,
+        'message': 'Pesapal configuration updated',
+        'data': {
+            'callback_url': smtp.pesapal_callback_url,
+            'environment': smtp.pesapal_environment,
+        }
+    })
 
 
 @payment_bp.route('/refund', methods=['POST'])

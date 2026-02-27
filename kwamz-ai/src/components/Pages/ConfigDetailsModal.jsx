@@ -1,10 +1,12 @@
 import { useState, useEffect, useCallback } from 'react';
-import { X, Info, Mail, Shield, Bell, Settings, Save, Eye, EyeOff, ChevronRight, ToggleLeft, ToggleRight } from 'lucide-react';
+import { X, Info, Mail, Shield, Bell, Settings, Save, Eye, EyeOff, ChevronRight, ToggleLeft, ToggleRight, SlidersHorizontal, CreditCard, CheckCircle, XCircle, RefreshCw } from 'lucide-react';
 import config from '../../Config';
+import { useToast } from './ToastProvider';
 
 function ConfigDetailsModal({ isOpen, onClose, onSubmit, isLoading, config: configData }) {
   const userRole = localStorage.getItem('userRole');
   const isAdmin = userRole === 'admin';
+  const { showToast } = useToast();
 
   const [smtpData, setSmtpData] = useState({
     smtp_server: 'smtp.gmail.com',
@@ -14,9 +16,20 @@ function ConfigDetailsModal({ isOpen, onClose, onSubmit, isLoading, config: conf
     recipient_emails: '',
     email_subject_prefix: '[Fraud Alert] ',
     email_enabled: false,
+    trial_days: 30,
+    rate_per_till: 200,
   });
   const [smtpLoaded, setSmtpLoaded] = useState(false);
   const [smtpSaving, setSmtpSaving] = useState(false);
+
+  const [pesapalData, setPesapalData] = useState({ callback_url: '', environment: 'SANDBOX' });
+  const [ipnConfigs, setIpnConfigs] = useState([]);
+  const [pesapalLoaded, setPesapalLoaded] = useState(false);
+  const [pesapalSaving, setPesapalSaving] = useState(false);
+  const [newIpnUrl, setNewIpnUrl] = useState('');
+  const [newIpnType, setNewIpnType] = useState('GET');
+  const [ipnRegistering, setIpnRegistering] = useState(false);
+  const [ipnActivating, setIpnActivating] = useState(null);
 
   const [formData, setFormData] = useState({
     name: '',
@@ -74,9 +87,9 @@ function ConfigDetailsModal({ isOpen, onClose, onSubmit, isLoading, config: conf
     }
   }, [isOpen]);
 
-  // Fetch global SMTP config when admin opens SMTP section
+  // Fetch global SMTP/platform config when admin opens SMTP or Platform Settings section
   useEffect(() => {
-    if (isOpen && isAdmin && activeSection === 'smtp' && !smtpLoaded) {
+    if (isOpen && isAdmin && (activeSection === 'smtp' || activeSection === 'platform') && !smtpLoaded) {
       const token = localStorage.getItem('token');
       fetch(`${config.API_URL}/fraud/config/smtp`, {
         headers: { Authorization: `Bearer ${token}` },
@@ -92,13 +105,41 @@ function ConfigDetailsModal({ isOpen, onClose, onSubmit, isLoading, config: conf
               recipient_emails: data.data.recipient_emails || '',
               email_subject_prefix: data.data.email_subject_prefix || '[Fraud Alert] ',
               email_enabled: data.data.email_enabled || false,
+              trial_days: data.data.trial_days ?? 30,
+              rate_per_till: data.data.rate_per_till ?? 200,
             });
           }
         })
-        .catch((err) => console.error('Failed to fetch SMTP config:', err))
+        .catch((err) => console.error('Failed to fetch config:', err))
         .finally(() => setSmtpLoaded(true));
     }
   }, [isOpen, isAdmin, activeSection, smtpLoaded]);
+
+  // Fetch Pesapal config when admin opens that section
+  useEffect(() => {
+    if (isOpen && isAdmin && activeSection === 'pesapal' && !pesapalLoaded) {
+      const token = localStorage.getItem('token');
+      Promise.all([
+        fetch(`${config.API_URL}/payment/admin/pesapal-config`, {
+          headers: { Authorization: `Bearer ${token}` },
+        }).then(r => r.json()),
+        fetch(`${config.API_URL}/payment/admin/ipn-configs`, {
+          headers: { Authorization: `Bearer ${token}` },
+        }).then(r => r.json()),
+      ])
+        .then(([cfgData, ipnData]) => {
+          if (cfgData.success) {
+            setPesapalData({
+              callback_url: cfgData.data.callback_url || '',
+              environment: cfgData.data.environment || 'SANDBOX',
+            });
+          }
+          if (ipnData.success) setIpnConfigs(ipnData.configs || []);
+        })
+        .catch(err => console.error('Failed to load Pesapal config:', err))
+        .finally(() => setPesapalLoaded(true));
+    }
+  }, [isOpen, isAdmin, activeSection, pesapalLoaded]);
 
   const handleSmtpChange = (e) => {
     const { name, value, type, checked } = e.target;
@@ -112,6 +153,7 @@ function ConfigDetailsModal({ isOpen, onClose, onSubmit, isLoading, config: conf
 
   const handleSmtpSave = async () => {
     setSmtpSaving(true);
+    const label = activeSection === 'platform' ? 'Platform settings' : 'SMTP settings';
     try {
       const token = localStorage.getItem('token');
       const res = await fetch(`${config.API_URL}/fraud/config/smtp`, {
@@ -123,13 +165,106 @@ function ConfigDetailsModal({ isOpen, onClose, onSubmit, isLoading, config: conf
         body: JSON.stringify(smtpData),
       });
       const data = await res.json();
-      if (!data.success) {
-        console.error('Failed to save SMTP config:', data.message);
+      if (data.success) {
+        showToast(`${label} saved successfully`, 'success');
+      } else {
+        showToast(data.message || `Failed to save ${label.toLowerCase()}`, 'error');
       }
     } catch (err) {
-      console.error('Failed to save SMTP config:', err);
+      showToast(`Failed to save ${label.toLowerCase()}`, 'error');
     } finally {
       setSmtpSaving(false);
+    }
+  };
+
+  const handlePesapalConfigSave = async () => {
+    setPesapalSaving(true);
+    try {
+      const token = localStorage.getItem('token');
+      const res = await fetch(`${config.API_URL}/payment/admin/pesapal-config`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify(pesapalData),
+      });
+      const data = await res.json();
+      if (data.success) {
+        showToast('Pesapal configuration saved successfully', 'success');
+      } else {
+        showToast(data.error || 'Failed to save Pesapal configuration', 'error');
+      }
+    } catch {
+      showToast('Failed to save Pesapal configuration', 'error');
+    } finally {
+      setPesapalSaving(false);
+    }
+  };
+
+  const handleRegisterIPN = async () => {
+    if (!newIpnUrl.trim()) { showToast('IPN URL is required', 'warning'); return; }
+    setIpnRegistering(true);
+    try {
+      const token = localStorage.getItem('token');
+      const res = await fetch(`${config.API_URL}/payment/admin/ipn-configs/register`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ ipn_url: newIpnUrl.trim(), ipn_notification_type: newIpnType }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        showToast('IPN registered successfully', 'success');
+        setNewIpnUrl('');
+        setPesapalLoaded(false); // re-fetch configs list
+      } else {
+        showToast(data.error || 'Failed to register IPN', 'error');
+      }
+    } catch {
+      showToast('Failed to register IPN', 'error');
+    } finally {
+      setIpnRegistering(false);
+    }
+  };
+
+  const handleActivateIPN = async (configId) => {
+    setIpnActivating(configId);
+    try {
+      const token = localStorage.getItem('token');
+      const res = await fetch(`${config.API_URL}/payment/admin/ipn-configs/${configId}/activate`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      const data = await res.json();
+      if (data.success) {
+        showToast('IPN config activated', 'success');
+        setIpnConfigs(prev => prev.map(c => ({ ...c, is_active: c.id === configId })));
+      } else {
+        showToast(data.error || 'Failed to activate IPN config', 'error');
+      }
+    } catch {
+      showToast('Failed to activate IPN config', 'error');
+    } finally {
+      setIpnActivating(null);
+    }
+  };
+
+  const handleDeactivateIPN = async (configId) => {
+    setIpnActivating(configId);
+    try {
+      const token = localStorage.getItem('token');
+      const res = await fetch(`${config.API_URL}/payment/admin/ipn-configs/${configId}`, {
+        method: 'DELETE',
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      const data = await res.json();
+      if (data.success) {
+        showToast('IPN config deactivated', 'success');
+        setIpnConfigs(prev => prev.map(c => c.id === configId ? { ...c, is_active: false } : c));
+      } else {
+        showToast(data.error || 'Failed to deactivate IPN config', 'error');
+      }
+    } catch {
+      showToast('Failed to deactivate IPN config', 'error');
+    } finally {
+      setIpnActivating(null);
     }
   };
 
@@ -178,6 +313,7 @@ function ConfigDetailsModal({ isOpen, onClose, onSubmit, isLoading, config: conf
 
   const resetForm = () => {
     setSmtpLoaded(false);
+    setPesapalLoaded(false);
     setFormData({
       name: '',
       description: '',
@@ -257,7 +393,9 @@ function ConfigDetailsModal({ isOpen, onClose, onSubmit, isLoading, config: conf
 
   const sections = [
     { id: 'general', label: 'General', icon: <Settings className="w-4 h-4" /> },
+    ...(isAdmin ? [{ id: 'platform', label: 'Platform Settings', icon: <SlidersHorizontal className="w-4 h-4" /> }] : []),
     ...(isAdmin ? [{ id: 'smtp', label: 'SMTP Configuration', icon: <Mail className="w-4 h-4" /> }] : []),
+    ...(isAdmin ? [{ id: 'pesapal', label: 'Pesapal', icon: <CreditCard className="w-4 h-4" /> }] : []),
     { id: 'detection', label: 'Fraud Type Config', icon: <Shield className="w-4 h-4" /> },
     { id: 'notifications', label: 'Notifications', icon: <Bell className="w-4 h-4" /> },
     { id: 'risk', label: 'Risk Thresholds', icon: <Info className="w-4 h-4" /> }
@@ -361,6 +499,75 @@ function ConfigDetailsModal({ isOpen, onClose, onSubmit, isLoading, config: conf
                         Set as active configuration
                       </label>
                     </div>
+                  )}
+                </div>
+              )}
+
+              {/* Platform Settings Section — Admin Only */}
+              {activeSection === 'platform' && isAdmin && (
+                <div className="space-y-6">
+                  <div>
+                    <h3 className="text-lg font-semibold text-slate-800 dark:text-white">Platform Settings</h3>
+                    <p className="text-sm text-slate-600 dark:text-slate-300">System-wide billing and trial configuration (admin only)</p>
+                  </div>
+
+                  {!smtpLoaded ? (
+                    <div className="flex items-center justify-center py-12">
+                      <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-500"></div>
+                      <span className="ml-3 text-slate-500 dark:text-slate-400">Loading settings...</span>
+                    </div>
+                  ) : (
+                    <>
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 max-w-lg">
+                        <div>
+                          <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">
+                            Trial Period (days)
+                          </label>
+                          <input
+                            type="number"
+                            name="trial_days"
+                            value={smtpData.trial_days}
+                            onChange={handleSmtpChange}
+                            min="1"
+                            max="365"
+                            step="1"
+                            className="w-full px-4 py-2.5 bg-slate-100 dark:bg-slate-700 border border-slate-200 dark:border-slate-600 rounded-xl text-slate-800 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all"
+                          />
+                          <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+                            Days before payment is required
+                          </p>
+                        </div>
+                        <div>
+                          <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">
+                            Rate per Till (KES)
+                          </label>
+                          <input
+                            type="number"
+                            name="rate_per_till"
+                            value={smtpData.rate_per_till}
+                            onChange={handleSmtpChange}
+                            min="1"
+                            step="0.01"
+                            className="w-full px-4 py-2.5 bg-slate-100 dark:bg-slate-700 border border-slate-200 dark:border-slate-600 rounded-xl text-slate-800 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all"
+                          />
+                          <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+                            Monthly charge per active till
+                          </p>
+                        </div>
+                      </div>
+
+                      <div className="flex justify-end pt-4">
+                        <button
+                          type="button"
+                          onClick={handleSmtpSave}
+                          disabled={smtpSaving}
+                          className="flex items-center space-x-2 px-6 py-2.5 bg-blue-500 text-white rounded-xl hover:bg-blue-600 transition-colors disabled:bg-blue-300 disabled:cursor-not-allowed"
+                        >
+                          <Save className="w-4 h-4" />
+                          <span>{smtpSaving ? 'Saving...' : 'Save Platform Settings'}</span>
+                        </button>
+                      </div>
+                    </>
                   )}
                 </div>
               )}
@@ -506,6 +713,176 @@ function ConfigDetailsModal({ isOpen, onClose, onSubmit, isLoading, config: conf
                           <Save className="w-4 h-4" />
                           <span>{smtpSaving ? 'Saving...' : 'Save SMTP Settings'}</span>
                         </button>
+                      </div>
+                    </>
+                  )}
+                </div>
+              )}
+
+              {/* Pesapal Configuration Section — Admin Only */}
+              {activeSection === 'pesapal' && isAdmin && (
+                <div className="space-y-8">
+                  <div>
+                    <h3 className="text-lg font-semibold text-slate-800 dark:text-white">Pesapal Configuration</h3>
+                    <p className="text-sm text-slate-600 dark:text-slate-300">Payment gateway URLs, environment, and IPN registrations (admin only)</p>
+                  </div>
+
+                  {!pesapalLoaded ? (
+                    <div className="flex items-center justify-center py-12">
+                      <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-500"></div>
+                      <span className="ml-3 text-slate-500 dark:text-slate-400">Loading Pesapal settings...</span>
+                    </div>
+                  ) : (
+                    <>
+                      {/* Gateway Settings */}
+                      <div className="space-y-4">
+                        <h4 className="font-medium text-slate-700 dark:text-slate-300 border-b border-slate-200 dark:border-slate-700 pb-2">Gateway Settings</h4>
+                        <div>
+                          <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">
+                            Callback URL
+                          </label>
+                          <input
+                            type="url"
+                            value={pesapalData.callback_url}
+                            onChange={e => setPesapalData(prev => ({ ...prev, callback_url: e.target.value }))}
+                            className="w-full px-4 py-2.5 bg-slate-100 dark:bg-slate-700 border border-slate-200 dark:border-slate-600 rounded-xl text-slate-800 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all font-mono text-sm"
+                            placeholder="https://kwamz-ai.org/api/payment/callback"
+                          />
+                          <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">URL Pesapal redirects users to after payment</p>
+                        </div>
+                        <div className="max-w-xs">
+                          <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">
+                            Environment
+                          </label>
+                          <select
+                            value={pesapalData.environment}
+                            onChange={e => setPesapalData(prev => ({ ...prev, environment: e.target.value }))}
+                            className="w-full px-4 py-2.5 bg-slate-100 dark:bg-slate-700 border border-slate-200 dark:border-slate-600 rounded-xl text-slate-800 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all"
+                          >
+                            <option value="SANDBOX">Sandbox</option>
+                            <option value="PRODUCTION">Production</option>
+                          </select>
+                        </div>
+                        <div className="flex justify-end">
+                          <button
+                            type="button"
+                            onClick={handlePesapalConfigSave}
+                            disabled={pesapalSaving}
+                            className="flex items-center space-x-2 px-6 py-2.5 bg-blue-500 text-white rounded-xl hover:bg-blue-600 transition-colors disabled:bg-blue-300 disabled:cursor-not-allowed"
+                          >
+                            <Save className="w-4 h-4" />
+                            <span>{pesapalSaving ? 'Saving...' : 'Save Gateway Settings'}</span>
+                          </button>
+                        </div>
+                      </div>
+
+                      {/* Registered IPN Configurations */}
+                      <div className="space-y-3">
+                        <div className="flex items-center justify-between border-b border-slate-200 dark:border-slate-700 pb-2">
+                          <h4 className="font-medium text-slate-700 dark:text-slate-300">Registered IPN Configurations</h4>
+                          <button
+                            type="button"
+                            onClick={() => setPesapalLoaded(false)}
+                            className="p-1.5 text-slate-400 hover:text-slate-600 dark:hover:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-700 rounded-lg transition-colors"
+                            title="Refresh"
+                          >
+                            <RefreshCw className="w-4 h-4" />
+                          </button>
+                        </div>
+                        {ipnConfigs.length === 0 ? (
+                          <p className="text-sm text-slate-500 dark:text-slate-400 italic py-4 text-center">No IPN configurations registered yet.</p>
+                        ) : (
+                          <div className="space-y-2">
+                            {ipnConfigs.map(ipn => (
+                              <div
+                                key={ipn.id}
+                                className={`flex items-start justify-between gap-3 p-3 rounded-xl border transition-colors ${
+                                  ipn.is_active
+                                    ? 'border-green-200 dark:border-green-800 bg-green-50 dark:bg-green-900/20'
+                                    : 'border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/30'
+                                }`}
+                              >
+                                <div className="min-w-0 flex-1 space-y-1">
+                                  <p className="text-sm font-mono text-slate-800 dark:text-white truncate">{ipn.ipn_url}</p>
+                                  <div className="flex flex-wrap gap-2 text-xs text-slate-500 dark:text-slate-400">
+                                    <span>ID: <span className="font-mono">{ipn.notification_id}</span></span>
+                                    <span>•</span>
+                                    <span>{ipn.environment}</span>
+                                    <span>•</span>
+                                    <span>{ipn.ipn_notification_type}</span>
+                                  </div>
+                                </div>
+                                <div className="flex items-center gap-2 flex-shrink-0">
+                                  {ipn.is_active ? (
+                                    <span className="flex items-center gap-1 text-xs text-green-600 dark:text-green-400 font-medium">
+                                      <CheckCircle className="w-3.5 h-3.5" /> Active
+                                    </span>
+                                  ) : (
+                                    <button
+                                      type="button"
+                                      onClick={() => handleActivateIPN(ipn.id)}
+                                      disabled={ipnActivating === ipn.id}
+                                      className="text-xs px-3 py-1 bg-blue-500 text-white rounded-lg hover:bg-blue-600 transition-colors disabled:opacity-50"
+                                    >
+                                      {ipnActivating === ipn.id ? '...' : 'Activate'}
+                                    </button>
+                                  )}
+                                  {ipn.is_active && (
+                                    <button
+                                      type="button"
+                                      onClick={() => handleDeactivateIPN(ipn.id)}
+                                      disabled={ipnActivating === ipn.id}
+                                      className="text-xs px-3 py-1 border border-red-300 dark:border-red-700 text-red-600 dark:text-red-400 rounded-lg hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors disabled:opacity-50"
+                                    >
+                                      {ipnActivating === ipn.id ? '...' : 'Deactivate'}
+                                    </button>
+                                  )}
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+
+                      {/* Register New IPN */}
+                      <div className="space-y-4">
+                        <h4 className="font-medium text-slate-700 dark:text-slate-300 border-b border-slate-200 dark:border-slate-700 pb-2">Register New IPN URL</h4>
+                        <div>
+                          <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">
+                            IPN URL
+                          </label>
+                          <input
+                            type="url"
+                            value={newIpnUrl}
+                            onChange={e => setNewIpnUrl(e.target.value)}
+                            className="w-full px-4 py-2.5 bg-slate-100 dark:bg-slate-700 border border-slate-200 dark:border-slate-600 rounded-xl text-slate-800 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all font-mono text-sm"
+                            placeholder="https://kwamz-ai.org/api/payment/ipn"
+                          />
+                        </div>
+                        <div className="max-w-xs">
+                          <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">
+                            Notification Type
+                          </label>
+                          <select
+                            value={newIpnType}
+                            onChange={e => setNewIpnType(e.target.value)}
+                            className="w-full px-4 py-2.5 bg-slate-100 dark:bg-slate-700 border border-slate-200 dark:border-slate-600 rounded-xl text-slate-800 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all"
+                          >
+                            <option value="GET">GET</option>
+                            <option value="POST">POST</option>
+                          </select>
+                        </div>
+                        <div className="flex justify-end">
+                          <button
+                            type="button"
+                            onClick={handleRegisterIPN}
+                            disabled={ipnRegistering || !newIpnUrl.trim()}
+                            className="flex items-center space-x-2 px-6 py-2.5 bg-green-500 text-white rounded-xl hover:bg-green-600 transition-colors disabled:bg-green-300 disabled:cursor-not-allowed"
+                          >
+                            <CreditCard className="w-4 h-4" />
+                            <span>{ipnRegistering ? 'Registering...' : 'Register with Pesapal'}</span>
+                          </button>
+                        </div>
                       </div>
                     </>
                   )}

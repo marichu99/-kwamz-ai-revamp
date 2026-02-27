@@ -25,6 +25,7 @@ def handle_options():
     return jsonify({'message': 'OK'}), 200
 
 @company_bp.route('/', methods=['GET'])
+@company_bp.route('', methods=['GET'])
 @jwt_required()
 def get_companies():
     user_id = get_jwt_identity()

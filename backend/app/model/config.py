@@ -237,6 +237,10 @@ class SmtpConfig(db.Model):
     recipient_emails = db.Column(db.Text, default='')
     email_subject_prefix = db.Column(db.String(100), default='[Fraud Alert] ')
     email_enabled = db.Column(db.Boolean, default=False)
+    trial_days = db.Column(db.Integer, default=30)
+    rate_per_till = db.Column(db.Numeric(10, 2), default=200.00)
+    pesapal_callback_url = db.Column(db.String(500), nullable=True)
+    pesapal_environment = db.Column(db.String(20), nullable=True)
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     updated_by = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=True)
 
@@ -260,6 +264,10 @@ class SmtpConfig(db.Model):
             'recipient_emails': self.recipient_emails,
             'email_subject_prefix': self.email_subject_prefix,
             'email_enabled': self.email_enabled,
+            'trial_days': self.trial_days if self.trial_days is not None else 30,
+            'rate_per_till': float(self.rate_per_till) if self.rate_per_till is not None else 200.0,
+            'pesapal_callback_url': self.pesapal_callback_url,
+            'pesapal_environment': self.pesapal_environment,
             'updated_at': self.updated_at.isoformat() if self.updated_at else None,
             'updated_by': self.updated_by,
         }
@@ -269,6 +277,7 @@ class SmtpConfig(db.Model):
         allowed = [
             'smtp_server', 'smtp_port', 'sender_email', 'sender_password',
             'recipient_emails', 'email_subject_prefix', 'email_enabled',
+            'trial_days', 'rate_per_till', 'pesapal_callback_url', 'pesapal_environment',
         ]
         for key in allowed:
             if key in data:

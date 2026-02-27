@@ -32,8 +32,8 @@ class PesapalConfig:
         if not self.consumer_secret:
             raise ValueError("PESAPAL_CONSUMER_SECRET is required")
         self.base_url = base_url
-        self.callback_url = callback_url or "https://60c3d6633787.ngrok-free.app/payment/callback"
-        self.ipn_url = ipn_url or "https://60c3d6633787.ngrok-free.app/payment/ipn"
+        self.callback_url = callback_url or os.getenv('PESAPAL_CALLBACK_URL', '')
+        self.ipn_url = ipn_url or os.getenv('PESAPAL_IPN_URL', '')
         self.environment = environment
         self._access_token = None
         self._token_expiry = None

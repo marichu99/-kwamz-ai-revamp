@@ -44,7 +44,7 @@ function AgentCompanyDetailsModal({ isOpen, onClose, onSubmit, isLoading, agentC
       setLoadingCompanies(true);
       try {
         const token = localStorage.getItem('token');
-        const response = await axios.get(`${config.API_URL}/company`, {
+        const response = await axios.get(`${config.API_URL}/company/`, {
           headers: { Authorization: `Bearer ${token}` },
         });
 

@@ -17,14 +17,27 @@ document_bp = Blueprint('document', __name__)
 
 @document_bp.route('/submit', methods=['POST'])
 def submit():
-    data = request.json
+    data = request.json or {}
     kra_pin = data.get('kraPin')
     police_clearance = data.get('policeClearance')
     tax_payer_name = data.get('taxPayerName')
     id_number = data.get('idNumber')
 
-    res = authenticate_kra_from_app(kra_pin=kra_pin, police_number=police_clearance, id_number=id_number,tax_payer_name=tax_payer_name)
-    return jsonify({"success": res})
+    if not all([kra_pin, police_clearance, id_number]):
+        return jsonify({'error': 'kraPin, policeClearance, and idNumber are required'}), 400
+
+    from app.model.verification_job import VerificationJob
+    job = VerificationJob(
+        kra_pin=kra_pin,
+        police_clearance=police_clearance,
+        id_number=id_number,
+        taxpayer_name=tax_payer_name,
+        status='pending'
+    )
+    db.session.add(job)
+    db.session.commit()
+
+    return jsonify({"success": True, "job_id": job.id, "status": "pending"})
 @document_bp.route('/extract_kra_pin', methods=['POST'])
 def extract_kra_pin():
     """

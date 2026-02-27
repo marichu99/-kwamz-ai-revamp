@@ -101,7 +101,7 @@ function SystemUsersList() {
         axios.get(`${config.API_URL}/users`, {
           headers: { Authorization: `Bearer ${token}` },
         }),
-        axios.get(`${config.API_URL}/company`, {
+        axios.get(`${config.API_URL}/company/`, {
           headers: { Authorization: `Bearer ${token}` },
         })
       ]);
