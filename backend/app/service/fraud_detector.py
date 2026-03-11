@@ -574,8 +574,8 @@ ACTION REQUIRED: Please review these transactions immediately.
         if not info:
             return None, None
 
-        # Extract masked phone number
-        phone_match = re.search(r'(\d{3}\*{3}\d{3}|\d{5}\*{3}\d{3})', str(info))
+        # Extract masked phone number (handles 3 or 4 asterisks: 070****988, 25470****667)
+        phone_match = re.search(r'(\d{3}\*+\d{3}|\d{5}\*+\d{3})', str(info))
         phone = phone_match.group(1) if phone_match else None
 
         # Extract name

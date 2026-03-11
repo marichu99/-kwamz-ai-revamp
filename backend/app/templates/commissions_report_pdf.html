@@ -1,0 +1,268 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Commissions Report — {{ report.period }}</title>
+<style>
+  @page {
+    size: A4;
+    margin: 18mm 15mm 18mm 15mm;
+    @bottom-center {
+      content: "Page " counter(page) " of " counter(pages);
+      font-size: 9px;
+      color: #888;
+    }
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    font-family: "DejaVu Sans", Arial, sans-serif;
+    font-size: 11px;
+    color: #1e293b;
+    line-height: 1.5;
+  }
+
+  /* ── COVER ── */
+  .cover {
+    background: #1e3a5f;
+    color: #fff;
+    padding: 28px 24px 22px;
+    border-radius: 6px;
+    margin-bottom: 20px;
+  }
+  .cover h1 { font-size: 22px; font-weight: 700; }
+  .cover .subtitle { font-size: 12px; color: #93c5fd; margin-top: 4px; }
+  .cover .meta { margin-top: 14px; display: flex; gap: 28px; }
+  .cover .meta-item .label { font-size: 9px; text-transform: uppercase; color: #60a5fa; letter-spacing: 0.5px; }
+  .cover .meta-item .value { font-size: 13px; font-weight: 600; color: #e2e8f0; }
+
+  /* ── SUMMARY GRID ── */
+  .summary-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 8px;
+    margin-bottom: 20px;
+  }
+  .summary-card {
+    border: 1px solid #e2e8f0;
+    border-radius: 6px;
+    padding: 12px 14px;
+  }
+  .summary-card .card-label { font-size: 9px; color: #64748b; text-transform: uppercase; letter-spacing: 0.4px; }
+  .summary-card .card-value { font-size: 19px; font-weight: 700; color: #1e293b; margin-top: 2px; }
+  .summary-card .card-sub   { font-size: 9.5px; color: #64748b; margin-top: 2px; }
+  .card-green  { border-color: #86efac; background: #f0fdf4; }
+  .card-amber  { border-color: #fcd34d; background: #fffbeb; }
+  .card-blue   { border-color: #93c5fd; background: #eff6ff; }
+  .card-purple { border-color: #c4b5fd; background: #faf5ff; }
+  .card-slate  { border-color: #e2e8f0; background: #f8fafc; }
+
+  .growth-pos { color: #15803d; font-weight: 600; }
+  .growth-neg { color: #b91c1c; font-weight: 600; }
+
+  /* ── SECTION HEADING ── */
+  .section-heading {
+    font-size: 13px;
+    font-weight: 700;
+    color: #0f172a;
+    border-bottom: 2px solid #1e3a5f;
+    padding-bottom: 4px;
+    margin-bottom: 12px;
+    margin-top: 22px;
+  }
+
+  /* ── TABLES ── */
+  .data-table { width: 100%; border-collapse: collapse; font-size: 10px; margin-bottom: 6px; }
+  .data-table th {
+    background: #1e3a5f;
+    color: #fff;
+    padding: 6px 9px;
+    text-align: left;
+    font-weight: 600;
+    letter-spacing: 0.2px;
+  }
+  .data-table th.right { text-align: right; }
+  .data-table td { padding: 6px 9px; border-bottom: 1px solid #f1f5f9; vertical-align: middle; }
+  .data-table tr:nth-child(even) td { background: #f8fafc; }
+  .data-table td.right { text-align: right; font-weight: 600; }
+  .data-table td.mono  { font-family: monospace; }
+
+  /* progress bar cell */
+  .bar-wrap { width: 80px; height: 7px; background: #e2e8f0; border-radius: 4px; display: inline-block; vertical-align: middle; }
+  .bar-fill  { height: 7px; background: #3b82f6; border-radius: 4px; }
+
+  /* ── TREND TABLE ── */
+  .growth-up   { color: #15803d; }
+  .growth-down { color: #b91c1c; }
+
+  /* ── FOOTER ── */
+  .footer {
+    margin-top: 30px;
+    border-top: 1px solid #e2e8f0;
+    padding-top: 10px;
+    text-align: center;
+    font-size: 9px;
+    color: #94a3b8;
+  }
+</style>
+</head>
+<body>
+
+<!-- COVER -->
+<div class="cover">
+  <h1>Commissions Report</h1>
+  <div class="subtitle">Kwamz AI — Commission Analytics</div>
+  <div class="meta">
+    <div class="meta-item">
+      <div class="label">Period</div>
+      <div class="value">{{ report.period }}</div>
+    </div>
+    <div class="meta-item">
+      <div class="label">Generated</div>
+      <div class="value">{{ generated_at }}</div>
+    </div>
+    <div class="meta-item">
+      <div class="label">Total Transactions</div>
+      <div class="value">{{ "{:,}".format(report.summary.total_transactions) }}</div>
+    </div>
+    <div class="meta-item">
+      <div class="label">Total Commission</div>
+      <div class="value">KES {{ "{:,.2f}".format(report.summary.total_commission) }}</div>
+    </div>
+  </div>
+</div>
+
+<!-- SUMMARY CARDS -->
+<div class="summary-grid">
+  <div class="summary-card card-green">
+    <div class="card-label">Total Commission</div>
+    <div class="card-value">KES {{ "{:,.2f}".format(report.summary.total_commission) }}</div>
+    <div class="card-sub">
+      {% if report.summary.growth_percentage > 0 %}
+        <span class="growth-pos">▲ {{ report.summary.growth_percentage }}%</span>
+      {% elif report.summary.growth_percentage < 0 %}
+        <span class="growth-neg">▼ {{ report.summary.growth_percentage | abs }}%</span>
+      {% else %}
+        <span>— vs previous period</span>
+      {% endif %}
+      vs previous period
+    </div>
+  </div>
+  <div class="summary-card card-blue">
+    <div class="card-label">Total Transactions</div>
+    <div class="card-value">{{ "{:,}".format(report.summary.total_transactions) }}</div>
+    <div class="card-sub">Avg KES {{ "{:,.2f}".format(report.summary.average_commission) }} per txn</div>
+  </div>
+  <div class="summary-card card-amber">
+    <div class="card-label">Top Agent</div>
+    <div class="card-value" style="font-size:14px;">{{ report.summary.top_agent_name }}</div>
+    <div class="card-sub">KES {{ "{:,.2f}".format(report.summary.top_agent_commission) }}</div>
+  </div>
+</div>
+
+<!-- CATEGORY ANALYSIS -->
+{% if report.categories %}
+<div class="section-heading">Commission by Category</div>
+<table class="data-table">
+  <thead>
+    <tr>
+      <th>Category</th>
+      <th class="right">Transactions</th>
+      <th class="right">Total Commission (KES)</th>
+      <th class="right">Avg Commission (KES)</th>
+      <th class="right">Share</th>
+      <th>Distribution</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for cat in report.categories %}
+    <tr>
+      <td>{{ cat.name }}</td>
+      <td class="right">{{ "{:,}".format(cat.count) }}</td>
+      <td class="right">{{ "{:,.2f}".format(cat.total_commission) }}</td>
+      <td class="right">{{ "{:,.2f}".format(cat.average_commission) }}</td>
+      <td class="right">{{ cat.percentage }}%</td>
+      <td>
+        <div class="bar-wrap">
+          <div class="bar-fill" style="width:{{ [cat.percentage, 100] | min }}%;"></div>
+        </div>
+      </td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endif %}
+
+<!-- TOP AGENTS -->
+{% if report.top_agents %}
+<div class="section-heading">Top Agents</div>
+<table class="data-table">
+  <thead>
+    <tr>
+      <th>#</th>
+      <th>Agent</th>
+      <th>Code</th>
+      <th class="right">Transactions</th>
+      <th class="right">Total Commission (KES)</th>
+      <th class="right">Avg Commission (KES)</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for agent in report.top_agents %}
+    <tr>
+      <td>{{ loop.index }}</td>
+      <td style="font-weight:600;">{{ agent.name }}</td>
+      <td class="mono">{{ agent.code }}</td>
+      <td class="right">{{ "{:,}".format(agent.transaction_count) }}</td>
+      <td class="right">{{ "{:,.2f}".format(agent.total_commission) }}</td>
+      <td class="right">{{ "{:,.2f}".format(agent.average_commission) }}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endif %}
+
+<!-- MONTHLY TRENDS -->
+{% if report.trends %}
+<div class="section-heading">Monthly Trends</div>
+<table class="data-table">
+  <thead>
+    <tr>
+      <th>Month</th>
+      <th class="right">Transactions</th>
+      <th class="right">Total Commission (KES)</th>
+      <th class="right">Avg Daily (KES)</th>
+      <th class="right">Growth</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for t in report.trends %}
+    <tr>
+      <td style="font-weight:600;">{{ t.period }}</td>
+      <td class="right">{{ "{:,}".format(t.transaction_count) }}</td>
+      <td class="right">{{ "{:,.2f}".format(t.total_commission) }}</td>
+      <td class="right">{{ "{:,.2f}".format(t.average_daily) }}</td>
+      <td class="right">
+        {% if loop.index == 1 %}
+          <span style="color:#94a3b8;">—</span>
+        {% elif t.growth > 0 %}
+          <span class="growth-up">▲ {{ t.growth }}%</span>
+        {% elif t.growth < 0 %}
+          <span class="growth-down">▼ {{ t.growth | abs }}%</span>
+        {% else %}
+          <span style="color:#94a3b8;">0%</span>
+        {% endif %}
+      </td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endif %}
+
+<div class="footer">
+  Generated by Kwamz AI · {{ generated_at }} · Confidential
+</div>
+
+</body>
+</html>

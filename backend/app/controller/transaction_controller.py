@@ -1,9 +1,19 @@
-from flask import Blueprint, request, jsonify, current_app, send_file
+from flask import Blueprint, request, jsonify, current_app, send_file, render_template, make_response
 from datetime import datetime
 from app.service.transaction_service import TransactionService
 from app.service.reports.commissions_report_service import CommissionReportService
+from app.service.reports.fraud_report_service import FraudReportService
 from app.service.export_service import ExportService
+import io
 import os
+
+FRAUD_TYPE_LABELS = {
+    'split_transaction':          'Split Transaction',
+    'rollover_fraud':             'Rollover Fraud',
+    'rapid_back_forth':           'Rapid Back & Forth',
+    'deposit_withdrawal_recovery':'Deposit-Withdrawal Recovery',
+    'high_frequency_daily':       'High Frequency Daily',
+}
 
 
 
@@ -12,6 +22,7 @@ transaction_bp = Blueprint('transaction', __name__, url_prefix='/transactions')
 transaction_service = TransactionService()
 
 commission_report_service = CommissionReportService()
+fraud_report_service = FraudReportService()
 export_service = ExportService()
 
 @transaction_bp.route('/commissions-report', methods=['GET'])
@@ -46,6 +57,52 @@ def get_commissions_report():
         print(f"Error generating commission report: {str(e)}")
         return jsonify({'success': False, 'error': 'Internal server error'}), 500
 
+@transaction_bp.route('/export-commissions-pdf', methods=['GET'])
+def export_commissions_report_pdf():
+    """Generate and stream a WeasyPrint PDF of the commissions report."""
+    try:
+        from weasyprint import HTML
+
+        start_date       = request.args.get('start_date')
+        end_date         = request.args.get('end_date')
+        date_range       = request.args.get('date_range', 'custom')
+        transaction_type = request.args.get('transaction_type', 'commission')
+        reason_type      = request.args.get('reason_type')
+        transaction_status = request.args.get('transaction_status')
+        company_id       = request.args.get('company_id', type=int)
+
+        report = commission_report_service.generate_report(
+            start_date=start_date,
+            end_date=end_date,
+            date_range=date_range,
+            transaction_type=transaction_type,
+            reason_type=reason_type,
+            transaction_status=transaction_status,
+            company_id=company_id,
+        )
+
+        html_string = render_template(
+            'commissions_report_pdf.html',
+            report=report,
+            generated_at=datetime.now().strftime('%d %b %Y %H:%M'),
+        )
+
+        pdf_bytes = HTML(string=html_string).write_pdf()
+
+        filename = f"commissions_report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf"
+        response = make_response(pdf_bytes)
+        response.headers['Content-Type'] = 'application/pdf'
+        response.headers['Content-Disposition'] = f'attachment; filename="{filename}"'
+        return response
+
+    except ValueError as e:
+        return jsonify({'success': False, 'error': str(e)}), 400
+    except Exception as e:
+        print(f"Error generating commissions PDF: {str(e)}")
+        import traceback; traceback.print_exc()
+        return jsonify({'success': False, 'error': 'Internal server error'}), 500
+
+
 @transaction_bp.route('/export-commissions', methods=['GET'])
 def export_commissions_report():
     """Export commission report in various formats"""
@@ -77,6 +134,72 @@ def export_commissions_report():
     except Exception as e:
         print(f"Error exporting commission report: {str(e)}")
         return jsonify({'success': False, 'error': 'Internal server error'}), 500
+
+@transaction_bp.route('/fraud-report', methods=['GET'])
+def get_fraud_report():
+    """Generate a historical fraud report (split, rollover, rapid back-forth) for a date range."""
+    try:
+        start_date = request.args.get('start_date')
+        end_date = request.args.get('end_date')
+        date_range = request.args.get('date_range', 'custom')
+        company_id = request.args.get('company_id', type=int)
+
+        report = fraud_report_service.generate_report(
+            start_date=start_date,
+            end_date=end_date,
+            date_range=date_range,
+            company_id=company_id,
+        )
+
+        return jsonify({'success': True, 'report': report})
+
+    except ValueError as e:
+        return jsonify({'success': False, 'error': str(e)}), 400
+    except Exception as e:
+        print(f"Error generating fraud report: {str(e)}")
+        return jsonify({'success': False, 'error': 'Internal server error'}), 500
+
+
+@transaction_bp.route('/fraud-report-pdf', methods=['GET'])
+def export_fraud_report_pdf():
+    """Generate and stream a WeasyPrint PDF of the fraud report."""
+    try:
+        from weasyprint import HTML, CSS
+
+        start_date  = request.args.get('start_date')
+        end_date    = request.args.get('end_date')
+        date_range  = request.args.get('date_range', 'custom')
+        company_id  = request.args.get('company_id', type=int)
+
+        report = fraud_report_service.generate_report(
+            start_date=start_date,
+            end_date=end_date,
+            date_range=date_range,
+            company_id=company_id,
+        )
+
+        html_string = render_template(
+            'fraud_report_pdf.html',
+            report=report,
+            generated_at=datetime.now().strftime('%d %b %Y %H:%M'),
+            fraud_type_labels=FRAUD_TYPE_LABELS,
+        )
+
+        pdf_bytes = HTML(string=html_string).write_pdf()
+
+        filename = f"fraud_report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf"
+        response = make_response(pdf_bytes)
+        response.headers['Content-Type'] = 'application/pdf'
+        response.headers['Content-Disposition'] = f'attachment; filename="{filename}"'
+        return response
+
+    except ValueError as e:
+        return jsonify({'success': False, 'error': str(e)}), 400
+    except Exception as e:
+        print(f"Error generating fraud report PDF: {str(e)}")
+        import traceback; traceback.print_exc()
+        return jsonify({'success': False, 'error': 'Internal server error'}), 500
+
 
 @transaction_bp.route('/export', methods=['GET'])
 def export_transactions():

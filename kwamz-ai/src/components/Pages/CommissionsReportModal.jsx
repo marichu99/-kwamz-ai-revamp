@@ -414,10 +414,43 @@ function CommissionsReportModal({ isOpen, onClose, filters, transactionType = 'c
         }
     };
 
-    // Handle export - FIXED version
+    // Handle PDF export via WeasyPrint (server-side)
+    const handlePdfExport = async () => {
+        const token = localStorage.getItem('token');
+        const params = new URLSearchParams({
+            date_range: dateRange,
+            transaction_type: transactionType,
+            ...(dateRange === 'custom' && customStartDate && { start_date: customStartDate }),
+            ...(dateRange === 'custom' && customEndDate   && { end_date: customEndDate }),
+            ...(companyId && { company_id: companyId }),
+        });
+        if (filters?.reasonType)         params.set('reason_type', filters.reasonType);
+        if (filters?.transactionStatus)  params.set('transaction_status', filters.transactionStatus);
+
+        const res = await fetch(`${config.API_URL}/transactions/export-commissions-pdf?${params}`, {
+            headers: { Authorization: `Bearer ${token}` },
+        });
+        if (!res.ok) throw new Error('PDF generation failed');
+
+        const blob = await res.blob();
+        const url  = URL.createObjectURL(blob);
+        const a    = document.createElement('a');
+        a.href     = url;
+        a.download = `commissions_report_${new Date().toISOString().slice(0, 10)}.pdf`;
+        a.click();
+        URL.revokeObjectURL(url);
+        showToast('Commission report exported as PDF', 'success');
+    };
+
+    // Handle export - uses client-side PDF, backend for Excel/CSV
     const handleExport = async (format) => {
         setIsExporting(true);
         try {
+            if (format === 'pdf') {
+                await handlePdfExport();
+                return;
+            }
+
             const token = localStorage.getItem('token');
 
             const params = {
@@ -440,17 +473,15 @@ function CommissionsReportModal({ isOpen, onClose, filters, transactionType = 'c
             const response = await axios({
                 method: 'GET',
                 url: `${config.API_URL}/transactions/export-commissions`,
-                headers: { 
+                headers: {
                     Authorization: `Bearer ${token}`,
-                    'Accept': format === 'pdf' ? 'application/pdf' : 
-                             format === 'excel' ? 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' :
+                    'Accept': format === 'excel' ? 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' :
                              'text/csv'
                 },
                 params,
                 responseType: 'blob'
             });
 
-            // Check if response is actually a blob
             if (!(response.data instanceof Blob)) {
                 throw new Error('Invalid response format');
             }
@@ -460,10 +491,6 @@ function CommissionsReportModal({ isOpen, onClose, filters, transactionType = 'c
             let mimeType = '';
 
             switch (format) {
-                case 'pdf':
-                    filename += '.pdf';
-                    mimeType = 'application/pdf';
-                    break;
                 case 'excel':
                     filename += '.xlsx';
                     mimeType = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
@@ -474,29 +501,21 @@ function CommissionsReportModal({ isOpen, onClose, filters, transactionType = 'c
                     break;
             }
 
-            // Create a Blob with proper MIME type
             const blob = new Blob([response.data], { type: mimeType });
-            
-            // Create download link
             const url = window.URL.createObjectURL(blob);
             const link = document.createElement('a');
             link.href = url;
             link.setAttribute('download', filename);
-            
-            // Append to body, click, and remove
             document.body.appendChild(link);
             link.click();
             document.body.removeChild(link);
-            
-            // Clean up
             window.URL.revokeObjectURL(url);
 
             showToast(`Commission report exported as ${format.toUpperCase()}`, 'success');
         } catch (error) {
             console.error('Error exporting commission report:', error);
             showToast('Failed to export commission report. Please try again.', 'error');
-            
-            // If it's a JSON error (server returned error instead of file)
+
             if (error.response && error.response.data instanceof Blob) {
                 try {
                     const text = await error.response.data.text();
@@ -1111,7 +1130,7 @@ function CommissionsReportModal({ isOpen, onClose, filters, transactionType = 'c
 
                                                 return (
                                                     <>
-                                                        <div className="flex items-end h-64 mt-8 mb-4 px-4">
+                                                        <div className="flex items-end h-64 mt-8 mb-16 px-4">
                                                             {barLabels.map((trend, index) => {
                                                                 const height = effectiveMax > 0
                                                                     ? ((trend.total_commission || 0) / effectiveMax) * 100
@@ -1155,8 +1174,8 @@ function CommissionsReportModal({ isOpen, onClose, filters, transactionType = 'c
                                                                         </div>
 
                                                                         {/* X-axis label */}
-                                                                        <div className="text-xs text-slate-600 dark:text-slate-400 mt-2 text-center h-8 w-full overflow-hidden">
-                                                                            <div className="transform -rotate-45 origin-top-left whitespace-nowrap">
+                                                                        <div className="text-xs text-slate-600 dark:text-slate-400 mt-2 text-center w-full" style={{ height: '56px', overflow: 'visible' }}>
+                                                                            <div className="transform -rotate-45 origin-top-center whitespace-nowrap inline-block">
                                                                                 {trend.displayPeriod || trend.period}
                                                                             </div>
                                                                         </div>

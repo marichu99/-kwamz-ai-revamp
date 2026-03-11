@@ -1,0 +1,427 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Fraud Report — {{ report.period }}</title>
+<style>
+  @page {
+    size: A4;
+    margin: 18mm 15mm 18mm 15mm;
+    @bottom-center {
+      content: "Page " counter(page) " of " counter(pages);
+      font-size: 9px;
+      color: #888;
+    }
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    font-family: "DejaVu Sans", Arial, sans-serif;
+    font-size: 11px;
+    color: #1e293b;
+    line-height: 1.5;
+  }
+
+  /* ── COVER HEADER ── */
+  .cover {
+    background: #0f172a;
+    color: #fff;
+    padding: 28px 24px 22px;
+    border-radius: 6px;
+    margin-bottom: 20px;
+  }
+  .cover h1 { font-size: 22px; font-weight: 700; letter-spacing: 0.3px; }
+  .cover .subtitle { font-size: 12px; color: #94a3b8; margin-top: 4px; }
+  .cover .meta { margin-top: 14px; display: flex; gap: 24px; }
+  .cover .meta-item { }
+  .cover .meta-item .label { font-size: 9px; text-transform: uppercase; color: #64748b; letter-spacing: 0.5px; }
+  .cover .meta-item .value { font-size: 13px; font-weight: 600; color: #e2e8f0; }
+
+  /* ── SUMMARY GRID ── */
+  .summary-grid {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 8px;
+    margin-bottom: 20px;
+  }
+  .summary-card {
+    border: 1px solid #e2e8f0;
+    border-radius: 6px;
+    padding: 10px 12px;
+    text-align: center;
+  }
+  .summary-card .card-label { font-size: 9px; color: #64748b; text-transform: uppercase; letter-spacing: 0.4px; }
+  .summary-card .card-value { font-size: 20px; font-weight: 700; color: #1e293b; }
+  .card-red   { border-color: #fca5a5; background: #fef2f2; }
+  .card-amber { border-color: #fcd34d; background: #fffbeb; }
+  .card-blue  { border-color: #93c5fd; background: #eff6ff; }
+
+  /* ── TYPE BREAKDOWN ── */
+  .breakdown {
+    display: grid;
+    grid-template-columns: repeat(5, 1fr);
+    gap: 6px;
+    margin-bottom: 24px;
+  }
+  .breakdown-item {
+    border: 1px solid #e2e8f0;
+    border-radius: 5px;
+    padding: 8px 10px;
+    text-align: center;
+  }
+  .breakdown-item .b-count { font-size: 18px; font-weight: 700; color: #0f172a; }
+  .breakdown-item .b-label { font-size: 8.5px; color: #64748b; text-transform: uppercase; letter-spacing: 0.3px; margin-top: 2px; }
+
+  /* ── SECTION HEADING ── */
+  .section-heading {
+    font-size: 13px;
+    font-weight: 700;
+    color: #0f172a;
+    border-bottom: 2px solid #0f172a;
+    padding-bottom: 4px;
+    margin-bottom: 12px;
+    margin-top: 22px;
+  }
+
+  /* ── FINDING CARD ── */
+  .finding {
+    border: 1px solid #e2e8f0;
+    border-radius: 6px;
+    margin-bottom: 14px;
+    page-break-inside: avoid;
+    overflow: hidden;
+  }
+  .finding-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 12px;
+    background: #f8fafc;
+    border-bottom: 1px solid #e2e8f0;
+  }
+  .finding-index { font-size: 9px; color: #94a3b8; font-weight: 600; min-width: 20px; }
+  .risk-badge {
+    font-size: 9px;
+    font-weight: 700;
+    padding: 2px 7px;
+    border-radius: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+  }
+  .risk-HIGH   { background: #fee2e2; color: #b91c1c; }
+  .risk-MEDIUM { background: #fef3c7; color: #b45309; }
+  .risk-LOW    { background: #dbeafe; color: #1d4ed8; }
+
+  .fraud-type-badge {
+    font-size: 9px;
+    font-weight: 600;
+    padding: 2px 7px;
+    border-radius: 10px;
+    background: #f1f5f9;
+    color: #475569;
+  }
+  .finding-party { font-size: 11px; font-weight: 600; color: #0f172a; flex: 1; }
+  .finding-total { font-size: 11px; font-weight: 700; color: #0f172a; }
+
+  .finding-body { padding: 10px 12px; }
+
+  /* explanation */
+  .explanation {
+    font-size: 10px;
+    color: #475569;
+    background: #f8fafc;
+    border-left: 3px solid #94a3b8;
+    padding: 7px 10px;
+    border-radius: 0 4px 4px 0;
+    margin-bottom: 10px;
+    line-height: 1.6;
+  }
+
+  /* stat chips */
+  .stat-chips { display: flex; gap: 8px; margin-bottom: 10px; flex-wrap: wrap; }
+  .chip {
+    border: 1px solid #e2e8f0;
+    border-radius: 4px;
+    padding: 5px 9px;
+    text-align: center;
+    min-width: 80px;
+  }
+  .chip .chip-label { font-size: 8px; color: #64748b; text-transform: uppercase; }
+  .chip .chip-value { font-size: 11px; font-weight: 700; color: #0f172a; }
+  .chip-green  { border-color: #86efac; background: #f0fdf4; }
+  .chip-red    { border-color: #fca5a5; background: #fef2f2; }
+  .chip-purple { border-color: #c4b5fd; background: #faf5ff; }
+
+  /* transactions table */
+  .txn-table { width: 100%; border-collapse: collapse; font-size: 9.5px; }
+  .txn-table th {
+    background: #0f172a;
+    color: #fff;
+    padding: 5px 8px;
+    text-align: left;
+    font-weight: 600;
+    letter-spacing: 0.2px;
+  }
+  .txn-table td { padding: 5px 8px; border-bottom: 1px solid #f1f5f9; }
+  .txn-table tr:nth-child(even) td { background: #f8fafc; }
+  .type-dep { color: #15803d; font-weight: 600; }
+  .type-wdr { color: #b91c1c; font-weight: 600; }
+
+  /* agents */
+  .agent-section { margin-top: 8px; }
+  .agent-title { font-size: 9px; font-weight: 700; text-transform: uppercase; color: #64748b; letter-spacing: 0.4px; margin-bottom: 4px; }
+  .agent-list { display: flex; flex-wrap: wrap; gap: 5px; }
+  .agent-chip {
+    font-size: 9px;
+    background: #eff6ff;
+    border: 1px solid #bfdbfe;
+    color: #1e40af;
+    padding: 2px 8px;
+    border-radius: 4px;
+  }
+  .ua-chip {
+    font-size: 9px;
+    background: #f0fdf4;
+    border: 1px solid #bbf7d0;
+    color: #15803d;
+    padding: 2px 8px;
+    border-radius: 4px;
+  }
+
+  /* high-frequency day badge */
+  .day-badge {
+    display: inline-block;
+    font-size: 10px;
+    font-weight: 600;
+    background: #f1f5f9;
+    border: 1px solid #e2e8f0;
+    padding: 3px 10px;
+    border-radius: 4px;
+    margin-bottom: 8px;
+  }
+
+  .no-findings {
+    text-align: center;
+    padding: 30px;
+    color: #64748b;
+    font-size: 13px;
+  }
+
+  .footer {
+    margin-top: 30px;
+    border-top: 1px solid #e2e8f0;
+    padding-top: 10px;
+    text-align: center;
+    font-size: 9px;
+    color: #94a3b8;
+  }
+</style>
+</head>
+<body>
+
+<!-- COVER -->
+<div class="cover">
+  <h1>Historical Fraud Report</h1>
+  <div class="subtitle">Kwamz AI — Automated Fraud Detection</div>
+  <div class="meta">
+    <div class="meta-item">
+      <div class="label">Period</div>
+      <div class="value">{{ report.period }}</div>
+    </div>
+    <div class="meta-item">
+      <div class="label">Generated</div>
+      <div class="value">{{ generated_at }}</div>
+    </div>
+    <div class="meta-item">
+      <div class="label">Transactions Scanned</div>
+      <div class="value">{{ "{:,}".format(report.summary.total_transactions_analyzed) }}</div>
+    </div>
+    <div class="meta-item">
+      <div class="label">Total Findings</div>
+      <div class="value">{{ report.summary.total_findings }}</div>
+    </div>
+  </div>
+</div>
+
+<!-- RISK SUMMARY -->
+<div class="summary-grid">
+  <div class="summary-card card-red">
+    <div class="card-label">High Risk</div>
+    <div class="card-value">{{ report.summary.high_risk }}</div>
+  </div>
+  <div class="summary-card card-amber">
+    <div class="card-label">Medium Risk</div>
+    <div class="card-value">{{ report.summary.medium_risk }}</div>
+  </div>
+  <div class="summary-card card-blue">
+    <div class="card-label">Low Risk</div>
+    <div class="card-value">{{ report.summary.low_risk }}</div>
+  </div>
+  <div class="summary-card">
+    <div class="card-label">Total</div>
+    <div class="card-value">{{ report.summary.total_findings }}</div>
+  </div>
+</div>
+
+<!-- TYPE BREAKDOWN -->
+<div class="breakdown">
+  <div class="breakdown-item">
+    <div class="b-count">{{ report.summary.split_transactions }}</div>
+    <div class="b-label">Split Transactions</div>
+  </div>
+  <div class="breakdown-item">
+    <div class="b-count">{{ report.summary.rollover_fraud }}</div>
+    <div class="b-label">Rollover Fraud</div>
+  </div>
+  <div class="breakdown-item">
+    <div class="b-count">{{ report.summary.rapid_back_forth }}</div>
+    <div class="b-label">Rapid Back &amp; Forth</div>
+  </div>
+  <div class="breakdown-item">
+    <div class="b-count">{{ report.summary.deposit_withdrawal_recovery }}</div>
+    <div class="b-label">Dep-Withdrawal Recovery</div>
+  </div>
+  <div class="breakdown-item">
+    <div class="b-count">{{ report.summary.high_frequency_daily }}</div>
+    <div class="b-label">High Frequency Daily</div>
+  </div>
+</div>
+
+{% if report.findings %}
+<div class="section-heading">Detailed Findings ({{ report.findings | length }})</div>
+
+{% for finding in report.findings %}
+<div class="finding">
+  <!-- Header -->
+  <div class="finding-header">
+    <span class="finding-index">#{{ loop.index }}</span>
+    <span class="risk-badge risk-{{ finding.risk_level }}">{{ finding.risk_level }}</span>
+    <span class="fraud-type-badge">{{ fraud_type_labels[finding.fraud_type] }}</span>
+    <span class="finding-party">
+      {{ finding.account_name or finding.account_phone }}
+      {% if finding.account_name and finding.account_phone %}
+        <span style="font-weight:400;color:#64748b;font-size:9.5px;">({{ finding.account_phone }})</span>
+      {% endif %}
+    </span>
+    <span class="finding-total">KES {{ "{:,.2f}".format(finding.total_amount or 0) }}</span>
+  </div>
+
+  <div class="finding-body">
+
+    <!-- Explanation -->
+    {% if finding.explanation %}
+    <div class="explanation">{{ finding.explanation }}</div>
+    {% endif %}
+
+    <!-- High-frequency day badge -->
+    {% if finding.fraud_type == 'high_frequency_daily' and finding.day %}
+    <div class="day-badge">{{ finding.transaction_count }} transactions on {{ finding.day }}</div>
+    {% endif %}
+
+    <!-- Split stat chips -->
+    {% if finding.fraud_type == 'split_transaction' %}
+    <div class="stat-chips">
+      <div class="chip {% if finding.anchor_type == 'deposit' %}chip-green{% else %}chip-red{% endif %}">
+        <div class="chip-label">Anchor {{ finding.anchor_type }}</div>
+        <div class="chip-value">KES {{ "{:,.0f}".format(finding.anchor_amount or 0) }}</div>
+      </div>
+      <div class="chip {% if finding.anchor_type == 'deposit' %}chip-red{% else %}chip-green{% endif %}">
+        <div class="chip-label">{{ finding.subsequent_count }} follow-ups</div>
+        <div class="chip-value">KES {{ "{:,.0f}".format(finding.subsequent_total or 0) }}</div>
+      </div>
+      <div class="chip">
+        <div class="chip-label">Within</div>
+        <div class="chip-value">{{ finding.time_window_minutes }} min</div>
+      </div>
+    </div>
+    {% endif %}
+
+    <!-- DWR stat chips -->
+    {% if finding.fraud_type == 'deposit_withdrawal_recovery' %}
+    <div class="stat-chips">
+      <div class="chip chip-green">
+        <div class="chip-label">Deposited</div>
+        <div class="chip-value">KES {{ "{:,.0f}".format(finding.deposit_amount or 0) }}</div>
+      </div>
+      <div class="chip chip-red">
+        <div class="chip-label">Withdrawn</div>
+        <div class="chip-value">KES {{ "{:,.0f}".format(finding.total_withdrawn or 0) }}</div>
+      </div>
+      <div class="chip chip-purple">
+        <div class="chip-label">Recovery{% if finding.overdraw %} ⚠{% endif %}</div>
+        <div class="chip-value">{{ finding.recovery_pct }}%</div>
+      </div>
+    </div>
+    {% endif %}
+
+    <!-- Transactions table -->
+    {% if finding.transaction_details %}
+    <table class="txn-table">
+      <thead>
+        <tr>
+          <th>Receipt</th>
+          <th>Type</th>
+          <th style="text-align:right;">Amount (KES)</th>
+          <th>Time</th>
+          <th>Party</th>
+          <th>Shortcode</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for txn in finding.transaction_details %}
+        <tr>
+          <td style="font-family:monospace;">{{ txn.receipt_no }}</td>
+          <td class="{{ 'type-dep' if txn.type in ('Deposit','DEPOSIT') else 'type-wdr' }}">{{ txn.type }}</td>
+          <td style="text-align:right;font-weight:600;">{{ "{:,.2f}".format(txn.amount or 0) }}</td>
+          <td style="white-space:nowrap;">{{ txn.time }}</td>
+          <td>{{ txn.party_name or txn.party_phone or '—' }}</td>
+          <td>{{ txn.business_shortcode or '—' }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% endif %}
+
+    <!-- Agent companies -->
+    {% if finding.agent_info and finding.agent_info.agent_companies %}
+    <div class="agent-section">
+      <div class="agent-title">Agent Companies</div>
+      <div class="agent-list">
+        {% for ac in finding.agent_info.agent_companies %}
+        <span class="agent-chip">
+          {{ ac.company_name }}{% if ac.short_code %} · {{ ac.short_code }}{% endif %}{% if ac.location %} · {{ ac.location }}{% endif %}
+        </span>
+        {% endfor %}
+      </div>
+    </div>
+    {% endif %}
+
+    <!-- User agents -->
+    {% if finding.agent_info and finding.agent_info.user_agents %}
+    <div class="agent-section" style="margin-top:5px;">
+      <div class="agent-title">User Agents</div>
+      <div class="agent-list">
+        {% for ua in finding.agent_info.user_agents %}
+        <span class="ua-chip">
+          {{ ua.name }}{% if ua.phone_number %} · {{ ua.phone_number }}{% endif %}{% if ua.is_authentic == false %} · Unverified{% endif %}
+        </span>
+        {% endfor %}
+      </div>
+    </div>
+    {% endif %}
+
+  </div><!-- /finding-body -->
+</div><!-- /finding -->
+{% endfor %}
+
+{% else %}
+<div class="no-findings">No suspicious patterns detected in this period.</div>
+{% endif %}
+
+<div class="footer">
+  Generated by Kwamz AI Fraud Detection Engine · {{ generated_at }} · Confidential
+</div>
+
+</body>
+</html>

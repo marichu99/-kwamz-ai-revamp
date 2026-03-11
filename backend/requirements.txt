@@ -30,3 +30,4 @@ flower
 minio
 resend
 cryptography
+weasyprint
