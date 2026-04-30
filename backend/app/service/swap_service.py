@@ -4,7 +4,15 @@ from app.model.agentcompany import AgentCompany
 from app.model.agent_accounts import AgentAccount
 from app.model.agent_account_balances import AgentAccountBalance
 from app.model.useragent import UserAgent, user_agent_companies
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
+
+EAT = timezone(timedelta(hours=3))
+
+
+def _to_eat(dt):
+    if dt is None:
+        return None
+    return dt.replace(tzinfo=timezone.utc).astimezone(EAT).isoformat()
 from decimal import Decimal
 from sqlalchemy import func
 
@@ -47,7 +55,7 @@ class SwapService:
             for ua in user_agents
         ]
 
-    def initiate_swap(self, agent_company_id, new_agent_ids, notes, user_id):
+    def initiate_swap(self, agent_company_id, new_agent_ids, notes, user_id, outgoing_agent_ids=None):
         try:
             agent_company = AgentCompany.query.get(agent_company_id)
             if not agent_company:
@@ -57,9 +65,18 @@ class SwapService:
             float_balance = self._get_balance_for_account_type(agent_company_id, 'FLOAT')
             commission_balance = self._get_balance_for_account_type(agent_company_id, 'COMMISSION')
 
-            # Snapshot current agents
             current_agents = list(agent_company.user_agents)
-            previous_agents_data = self._serialize_agents(current_agents)
+
+            # Determine which agents are going out vs staying
+            if outgoing_agent_ids:
+                outgoing_set = set(outgoing_agent_ids)
+                outgoing_agents = [a for a in current_agents if a.id in outgoing_set]
+                staying_agents = [a for a in current_agents if a.id not in outgoing_set]
+            else:
+                outgoing_agents = current_agents
+                staying_agents = []
+
+            previous_agents_data = self._serialize_agents(outgoing_agents)
 
             # Validate new agents exist
             new_agents = UserAgent.query.filter(UserAgent.id.in_(new_agent_ids)).all()
@@ -81,22 +98,27 @@ class SwapService:
             )
             db.session.add(swap)
 
-            # Update the many-to-many: remove old agents, add new ones
-            # Clear existing associations
-            db.session.execute(
-                user_agent_companies.delete().where(
-                    user_agent_companies.c.agent_company_id == agent_company_id
-                )
-            )
-            # Add new associations
-            for agent in new_agents:
+            # Remove only the outgoing agents from the association table
+            outgoing_ids_to_remove = [a.id for a in outgoing_agents]
+            if outgoing_ids_to_remove:
                 db.session.execute(
-                    user_agent_companies.insert().values(
-                        user_agent_id=agent.id,
-                        agent_company_id=agent_company_id,
-                        created_at=datetime.utcnow()
+                    user_agent_companies.delete().where(
+                        (user_agent_companies.c.agent_company_id == agent_company_id) &
+                        (user_agent_companies.c.user_agent_id.in_(outgoing_ids_to_remove))
                     )
                 )
+
+            # Add new agents (skip any that are already staying on the till)
+            staying_ids = {a.id for a in staying_agents}
+            for agent in new_agents:
+                if agent.id not in staying_ids:
+                    db.session.execute(
+                        user_agent_companies.insert().values(
+                            user_agent_id=agent.id,
+                            agent_company_id=agent_company_id,
+                            created_at=datetime.utcnow()
+                        )
+                    )
 
             db.session.commit()
             return swap.to_dict(), None
@@ -207,10 +229,14 @@ class SwapService:
             for swap in swaps:
                 cid = swap.agent_company_id
                 if cid not in grouped:
+                    ac = swap.agent_company
                     grouped[cid] = {
                         'agent_company_id': cid,
-                        'agent_company_name': swap.agent_company.company_name if swap.agent_company else None,
-                        'till_number': swap.agent_company.till_number if swap.agent_company else None,
+                        'company_name': ac.company.company_name if ac and ac.company else None,
+                        'till_name': (ac.company_name or ac.organization_name) if ac else None,
+                        'till_number': ac.till_number if ac else None,
+                        # kept for backward compatibility
+                        'agent_company_name': (ac.company_name or ac.organization_name) if ac else None,
                         'total_swaps': 0,
                         'swaps': []
                     }
@@ -271,10 +297,12 @@ class SwapService:
             for swap in swaps:
                 cid = swap.agent_company_id
                 if cid not in company_stats:
+                    ac = swap.agent_company
                     company_stats[cid] = {
                         'agent_company_id': cid,
-                        'company_name': swap.agent_company.company_name if swap.agent_company else None,
-                        'till_number': swap.agent_company.till_number if swap.agent_company else None,
+                        'company_name': ac.company.company_name if ac and ac.company else None,
+                        'till_name': (ac.company_name or ac.organization_name) if ac else None,
+                        'till_number': ac.till_number if ac else None,
                         'swap_count': 0,
                         'total_float': Decimal('0'),
                         'total_commission': Decimal('0'),
@@ -295,14 +323,15 @@ class SwapService:
                 companies_list.append({
                     'agent_company_id': cs['agent_company_id'],
                     'company_name': cs['company_name'],
+                    'till_name': cs['till_name'],
                     'till_number': cs['till_number'],
                     'swap_count': cs['swap_count'],
                     'avg_float_at_swap': str(round(cs['total_float'] / cs['swap_count'], 2)),
                     'avg_commission_at_swap': str(round(cs['total_commission'] / cs['swap_count'], 2)),
                     'total_float_at_swaps': str(cs['total_float']),
                     'total_commission_at_swaps': str(cs['total_commission']),
-                    'first_swap': cs['first_swap'].isoformat() if cs['first_swap'] else None,
-                    'last_swap': cs['last_swap'].isoformat() if cs['last_swap'] else None,
+                    'first_swap': _to_eat(cs['first_swap']),
+                    'last_swap': _to_eat(cs['last_swap']),
                 })
 
             report = {
@@ -342,7 +371,7 @@ class SwapService:
             output = io.StringIO()
             writer = csv.writer(output)
             writer.writerow([
-                'Swap ID', 'Company Name', 'Swap Date',
+                'Swap ID', 'Company', 'Till', 'Till Number', 'Swap Date',
                 'Float Balance at Swap', 'Commission Balance at Swap',
                 'Previous Agents', 'New Agents',
                 'Initiated By', 'Notes', 'Status'
@@ -352,7 +381,9 @@ class SwapService:
                 new_names = ', '.join(a.get('name', '') for a in (swap.get('new_agents') or []))
                 writer.writerow([
                     swap['id'],
-                    swap.get('agent_company_name', ''),
+                    swap.get('company_name', ''),
+                    swap.get('till_name', swap.get('agent_company_name', '')),
+                    swap.get('till_number', ''),
                     swap.get('swap_date', ''),
                     swap.get('float_balance_at_swap', '0.00'),
                     swap.get('commission_balance_at_swap', '0.00'),

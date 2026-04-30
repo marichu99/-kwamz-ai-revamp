@@ -1,4 +1,4 @@
-import { Users, DollarSign, TrendingUp, ArrowUpDown } from 'lucide-react'
+import { Users, DollarSign, TrendingUp, ArrowUpDown, Building2 } from 'lucide-react'
 import React from 'react'
 import StatsCard from './StatsCard'
 
@@ -20,7 +20,7 @@ const formatNumber = (value) => {
   return value.toLocaleString()
 }
 
-function StatsGrid({ kpis, isLoading }) {
+function StatsGrid({ kpis, isLoading, isOnboarding = false }) {
   // Build stats data from KPIs
   const statsData = kpis ? [
     {
@@ -76,6 +76,18 @@ function StatsGrid({ kpis, isLoading }) {
             </div>
           </div>
         ))}
+      </div>
+    )
+  }
+
+  if (isOnboarding) {
+    return (
+      <div className='bg-white/90 dark:bg-slate-800/90 backdrop-blur-xl rounded-2xl p-8 border border-slate-200/50 dark:border-slate-700/50 flex flex-col items-center justify-center gap-3 text-center'>
+        <Building2 className="w-10 h-10 text-slate-300 dark:text-slate-600" />
+        <p className="text-base font-semibold text-slate-600 dark:text-slate-300">No statistics yet</p>
+        <p className="text-sm text-slate-500 dark:text-slate-400 max-w-md">
+          Your dashboard statistics will be updated once your company information has been onboarded to the system.
+        </p>
       </div>
     )
   }

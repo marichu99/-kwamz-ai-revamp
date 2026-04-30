@@ -72,37 +72,78 @@ def login_to_mpesa(password: str = None, username: str = None, short_code: str =
         time.sleep(3)
         wait_after_click = 5  # seconds
         
-        # Solve captcha initially
+        # Solve captcha initially — ensure solution looks valid (<= 4 chars)
         captcha_solution = capture_and_solve_captcha(page)
         fill_login_form(page, short_code, username, password)
-        # Fill login fields once
         print("[INFO] Login form filled")
         print(f"[DEBUG] Initial captcha solution: {captcha_solution}")
-        while(len(captcha_solution) > 4):
+
+        while not _is_valid_captcha(captcha_solution):
             captcha_solution = retry_captcha_login(page)
             fill_login_form(page, short_code, username, password)
-            # Fill login fields once
-            print("[INFO] Login form filled")
-            
-        if(has_verification_error_regex(page)):
-            captcha_solution = retry_captcha_login(page)
+            print(f"[DEBUG] Retried captcha solution (validity fix): {captcha_solution}")
 
-        # Fill verification code input and submit
-        page.fill("//input[@id='verifyCode']", captcha_solution)
-        page.click("//button[@id='loginBtn']")
-        print("[INFO] Login button clicked; waiting for response...")
-        
-        # Wait for navigation or error indication
-        search = page.wait_for_selector("(//i[@class='el-icon el-sub-menu__icon-arrow'])[1]", timeout=60000)
-        search.click()
-        print("[SUCCESS] Logged in successfully!")
-        
-        
+        # Submit loop: retry captcha if the server says it's wrong
+        MAX_CAPTCHA_RETRIES = 5
+        logged_in = False
+
+        for attempt in range(1, MAX_CAPTCHA_RETRIES + 1):
+            # Guard: ensure exactly 4 digits before every login click
+            while not _is_valid_captcha(captcha_solution):
+                print(f"[DEBUG] Invalid captcha '{captcha_solution}' on attempt {attempt}, re-solving...")
+                captcha_solution = retry_captcha_login(page)
+
+            print(f"[INFO] Login attempt {attempt}/{MAX_CAPTCHA_RETRIES} with captcha: {captcha_solution}")
+
+            page.fill("//input[@id='verifyCode']", captcha_solution)
+            page.click("//button[@id='loginBtn']")
+            print("[INFO] Login button clicked; waiting for response...")
+
+            # Brief pause to let error message appear before checking
+            time.sleep(3)
+
+            if has_verification_error_regex(page):
+                print(f"[WARN] Captcha wrong on attempt {attempt}, re-solving...")
+                captcha_solution = retry_captcha_login(page)
+                while not _is_valid_captcha(captcha_solution):
+                    captcha_solution = retry_captcha_login(page)
+                    print(f"[DEBUG] Captcha re-solve (validity fix): {captcha_solution}")
+                continue
+
+            # No error shown — wait for the post-login dashboard element
+            try:
+                search = page.wait_for_selector(
+                    "(//i[@class='el-icon el-sub-menu__icon-arrow'])[1]",
+                    timeout=60000
+                )
+                search.click()
+                print("[SUCCESS] Logged in successfully!")
+                logged_in = True
+                break
+            except PlaywrightTimeoutError:
+                # Dashboard didn't appear — check if error crept in after the sleep
+                if has_verification_error_regex(page):
+                    print(f"[WARN] Captcha error detected after waiting (attempt {attempt}), retrying...")
+                    captcha_solution = retry_captcha_login(page)
+                    while not _is_valid_captcha(captcha_solution):
+                        captcha_solution = retry_captcha_login(page)
+                else:
+                    raise
+
+        if not logged_in:
+            raise Exception(f"[ERROR] Failed to log in after {MAX_CAPTCHA_RETRIES} captcha attempts.")
+
         print("[INFO] Navigating to child organization page...")
         navigate_to_child_organization(page)
 
         print("[INFO] Browser will remain open for inspection. Press ENTER to close.")
         # input()
+
+
+
+def _is_valid_captcha(solution: str) -> bool:
+    """Return True only when the captcha solution is exactly 4 numeric digits."""
+    return bool(re.match(r'^\d{4}$', solution.strip()))
 
 def has_verification_error_regex(page) -> bool:
     """Checks if the page contains a verification code error using regex."""
@@ -117,16 +158,25 @@ def retry_captcha_login(page:Page) -> str:
     Args:
         page: Playwright Page object
     """
-    captcha_solution = ""
+    # Predict the captcha that is currently displayed before refreshing
+    captcha_solution = capture_and_solve_captcha(page)
+    print(f"[DEBUG] Captcha predicted (pre-refresh): {captcha_solution}")
+
+    if _is_valid_captcha(captcha_solution):
+        return captcha_solution
+
+    # Prediction invalid — refresh the captcha image, then solve the new one
     svg_element = page.query_selector("//div[@class='img-part']//*[name()='svg']")
     if svg_element:
         svg_element.click()
         print("[INFO] Clicked SVG element to refresh captcha")
+        time.sleep(1)  # wait for new image to render
         captcha_solution = capture_and_solve_captcha(page)
+        print(f"[DEBUG] Captcha predicted (post-refresh): {captcha_solution}")
     else:
         print("[ERROR] SVG element not found")
         raise Exception("Failed to locate SVG element for captcha refresh")
-    
+
     return captcha_solution
     
 def maximize_page(page: Page) -> None:
@@ -143,11 +193,9 @@ def maximize_page(page: Page) -> None:
     except Exception as e:
         print(f"[ERROR] Failed to maximize page: {e}")
         
-def navigate_to_child_organization(page):
-    """
-    Navigates after login: hover on the index icon, click 'My Organization',
-    then click 'Child Organization' and save the resulting page HTML.
-    """
+def _navigate_to_child_org_list(page) -> None:
+    """Navigate to the Child Organisation list without starting row processing."""
+    close_portal_tabs(page)
     print("[INFO] Hovering on the index icon...")
     svg_icon = page.wait_for_selector(
         "(//*[name()='svg'][@class='svg-icon'])[2]",
@@ -162,28 +210,24 @@ def navigate_to_child_organization(page):
     )
     my_org_button.click()
     print("[INFO] 'My Organization' clicked.")
-
-    # Wait for transition
     page.wait_for_timeout(2000)
-    
     page.mouse.click(10, 10)
-    print("[INFO] Clicked on a neutral area to close any open dropdowns.")
 
-    print("[INFO] Clicking 'Child Organization' button...")
     child_org_btn = page.wait_for_selector(
         "//button[normalize-space()='Child Organization']",
         timeout=60000
     )
-    # //button[@aria-label='Go to next page']
     child_org_btn.click()
     print("[INFO] 'Child Organization' clicked. Waiting for page to load...")
+    page.wait_for_timeout(2000)
 
-    # Wait for page load
-
-
-    print("[INFO] Browser will remain open for inspection. Press ENTER to continue.")
+def navigate_to_child_organization(page):
+    """
+    Navigates after login: hover on the index icon, click 'My Organization',
+    then click 'Child Organization' and start processing rows.
+    """
+    _navigate_to_child_org_list(page)
     process_organization_rows(page)
-    #input()
 
 def select_first_float_option_by_index(page) -> bool:
     """Selects the first 'Float Account/XXXXX' option from dropdown."""
@@ -731,6 +775,165 @@ def save_table_to_dataframe_download(page: Page,business_shortcode:int,additiona
         print(f"[ERROR] An error has occurred {e}")
         save_table_to_dataframe_download(page=page,business_shortcode=business_shortcode,additional_category=additional_category)
 
+def save_table_to_dataframe_download_head_office(
+    page: Page,
+    business_shortcode: int,
+    additional_category: str = "",
+    filter_text: str = "Excel",          # ← pass "CSV" (or anything else) to override
+    min_item_count: int = 3,             # ← keep the threshold configurable too
+    target_index: int = 2,              # ← which nth match to click
+) -> tuple:
+    """
+    Excel/CSV export for the Head Office Commission view.
+    Uses JS viewport coordinates for hover since Playwright sees the trigger as hidden.
+    Returns empty DataFrame (not an error) when the export button is disabled (no data).
+
+    Args:
+        filter_text:     Text to match against dropdown items (default "Excel", pass "CSV" for child views).
+        min_item_count:  Minimum number of matching items expected before raising (default 3).
+        target_index:    Zero-based index of the matching item to click (default 2).
+    """
+    try:
+        close_irritative_dialog_box(page)
+        print(f"[EXPORT] Starting Head Office export (filter='{filter_text}')...")
+
+        visible_dropdown = page.locator("div.el-dropdown.padding-export:visible")
+        try:
+            visible_dropdown.wait_for(state="visible", timeout=10000)
+        except Exception:
+            print("[EXPORT] No visible export dropdown — no data for this period")
+            return pd.DataFrame(), False
+
+        visible_dropdown.scroll_into_view_if_needed()
+        time.sleep(0.5)
+
+        coords = page.evaluate("""() => {
+            const el = document.querySelector('div.el-dropdown.padding-export:not(.is-disabled) button');
+            if (!el) return null;
+            const r = el.getBoundingClientRect();
+            return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
+        }""")
+        if not coords:
+            raise Exception("Could not resolve export button viewport coordinates")
+
+        page.mouse.move(coords['x'], coords['y'])
+        print("[EXPORT] Hovered via mouse coordinates")
+        time.sleep(3)
+
+        page.wait_for_function(
+            """() => {
+                const menus = document.querySelectorAll('ul.el-dropdown-menu');
+                for (const menu of menus) {
+                    const rect = menu.getBoundingClientRect();
+                    if (rect.width > 0 && rect.height > 0 && rect.top >= 0) {
+                        return true;
+                    }
+                }
+                return false;
+            }""",
+            timeout=40000
+        )
+        print("[EXPORT] Export dropdown menu is visually open")
+
+        all_items = page.locator("ul.el-dropdown-menu li.el-dropdown-menu__item")
+        matched_items = all_items.filter(has_text=filter_text)          # ← dynamic
+        matched_count = matched_items.count()
+        print(f"[EXPORT] Found {matched_count} visible '{filter_text}' options across all dropdowns")
+
+        if matched_count < min_item_count:
+            raise Exception(
+                f"Expected at least {min_item_count} '{filter_text}' export options, "
+                f"found only {matched_count}"
+            )
+
+        target_item = matched_items.nth(target_index)
+        print(f"[EXPORT] Targeting '{filter_text}' option at index {target_index}")
+
+        # Resolve the item's viewport coordinates so we can click via raw mouse
+        # movement — moving the mouse to an element coordinate keeps the El-UI
+        # dropdown open, whereas Playwright's element .click() internally dispatches
+        # focus/blur events that close the portal before the click lands.
+        item_coords = target_item.evaluate("""el => {
+            const r = el.getBoundingClientRect();
+            return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
+        }""")
+        print(f"[EXPORT] Item coords resolved: {item_coords}")
+
+        with page.expect_download(timeout=60_000) as download_info:
+            if item_coords and item_coords.get('x') and item_coords.get('y'):
+                # Slide mouse from trigger into menu item, then click — no element
+                # click events that would collapse the dropdown
+                page.mouse.move(item_coords['x'], item_coords['y'])
+                time.sleep(0.3)
+                page.mouse.click(item_coords['x'], item_coords['y'])
+                print(f"[EXPORT] Clicked '{filter_text}' via mouse coordinates")
+            else:
+                # Coords unavailable — try JS click as a last resort
+                print("[EXPORT] Could not resolve item coords, falling back to JS click...")
+                target_item.evaluate("el => el.click()")
+
+        download: Download = download_info.value
+        print(f"[EXPORT] Reading {download.suggested_filename} directly into pandas...")
+        temp_path = download.path()
+
+        # Save a debug copy so we can inspect the raw file if parsing fails
+        try:
+            import shutil, datetime as _dt
+            debug_dir = os.path.join(os.path.dirname(__file__), "..", "..", "debug_exports")
+            os.makedirs(debug_dir, exist_ok=True)
+            ext = os.path.splitext(download.suggested_filename)[1] or ".xlsx"
+            ts = _dt.datetime.now().strftime("%Y%m%d_%H%M%S")
+            debug_path = os.path.join(debug_dir, f"head_office_{business_shortcode}_{ts}{ext}")
+            shutil.copy2(temp_path, debug_path)
+            print(f"[DEBUG] Raw export saved to: {debug_path}")
+        except Exception as _e:
+            print(f"[DEBUG] Could not save debug copy: {_e}")
+
+        # M-PESA sometimes returns a JSON error payload instead of a spreadsheet.
+        # Detect this before handing the file to pandas.
+        try:
+            import json as _json
+            with open(temp_path, "rb") as _f:
+                _peek = _f.read(1024).lstrip()
+            if _peek.startswith(b"{"):
+                _err = _json.loads(_peek + b"}")  # best-effort parse
+                _header = _err.get("header", _err)
+                _code = _header.get("responseCode", "?")
+                _desc = _header.get("responseDesc", "unknown")
+                print(f"[EXPORT] M-PESA returned an error payload (code={_code}): {_desc}")
+                return pd.DataFrame(), False
+        except Exception:
+            pass  # not JSON — proceed normally
+
+        # If the download is a CSV it's the Head Office Balance Overview (Level 1/2
+        # hierarchy), not a transaction export. Parse and upsert commission balances.
+        if (download.suggested_filename or '').lower().endswith('.csv'):
+            print("[EXPORT] CSV detected — parsing as Head Office commission balance overview")
+            result = transaction_service.save_head_office_commission_balances(
+                csv_path=temp_path,
+                parent_shortcode=business_shortcode,
+            )
+            if result.get('success'):
+                s = result['summary']
+                print(f"[EXPORT] Commission balances saved: created={s['created']} updated={s['updated']} skipped={s['skipped']}")
+            else:
+                print(f"[EXPORT] Commission balance save failed: {result.get('error')}")
+            return pd.DataFrame(), result.get('success', False)
+
+        df, success_value = update_transactions_from_file(
+            file_path=temp_path,
+            business_shortcode=business_shortcode,
+            transaction_type=additional_category,
+            company_shortcode=company_shortcode,
+            agent_id=None
+        )
+
+        print(f"[SUCCESS] Head Office export loaded: {df.shape[0]} rows × {df.shape[1]} columns")
+        return df, success_value
+
+    except Exception as e:
+        print(f"[ERROR] Head Office export failed: {e}")
+        return None, False
 def process_detailed_receipt(page: Page, receipt_no: str, transaction_type: str = 'float'):
     try:
         # Wait for the detailed view
@@ -1148,7 +1351,7 @@ def go_forth_on_organization(page: Page, row_count: int):
 
         if user:
             # send_session_timeout_email(user.email, user.first_name)
-            send_session_timeout_email("martinmaati31@gmail.com")
+            send_session_timeout_email(user.email)
             context.close()
             browser.close()
         page.screenshot(path="pagination_error.png")
@@ -1360,6 +1563,18 @@ def click_search_button(page: Page) -> bool:
         print(f"[ERROR] Failed to click Search button: {e}")
         return False
 
+def click_search_button_head_office(page: Page) -> bool:
+    try:
+        print("[INFO] Clicking Search button")
+        search_button = page.locator("//div[@id='pane-transactions']//form[@class='el-form el-form--default el-form--label-top form-flex-container']//button[1]").first
+        search_button.wait_for(state="visible", timeout=10000)
+        search_button.click(force=True)
+        print("[INFO] Search button clicked")
+        return True
+    except Exception as e:
+        print(f"[ERROR] Failed to click Search button: {e}")
+        return False
+
 def process_commission_account_details(page: Page, business_short_code: int, mapped_data: Optional[dict], pass_value: str) -> bool:
     try:
         print("[INFO] Processing Commission Account Details")
@@ -1411,6 +1626,9 @@ def process_float_commission(page: Page, business_short_code: int , mapped_data:
         print(f"[INFO] Till is frozen for business {business_short_code}, skipping further processing.")
         return False
         
+    if pass_value == "first":                                                                                                       
+        print(f"[INFO] First pass — skipping commission for {business_short_code}")                                          
+        return True  
 
     # Small pause to let page stabilize
     time.sleep(1)
@@ -1432,6 +1650,458 @@ def process_float_commission(page: Page, business_short_code: int , mapped_data:
 
     print(f"[SUCCESS] Completed processing business {business_short_code}")
     return True
+
+def _find_visible_date_input(page: Page, placeholder: str, max_wait: int = 15):
+    """
+    Poll for up to max_wait seconds for a visible input with the given placeholder.
+    Ignores hidden duplicates by checking each candidate with is_visible().
+    Dumps a debug snapshot on failure.
+    """
+    deadline = time.time() + max_wait
+    while time.time() < deadline:
+        locator = page.locator(f"//input[@placeholder='{placeholder}']")
+        count = locator.count()
+        for i in range(count):
+            inp = locator.nth(i)
+            try:
+                if inp.is_visible():
+                    print(f"[✓] Found visible '{placeholder}' input (index {i} of {count})")
+                    return inp
+            except Exception:
+                continue
+        print(f"[WAIT] '{placeholder}' — none of {count} candidates visible yet, retrying...")
+        time.sleep(1)
+
+    # Dump page state for diagnosis
+    try:
+        with open("date_input_debug.html", "w", encoding="utf-8") as f:
+            f.write(page.content())
+        print("[DEBUG] Page HTML dumped to date_input_debug.html")
+    except Exception:
+        pass
+    raise Exception(f"No visible input with placeholder '{placeholder}' found after {max_wait}s")
+
+
+def select_dates_and_submit_head_office_monthly(page: Page, month_offset: int = 0) -> bool:
+    """
+    Select exact calendar month boundaries for Head Office Commission scraping.
+    month_offset=0: 1st of current month → today
+    month_offset=1: 1st of last month → last day of last month
+    month_offset=2..5: accordingly
+    """
+    try:
+        start_time_input = _find_visible_date_input(page, "Start Time")
+        print("[✓] Found Start Time date picker input")
+        end_time_input = _find_visible_date_input(page, "End Time")
+        print("[✓] Found End Time date picker input")
+
+    except Exception as e:
+        print(f"[ERROR] Could not find date picker inputs: {e}")
+        return False
+
+    try:
+        today = datetime.now()
+
+        target_month = today.month - month_offset
+        target_year = today.year
+        while target_month <= 0:
+            target_month += 12
+            target_year -= 1
+
+        start_date = datetime(target_year, target_month, 1)
+
+        if month_offset == 0:
+            end_date = today
+        elif target_month == 12:
+            end_date = datetime(target_year + 1, 1, 1) - timedelta(days=1)
+        else:
+            end_date = datetime(target_year, target_month + 1, 1) - timedelta(days=1)
+
+        start_date_str = f"{start_date.strftime('%d/%m/%Y')} 00:00:00"
+        end_date_str   = f"{end_date.strftime('%d/%m/%Y')} 23:59:59"
+
+        print(f"[INFO] Head Office Commission month {month_offset + 1}/6:")
+        print(f"[INFO]   From: {start_date_str}")
+        print(f"[INFO]   To:   {end_date_str}")
+
+        page.click("body", position={"x": 10, "y": 10})
+        time.sleep(1)
+
+        start_time_input.click()
+        start_time_input.fill("")
+        time.sleep(0.2)
+        start_time_input.type(start_date_str)
+        start_time_input.press("Enter")
+        time.sleep(0.5)
+
+        end_time_input.click()
+        end_time_input.fill("")
+        time.sleep(0.5)
+        end_time_input.type(end_date_str)
+        end_time_input.press("Enter")
+
+        # Search button lives in div.form-btns — use force=True as it sits hidden in DOM
+        click_search_button_head_office(page)
+
+        too_large_error = page.locator("//button[@aria-label='Close this dialog']").first
+        if too_large_error.is_visible():
+            close_irritative_dialog_box(page)
+            return select_dates_and_submit_head_office_monthly(page, month_offset=month_offset)
+
+        print("[✓] Head Office Commission form submitted")
+        return True
+
+    except Exception as e:
+        print(f"[ERROR] Could not set Head Office Commission dates: {e}")
+        traceback.print_exc()
+        return False
+
+
+def scrape_head_office_commission_held_account(page: Page) -> bool:
+    """
+    Scrapes the Commission Held Account from the Account Statement tab.
+    Called while already on the review-transaction page (after scrape_head_office_commission).
+    Keeps only rows where Paid In > 0 before saving to the database.
+    """
+    try:
+        print("[INFO] ===== Starting Commission Held Account Scraping =====")
+
+        # Step 1: Click Account Statement tab
+        print("[STEP 1] Clicking Account Statement tab...")
+        acct_tab = page.wait_for_selector("//div[@id='tab-accountStatement']", timeout=30000)
+        acct_tab.click()
+        time.sleep(2)
+
+        # Step 2: Open dropdown and select Commission Held Account (7 arrow-downs)
+        # 8 lands on "Agency Commission Account"; 7 lands on "Commission Held Account"
+        print("[STEP 2] Selecting Commission Held Account (7 arrow-downs)...")
+        dropdown_caret = page.locator(
+            "//div[@class='el-form-item is-success is-required asterisk-left "
+            "el-form-item--label-top none-margin-bottom']"
+            "//i[@class='el-icon el-select__caret el-select__icon']"
+        ).first
+        dropdown_caret.wait_for(state="visible", timeout=15000)
+        dropdown_caret.click(force=True)
+        time.sleep(0.5)
+
+        for _ in range(7):
+            page.keyboard.press("ArrowDown")
+            time.sleep(0.2)
+        page.keyboard.press("Enter")
+        time.sleep(2)
+        print("[INFO] Commission Held Account selected")
+
+        # Step 3: Scrape last 6 calendar months
+        all_data = []
+        for month_offset in range(6):
+            close_irritative_dialog_box(page)
+            print(f"\n{'=' * 60}")
+            print(f"Commission Held Account - chunk {month_offset + 1}/6")
+            print("=" * 60)
+
+            # Find date inputs
+            try:
+                start_time_input = _find_visible_date_input(page, "Start Time")
+                end_time_input   = _find_visible_date_input(page, "End Time")
+            except Exception as e:
+                print(f"[ERROR] Date inputs not found for month {month_offset + 1}: {e}")
+                continue
+
+            # Calendar month boundaries
+            today = datetime.now()
+            target_month = today.month - month_offset
+            target_year  = today.year
+            while target_month <= 0:
+                target_month += 12
+                target_year  -= 1
+
+            start_date = datetime(target_year, target_month, 1)
+            if month_offset == 0:
+                end_date = today
+            elif target_month == 12:
+                end_date = datetime(target_year + 1, 1, 1) - timedelta(days=1)
+            else:
+                end_date = datetime(target_year, target_month + 1, 1) - timedelta(days=1)
+
+            start_date_str = f"{start_date.strftime('%d/%m/%Y')} 00:00:00"
+            end_date_str   = f"{end_date.strftime('%d/%m/%Y')} 23:59:59"
+            print(f"[INFO] From: {start_date_str}  To: {end_date_str}")
+
+            # Fill date inputs
+            page.click("body", position={"x": 10, "y": 10})
+            time.sleep(0.5)
+
+            start_time_input.click()
+            start_time_input.fill("")
+            time.sleep(0.2)
+            start_time_input.type(start_date_str)
+            start_time_input.press("Enter")
+            time.sleep(0.5)
+
+            end_time_input.click()
+            end_time_input.fill("")
+            time.sleep(0.5)
+            end_time_input.type(end_date_str)
+            end_time_input.press("Enter")
+
+            # Click search button
+            try:
+                search_btn = page.locator("//div[@class='section-content']//button[1]").first
+                search_btn.click(force=True)
+                print("[INFO] Search button clicked")
+            except Exception as e:
+                print(f"[ERROR] Search failed for month {month_offset + 1}: {e}")
+                continue
+            time.sleep(2)
+
+            if not does_transaction_exist_for_period_(page):
+                print("[INFO] No data for this period — skipping")
+                continue
+
+            # Download and filter (Paid In > 0 only)
+            try:
+                visible_dropdown = page.locator("div.el-dropdown.padding-export:visible")
+                visible_dropdown.wait_for(state="visible", timeout=10000)
+                visible_dropdown.scroll_into_view_if_needed()
+                time.sleep(0.5)
+
+                coords = page.evaluate("""() => {
+                    const el = document.querySelector('div.el-dropdown.padding-export:not(.is-disabled) button');
+                    if (!el) return null;
+                    const r = el.getBoundingClientRect();
+                    return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
+                }""")
+                if not coords:
+                    print("[EXPORT] Could not resolve export button coordinates — skipping")
+                    continue
+
+                page.mouse.move(coords['x'], coords['y'])
+                time.sleep(3)
+
+                page.wait_for_function(
+                    """() => {
+                        const menus = document.querySelectorAll('ul.el-dropdown-menu');
+                        for (const menu of menus) {
+                            const rect = menu.getBoundingClientRect();
+                            if (rect.width > 0 && rect.height > 0 && rect.top >= 0) return true;
+                        }
+                        return false;
+                    }""",
+                    timeout=40000
+                )
+
+                all_items  = page.locator("ul.el-dropdown-menu li.el-dropdown-menu__item")
+                excel_items = all_items.filter(has_text="Excel")
+                if excel_items.count() < 3:
+                    print("[EXPORT] Not enough Excel options — skipping")
+                    continue
+
+                with page.expect_download(timeout=60_000) as dl_info:
+                    try:
+                        excel_items.nth(2).click(force=True, timeout=15_000)
+                    except Exception:
+                        excel_items.nth(2).evaluate("el => el.click()")
+
+                temp_path = dl_info.value.path()
+
+                # Extract the company shortcode from the Excel header (row 1 = "Short Code: 462300")
+                # This attributes commission to the correct company, not the login shortcode
+                excel_shortcode = company_shortcode  # fallback
+                try:
+                    df_header = pd.read_excel(temp_path, nrows=6, header=None)
+                    for hi in range(len(df_header)):
+                        row_str = ' '.join(df_header.iloc[hi].astype(str).tolist())
+                        sc_match = re.search(r'Short\s*Code[:\s]+(\d{4,})', row_str, re.IGNORECASE)
+                        if sc_match:
+                            excel_shortcode = sc_match.group(1).strip()
+                            print(f"[INFO] Excel company shortcode: {excel_shortcode}")
+                            break
+                except Exception as _hdr_err:
+                    print(f"[WARN] Could not extract shortcode from Excel header: {_hdr_err}")
+
+                # Read and split by transaction kind
+                df_raw = pd.read_excel(temp_path, skiprows=6)
+                print(f"[DEBUG] Raw columns: {list(df_raw.columns)}, rows: {len(df_raw)}")
+
+                # Identify clawback rows via the Details column
+                details_col = next(
+                    (c for c in df_raw.columns if 'detail' in str(c).lower()), None
+                )
+                if details_col:
+                    is_clawback = df_raw[details_col].astype(str).str.contains(
+                        'clawback', case=False, na=False
+                    )
+                    df_clawback = df_raw[is_clawback].reset_index(drop=True)
+                    df_held    = df_raw[~is_clawback].reset_index(drop=True)
+                else:
+                    df_clawback = pd.DataFrame()
+                    df_held = df_raw
+
+                # Save clawbacks as separate type (attributed to Excel's company)
+                if not df_clawback.empty:
+                    r_cb = transaction_service.update_transactions_from_dataframe(
+                        df=df_clawback,
+                        transaction_type="commission_clawback",
+                        company_shortcode=excel_shortcode,
+                        agent_id=None,
+                        business_shortcode=excel_shortcode
+                    )
+                    print(f"[INFO] Clawback save result: {r_cb.get('success')} — {len(df_clawback)} row(s) for month {month_offset + 1}")
+
+                # Save commission held rows (non-clawback, attributed to Excel's company)
+                results = transaction_service.update_transactions_from_dataframe(
+                    df=df_held,
+                    transaction_type="commission_held",
+                    company_shortcode=excel_shortcode,
+                    agent_id=None,
+                    business_shortcode=excel_shortcode
+                )
+                print(f"[DEBUG] Commission held save result: success={results.get('success')}, "
+                      f"created={results.get('created_count',0)}, updated={results.get('updated_count',0)}, "
+                      f"errors={results.get('error_count',0)}, error={results.get('error','')}")
+                if results.get('success'):
+                    df_raw['scrape_timestamp'] = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                    df_raw['month_offset'] = month_offset
+                    all_data.append(df_raw)
+                    print(f"[SUCCESS] Commission Held: {len(df_held)} rows saved for month {month_offset + 1}")
+
+            except Exception as exp_err:
+                print(f"[ERROR] Export/save failed for month {month_offset + 1}: {exp_err}")
+                traceback.print_exc()
+
+            if month_offset < 5:
+                time.sleep(1)
+
+        if all_data:
+            combined = pd.concat(all_data, ignore_index=True)
+            print(f"\n{'=' * 60}")
+            print(f"COMMISSION HELD TOTAL: {len(combined)} rows from {len(all_data)} periods")
+            print("=" * 60)
+        else:
+            print("[INFO] No Commission Held data scraped")
+
+        print("[INFO] ===== Commission Held Account Scraping Complete =====")
+        return True
+
+    except Exception as e:
+        print(f"[ERROR] scrape_head_office_commission_held_account failed: {e}")
+        traceback.print_exc()
+        return False
+
+
+def scrape_head_office_commission(page: Page) -> bool:
+    """
+    Scrapes the Head Office Commission account immediately after login.
+    Clicks the dashboard Review Transaction card, navigates to the Transactions
+    tab, selects the Head Office Commission dropdown option (7th caret, 6 arrow-downs),
+    then scrapes the last 6 calendar months of data via Excel export.
+    """
+    try:
+        print("[INFO] ===== Starting Head Office Commission Scraping =====")
+
+        # Step 1: Click the Review Transaction card button on the dashboard
+        print("[STEP 1] Clicking Review Transaction card button...")
+        review_btn = page.wait_for_selector(
+            "//div[@class='el-card is-always-shadow home-card portal-item review-transaction']"
+            "//div[@class='el-card__header']"
+            "//div[@class='home-card-header']"
+            "//span[@class='handler']"
+            "//span"
+            "//button[@type='button']",
+            timeout=30000
+        )
+        review_btn.click()
+        time.sleep(2)
+
+        # Step 2: Click Transactions tab
+        print("[STEP 2] Clicking Transactions tab...")
+        transactions_tab = page.wait_for_selector(
+            "//div[@id='tab-transactions']",
+            timeout=30000
+        )
+        transactions_tab.click()
+        time.sleep(1)
+
+        # Step 3: Open the 7th account dropdown caret and arrow-down 6 times
+        print("[STEP 3] Selecting Head Office Commission account from dropdown...")
+        dropdown = page.locator("(//i[@class='el-icon el-select__caret el-select__icon'])[7]")
+        if dropdown.count() == 0:
+            print("[INFO] Primary dropdown locator not found, trying positional fallback...")
+            dropdown = page.locator(
+                "//div[5]//div[1]//div[1]//div[1]//div[1]//div[1]//div[2]//i[1]"
+            )
+
+        dropdown.wait_for(state="visible", timeout=15000)
+        dropdown.click(force=True)
+        time.sleep(0.5)
+
+        for _ in range(6):
+            page.keyboard.press("ArrowDown")
+            time.sleep(0.2)
+        page.keyboard.press("Enter")
+        time.sleep(3)
+        print("[INFO] Head Office Commission account selected")
+
+        # Step 4: Scrape last 6 calendar months
+        all_data = []
+        for month_offset in range(3):
+            close_irritative_dialog_box(page)
+            print(f"\n{'=' * 60}")
+            print(f"Head Office Commission - chunk {month_offset + 1}/3")
+            print("=" * 60)
+
+            success = select_dates_and_submit_head_office_monthly(page, month_offset=month_offset)
+            if not success:
+                close_irritative_dialog_box(page)
+                time.sleep(1)
+                print(f"[INFO] Retrying date selection for month offset {month_offset}...")
+                success = select_dates_and_submit_head_office_monthly(page, month_offset=month_offset)
+                if not success:
+                    print(f"[ERROR] Skipping month offset {month_offset} after retry failure")
+                    continue
+
+            time.sleep(1)
+
+            if not does_transaction_exist_for_period_(page):
+                print("[INFO] No transactions found for this period — skipping")
+                continue
+
+            df, success_value = save_table_to_dataframe_download_head_office(
+                page,
+                business_shortcode=company_shortcode,
+                additional_category="commission"
+            )
+
+            if df is not None and len(df) > 0:
+                df['scrape_timestamp'] = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                df['month_offset'] = month_offset
+                all_data.append(df)
+                print(f"[SUCCESS] Head Office Commission: {len(df)} rows for month offset {month_offset}")
+            else:
+                print(f"[INFO] No data returned for month offset {month_offset}")
+
+            if month_offset < 2:
+                time.sleep(1)
+
+        if all_data:
+            combined_df = pd.concat(all_data, ignore_index=True)
+            print(f"\n{'=' * 60}")
+            print(f"HEAD OFFICE COMMISSION TOTAL: {len(combined_df)} rows from {len(all_data)} periods")
+            print("=" * 60)
+        else:
+            print("[INFO] No Head Office Commission data scraped across all periods")
+
+        print("[INFO] ===== Head Office Commission Scraping Complete =====")
+
+        # Immediately scrape Commission Held Account from the Account Statement tab
+        scrape_child_org_commission(page, business_shortcode=company_shortcode)
+        return True
+
+    except Exception as e:
+        print(f"[ERROR] scrape_head_office_commission failed: {e}")
+        traceback.print_exc()
+        return False
+
 
 def select_dates_and_submit_monthly(page: Page, month_offset: int = 0) -> bool:
     """
@@ -1909,97 +2579,242 @@ def solveCaptchaXai(image_path):
     print(f"Extracted CAPTCHA: {captcha_text}")
     return captcha_text
 
-def extract_user_agent_kyc(short_code:str,page:Page) -> bool:
-    kyc_tab_key = page.wait_for_selector("//div[@id='tab-third']",timeout=10000)
+def extract_user_agent_kyc(short_code: str, page: Page) -> bool:
+    """
+    Extracts KYC information for each agent/till operator under a shortcode.
 
-    kyc_tab_key.click()
-    time.sleep(5)
-
-    scroll_to_bottom(page=page)
-    
-    if(short_code == "2811179"):
-        print(f"We are at the kyc tab")
-        exit(0)
-
-    org_details = page.wait_for_selector("//div[@class='el-table--fit el-table--border el-table--enable-row-hover el-table--enable-row-transition el-table el-table--layout-fixed multi_table is-scrolling-none']//div[@class='el-table__inner-wrapper']",timeout=10000)
-
-    soup = BeautifulSoup(org_details.inner_html(),"html.parser")
-
+    Flow:
+      1. Navigate to the "Organization Operator" section.
+      2. For each row in the operator table, click its detail button.
+      3. Grab the inner HTML of the KYC form panel.
+      4. Parse and upsert UserAgent records.
+    """
     try:
-        # Parse contact rows from the KYC table
-        rows = soup.select("tbody tr.el-table__row")
+        # Step 1: Click the "Organization Operator" tab/section
+        print("[INFO] Navigating to Organization Operator section...")
+        org_operator_tab = page.wait_for_selector(
+            "//div[contains(text(),'Organization Operator')]",
+            timeout=15000
+        )
+        org_operator_tab.click()
+        time.sleep(1)
 
-        for row in rows:
-            cells = row.select("td .view_span")
-            if len(cells) < 7:
-                print("The cells  do not make the cut")
-                continue
+        # Step 2: Collect all operator rows
+        rows = page.query_selector_all("//tr[@class='el-table__row']")
+        print(f"[INFO] Found {len(rows)} operator row(s) for short_code {short_code}")
 
-            contact_type = cells[0].get_text(strip=True)
-            first_name = cells[1].get_text(strip=True)
-            second_name = cells[2].get_text(strip=True)
-            surname = cells[3].get_text(strip=True)
-            phone_number = cells[4].get_text(strip=True)
-            # cells[5] = ID Type (e.g. "National ID")
-            id_number = cells[6].get_text(strip=True)
+        agent_company_service_local = AgentCompanyService()
+        agent_company = agent_company_service_local.get_agent_company_by_shortcode_(str(short_code))
 
-            if not id_number or id_number == '-':
-                continue
+        for idx, row in enumerate(rows):
+            try:
+                # Read the Role column from this row BEFORE clicking Detail.
+                # Table columns: Identity ID | Operator ID | MSISDN | Role | Identity Status | User Name | Operation
+                # Role is in the 4th <td> (index 3).
+                cells = row.query_selector_all("td")
+                operator_role = None
+                if len(cells) >= 4:
+                    role_text = cells[3].inner_text().strip()
+                    if role_text and role_text != "-":
+                        operator_role = role_text
+                print(f"[INFO] Row {idx + 1}/{len(rows)} — role: {operator_role}")
 
-            # Combine second_name and surname as lastname
-            lastname = f"{second_name} {surname}".strip() or surname
+                # Step 3: Click the Detail button on this row
+                detail_btn = row.query_selector("button[type='button']")
+                if not detail_btn:
+                    print(f"[WARN] No button found on row {idx + 1}, skipping.")
+                    continue
 
-            # Normalize phone number
-            phone = phone_number if phone_number and phone_number != '-' else None
+                detail_btn.click()
+                time.sleep(3)
 
-            # Resolve AgentCompany by short_code first
-            agent_company_service = AgentCompanyService()
-            agent_company = agent_company_service.get_agent_company_by_shortcode_(str(short_code))
-
-            # Check if UserAgent with this ID number already exists
-            existing_agent = UserAgent.query.filter_by(idnumber=id_number).first()
-
-            if existing_agent:                
-                print("We have found an existing agent")
-                user_agent = existing_agent
-                user_agent.firstname = first_name
-                user_agent.lastname = lastname
-                if phone:
-                    user_agent.phone_number = phone
-                user_agent.authenticity_desc = f"Scraped from KYC - {contact_type}"
-                if user_id:
-                    user_agent.user_id = user_id
-                if agent_company and not user_agent.agent_company_id:
-                    user_agent.agent_company_id = agent_company.id
-                print(f"[INFO] Updated existing UserAgent: {user_agent}")
-            else:
-                print("We have found a new  agent")
-                user_agent = UserAgent(
-                    firstname=first_name,
-                    lastname=lastname,
-                    idnumber=id_number,
-                    phone_number=phone,
-                    is_authentic=False,
-                    authenticity_desc=f"Scraped from KYC - {contact_type}",
-                    user_id=user_id,
-                    agent_company_id=agent_company.id if agent_company else None
+                # Step 4: Wait for and capture the KYC form HTML
+                kyc_panel = page.wait_for_selector(
+                    "//div[@class='common-kyc-form common-kyc-form-review']",
+                    timeout=15000
                 )
-                db.session.add(user_agent)
-                db.session.flush()
-                print(f"[INFO] Created new UserAgent: {user_agent}")
+                kyc_html = kyc_panel.inner_html()
+                print(f"[DEBUG] Captured KYC HTML for row {idx + 1} ({len(kyc_html)} chars)")
 
-            # Link to AgentCompany m2m
-            if agent_company and agent_company not in user_agent.agent_companies:
-                user_agent.agent_companies.append(agent_company)
-                print(f"[INFO] Linked UserAgent {user_agent} to AgentCompany {agent_company.company_name}")
+                # Step 5: Parse and save the KYC form
+                _parse_and_save_kyc(
+                    kyc_html=kyc_html,
+                    short_code=short_code,
+                    agent_company=agent_company,
+                    operator_role=operator_role
+                )
+
+                # Navigate back to the operator list for the next row
+                page.go_back()
+                close_detail_panel(page)
+                time.sleep(1)
+
+                # Re-query rows after navigation
+                rows = page.query_selector_all("//tr[@class='el-table__row']")
+
+            except Exception as row_err:
+                print(f"[ERROR] Failed to process row {idx + 1}: {row_err}")
+                traceback.print_exc()
+                # Try to recover — go back to the list
+                try:
+                    page.go_back()
+                    time.sleep(1)
+                    rows = page.query_selector_all("//tr[@class='el-table__row']")
+                except Exception:
+                    pass
+                continue
 
         db.session.commit()
-        print(f"[INFO] Successfully processed KYC contacts for short_code {short_code}")
+        print(f"[INFO] Successfully processed KYC for short_code {short_code}")
 
     except Exception as e:
         db.session.rollback()
-        print(f"[ERROR] Failed to create/link user agents for {short_code}: {e}")
+        print(f"[ERROR] extract_user_agent_kyc failed for {short_code}: {e}")
         traceback.print_exc()
+
+
+def _parse_and_save_kyc(kyc_html: str, short_code: str, agent_company, operator_role: str = None) -> None:
+    """
+    Parses the inner HTML of //div[@class='common-kyc-form common-kyc-form-review']
+    and upserts a UserAgent record.
+
+    HTML structure (confirmed from last_kyc_debug.html):
+      - Label  : div.el-form-item__label
+      - Value  : span.view_span  (sibling div.el-form-item__content inside same div.el-form-item)
+      - ID Details use an el-table; values are also span.view_span in tbody td cells.
+    """
+    soup = BeautifulSoup(kyc_html, "html.parser")
+
+    def get_field(label: str) -> str:
+        """
+        Find a div.el-form-item__label whose text matches `label`,
+        then return the text of span.view_span inside the adjacent
+        div.el-form-item__content.
+        """
+        for lbl_div in soup.find_all("div", class_="el-form-item__label"):
+            if lbl_div.get_text(strip=True) == label:
+                parent = lbl_div.find_parent("div", class_="el-form-item")
+                if parent:
+                    content = parent.find("div", class_="el-form-item__content")
+                    if content:
+                        val = content.find("span", class_="view_span")
+                        if val:
+                            return val.get_text(strip=True)
+        return ""
+
+    def val_or_none(v: str):
+        """Return None for empty / dash values."""
+        return v if v and v != "-" else None
+
+    # ── Personal Details ──────────────────────────────────────────────
+    first_name    = get_field("First Name")
+    middle_name   = get_field("Middle Name")
+    last_name     = get_field("Last Name")
+    date_of_birth = get_field("Date of Birth")
+    gender        = get_field("Gender")
+    email         = get_field("Email")
+    nationality   = get_field("Nationality")
+    phone_number  = get_field("Preferred Contact Phone Number")
+
+    # ── ID Details (table: two span.view_span per row) ────────────────
+    id_number = ""
+    id_rows = soup.select("div.array-kyc-group tbody tr.el-table__row")
+    for id_row in id_rows:
+        spans = id_row.select("span.view_span")
+        if len(spans) >= 2:
+            id_number = spans[1].get_text(strip=True)  # column 2 = ID Number
+            break  # take the first ID row
+
+    # ── Contact Details ───────────────────────────────────────────────
+    notif_msisdn = get_field("Notification Receiving MSISDN")
+    notif_email  = get_field("Notification Receiving E-mail")
+
+    # ── Combine ───────────────────────────────────────────────────────
+    lastname  = " ".join(filter(None, [middle_name, last_name])).strip() or last_name
+    phone     = val_or_none(phone_number) or val_or_none(notif_msisdn)
+    email_val = val_or_none(email) or val_or_none(notif_email)
+
+    if not id_number or id_number == "-":
+        print("[WARN] No ID number found in KYC form, skipping.")
+        return
+
+    print(f"[INFO] KYC — name: {first_name} {lastname}, ID: {id_number}, "
+          f"phone: {phone}, email: {email_val}, dob: {date_of_birth}, "
+          f"gender: {gender}, nationality: {nationality}")
+
+    # Look for an existing UserAgent scoped to this company with the same role (category).
+    # If found → update; if different role or no match → create a new UserAgent for this company.
+    existing = None
+    if agent_company:
+        existing = (
+            UserAgent.query
+            .filter_by(operator_role=operator_role)
+            .filter(
+                db.or_(
+                    UserAgent.agent_company_id == agent_company.id,
+                    UserAgent.agent_companies.any(id=agent_company.id)
+                )
+            )
+            .first()
+        )
+        if existing:
+            print(f"[INFO] Found existing UserAgent id={existing.id} with same role={operator_role} "
+                  f"for company {agent_company.short_code} — updating.")
+        else:
+            print(f"[INFO] No UserAgent with role={operator_role} for company {agent_company.short_code} "
+                  f"— will create new.")
+
+    if existing:
+        existing.firstname         = first_name or existing.firstname
+        existing.lastname          = lastname   or existing.lastname
+        existing.idnumber          = id_number
+        existing.authenticity_desc = f"Scraped from KYC (short_code={short_code})"
+        if phone:
+            existing.phone_number = phone
+        if user_id:
+            existing.user_id = user_id
+        if agent_company and not existing.agent_company_id:
+            existing.agent_company_id = agent_company.id
+        user_agent = existing
+        print(f"[INFO] Updated UserAgent id={existing.id} role={operator_role}")
+    else:
+        # Guard against idnumber uniqueness violation: if this ID number is already in the
+        # system under a different company/role, we reuse that record rather than duplicating.
+        id_conflict = UserAgent.query.filter_by(idnumber=id_number).first()
+        if id_conflict:
+            id_conflict.firstname         = first_name or id_conflict.firstname
+            id_conflict.lastname          = lastname   or id_conflict.lastname
+            id_conflict.authenticity_desc = f"Scraped from KYC (short_code={short_code})"
+            if phone:
+                id_conflict.phone_number = phone
+            if operator_role:
+                id_conflict.operator_role = operator_role
+            if user_id:
+                id_conflict.user_id = user_id
+            if agent_company and not id_conflict.agent_company_id:
+                id_conflict.agent_company_id = agent_company.id
+            user_agent = id_conflict
+            print(f"[INFO] ID {id_number} already exists globally (id={id_conflict.id}), "
+                  f"reused and updated role to {operator_role}.")
+        else:
+            user_agent = UserAgent(
+                firstname=first_name,
+                lastname=lastname,
+                idnumber=id_number,
+                phone_number=phone,
+                is_authentic=False,
+                authenticity_desc=f"Scraped from KYC (short_code={short_code})",
+                operator_role=operator_role,
+                user_id=user_id,
+                agent_company_id=agent_company.id if agent_company else None
+            )
+            db.session.add(user_agent)
+            db.session.flush()
+            print(f"[INFO] Created new UserAgent id={user_agent.id} role={operator_role}")
+
+    if agent_company and agent_company not in user_agent.agent_companies:
+        user_agent.agent_companies.append(agent_company)
+        print(f"[INFO] Linked UserAgent to AgentCompany {agent_company.company_name}")
 
 def navigate_to_review_transaction(business_short_code:str, page:Page) -> bool:
     """Navigate through detail panel to Review Transaction button."""
@@ -2053,7 +2868,7 @@ def select_pagination_size(page: Page, down_presses: int = 3, timeout: int = 200
         
         pagination_dropdown = "//span[@class='el-pagination__sizes']//i[@class='el-icon el-select__caret el-select__icon']"
         dropdown = page.locator(pagination_dropdown).first
-        time.sleep(2)
+        time.sleep(1)
         
         if dropdown.is_visible():
             dropdown.click()
@@ -2068,7 +2883,7 @@ def select_pagination_size(page: Page, down_presses: int = 3, timeout: int = 200
             return False
 
         # Optional: wait a tiny bit for UI to settle
-        time.sleep(2)
+        time.sleep(1)
 
         return True
 
@@ -2100,6 +2915,21 @@ def does_transaction_exist_for_period_(page:Page) -> bool:
         print(f"[WARN]: The transactions exists {e}")
         return True
     
+def close_portal_tabs(page: Page) -> None:
+    """Click the last (//i[@class='el-icon']) icon to close the most recently opened portal tab."""
+    try:
+        icons = page.locator("//i[@class='el-icon']")
+        count = icons.count()
+        if count <= 2:
+            return
+        last_icon = icons.nth(count - 1)
+        if last_icon.is_visible():
+            print(f"[INFO] Closing last portal tab via icon [{count}]")
+            last_icon.click()
+            page.wait_for_timeout(500)
+    except Exception as e:
+        print(f"[WARN] close_portal_tabs: {e}")
+
 def close_detail_panel(page):
     """Attempt to close any open detail panels and return to list."""
     print("[INFO] Attempting to close detail panel...")
@@ -2136,6 +2966,7 @@ def return_to_organization_list(page) -> bool:
         )
         org_detail.click()
         page.wait_for_timeout(1000)
+        close_portal_tabs(page)
         return True
     except Exception as e:
         print(f"[ERROR] Failed to return to organization list: {e}")
@@ -2149,7 +2980,7 @@ def process_organization_rows(page: Page) -> None:
     to_be_rerun: list[int] = []
     close_irritative_dialog_box(page)
     all_shortcodes_ :Set[str] =set()
-    time.sleep(2)
+    time.sleep(1)
     all_shortcodes = extract_all_business_short_codes(page,all_shortcodes_)
     print(f"[INFO] Extracted {len(all_shortcodes)} business short codes on all pages")
     
@@ -2159,10 +2990,33 @@ def process_organization_rows(page: Page) -> None:
     while go_previous_on_organisation(page):
         pass # Go back to first page
 
+    # [TEST] Scrape head office commission before any row processing
+    print("[INFO] [TEST] Navigating to dashboard for Head Office Commission scraping...")
+    try:
+        page.locator("(//*[name()='svg'][@class='svg-icon'])[1]").first.click()
+        time.sleep(2)
+    except Exception as _nav_err:
+        print(f"[WARN] Dashboard nav click failed: {_nav_err}")
+    scrape_head_office_commission(page)
+    print("[INFO] [TEST] Returning to Child Organisation list after head office scraping...")
+
+    # scrape children commissions
+    # scrape_child_org_commission(page)
+    _navigate_to_child_org_list(page)
+    wait_for_table_load(page)
+    # [END TEST]
+
+    # Page is already settled — skip the networkidle re-wait on first iteration
+    first_iteration = True
+
     while True:
         print("\n[INFO] Starting new pagination page...")
 
-        wait_for_table_load(page)
+        if first_iteration:
+            time.sleep(0.5)  # page already loaded, avoid redundant networkidle wait
+            first_iteration = False
+        else:
+            wait_for_table_load(page)
 
         total_in_list = get_total_from_pagination(page)
         if total_in_list == 0:
@@ -2201,9 +3055,19 @@ def process_organization_rows(page: Page) -> None:
             
             # send_scraping_report_email(user.email, stats)
             send_scraping_report_email("martinmaati31@gmail.com", stats)
+
+            # # === Head Office Commission (between float and commission passes) ===
+            # print("[INFO] Children float complete. Scraping Head Office Commission...")
+            # scrape_head_office_commission(page)  # also calls scrape_head_office_commission_held_account
+
+            # # Navigate back to Child Organisation list for the commission pass
+            # print("[INFO] Returning to Child Organisation list for commission pass...")
+            # _navigate_to_child_org_list(page)
+            # wait_for_table_load(page)
+
             while go_previous_on_organisation(page):
                 pass
-            
+
             # start the second pass
             start_second_pass(page=page,
                               total_in_list=total_in_list,
@@ -2235,6 +3099,47 @@ def start_second_pass(page:Page,total_in_list:int,total_processed_so_far:int,pri
                                     )
         except Exception as e:
             print(f"[ERROR] An error has occured here {str(e)}")
+
+def scrape_child_org_commission(page:Page,business_shortcode:str=""):
+    try:
+        print("[INFO] Scraping Child Organisation Commission...")
+        commission_tab = page.wait_for_selector(
+            "//div[@class='item_name item_num_active'][normalize-space()='Balance Overview']",
+            timeout=10000
+        )
+        commission_tab.click()
+        time.sleep(1)
+        # Add any specific scraping logic for the commission tab here
+
+        account_type_dropdown = page.wait_for_selector(
+            "//div[@class='form-content__box']//i[@class='el-icon el-select__caret el-select__icon']",
+            timeout=10000
+        )
+        account_type_dropdown.click()
+        time.sleep(0.5)
+
+        for _ in range(9):
+            page.keyboard.press("ArrowDown")
+            time.sleep(0.1)
+        page.keyboard.press("Enter")
+        time.sleep(2)
+
+        #click on search 
+        search_button = page.wait_for_selector(
+            "//button[@class='el-button el-button--primary']",
+            timeout=10000
+        )
+        search_button.click()
+        time.sleep(0.5)
+
+        save_table_to_dataframe_download_head_office(
+            page, business_shortcode,
+            filter_text="CSV",
+            min_item_count=1,   # adjust if CSV has fewer menu entries than Excel
+            target_index=1,
+        )
+    except Exception as e:
+        print(f"[ERROR] Failed to scrape child organization commission: {e}")
 
 def wait_for_table_load(page: Page, timeout: int = 15000) -> None:
     """Wait for network idle and allow lazy loading."""
@@ -2491,7 +3396,15 @@ def process_single_row(page: Page, business_short_code: int, row_number: int, pa
 
         # Scrape basic till details
         mapped_data = scrape_till_details(page, business_short_code)
-                        
+
+        # Persist the company now so extract_user_agent_kyc (called inside
+        # navigate_to_review_transaction) can resolve it by short_code.
+        # This is intentionally called again in extract_extra_till_info with
+        # account details — save_or_update_scraped_agent_company is idempotent.
+        agent_company_service.save_or_update_scraped_agent_company(
+            mapped_data=mapped_data, user_id=user_id
+        )
+
         # Navigate and process float/commission
         if not navigate_to_review_transaction(business_short_code=business_short_code,page=page):
             print("[ERROR] Failed to navigate to review transaction")
@@ -2519,3 +3432,26 @@ def process_single_row(page: Page, business_short_code: int, row_number: int, pa
         page.screenshot(path=f"error_row_{business_short_code}_{row_number}.png")
         close_detail_panel(page)
         return False
+
+
+if __name__ == '__main__':
+    import sys
+    from dotenv import load_dotenv
+    load_dotenv()
+
+    short_code = os.getenv('TEST_SHORTCODE')
+    username   = os.getenv('TEST_USERNAME')
+    password   = os.getenv('TEST_PASSWORD')
+    user_id    = os.getenv('TEST_USER_ID', '1')
+
+    if not all([short_code, username, password]):
+        print('[ERROR] Set TEST_SHORTCODE, TEST_USERNAME, TEST_PASSWORD in your .env to run locally.')
+        sys.exit(1)
+
+    print(f'[TEST] Running login_to_mpesa for short_code={short_code}')
+    login_to_mpesa(
+        password=password,
+        username=username,
+        short_code=short_code,
+        user_id_passed=user_id,
+    )

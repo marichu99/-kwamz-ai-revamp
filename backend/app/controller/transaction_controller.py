@@ -3,7 +3,11 @@ from datetime import datetime
 from app.service.transaction_service import TransactionService
 from app.service.reports.commissions_report_service import CommissionReportService
 from app.service.reports.fraud_report_service import FraudReportService
+from app.service.reports.agent_performance_report_service import AgentPerformanceReportService
 from app.service.export_service import ExportService
+from app.utils.user_service import UserService
+from app.model.company import Company
+from flask_jwt_extended import jwt_required, get_jwt_identity, verify_jwt_in_request
 import io
 import os
 
@@ -23,6 +27,7 @@ transaction_service = TransactionService()
 
 commission_report_service = CommissionReportService()
 fraud_report_service = FraudReportService()
+agent_performance_report_service = AgentPerformanceReportService()
 export_service = ExportService()
 
 @transaction_bp.route('/commissions-report', methods=['GET'])
@@ -201,6 +206,83 @@ def export_fraud_report_pdf():
         return jsonify({'success': False, 'error': 'Internal server error'}), 500
 
 
+@transaction_bp.route('/agent-performance-report', methods=['GET'])
+def get_agent_performance_report():
+    """Return JSON agent performance report."""
+    try:
+        start_date = request.args.get('start_date')
+        end_date = request.args.get('end_date')
+        date_range = request.args.get('date_range', 'custom')
+        company_id = request.args.get('company_id', type=int)
+        commission_threshold = request.args.get('commission_threshold', type=float, default=5000.0)
+        float_threshold = request.args.get('float_threshold', type=float, default=50000.0)
+
+        report = agent_performance_report_service.generate_report(
+            start_date=start_date,
+            end_date=end_date,
+            date_range=date_range,
+            company_id=company_id,
+            commission_threshold=commission_threshold,
+            float_threshold=float_threshold,
+        )
+        return jsonify({'success': True, 'report': report})
+
+    except ValueError as e:
+        return jsonify({'success': False, 'error': str(e)}), 400
+    except Exception as e:
+        print(f"Error generating agent performance report: {str(e)}")
+        return jsonify({'success': False, 'error': 'Internal server error'}), 500
+
+
+@transaction_bp.route('/agent-performance-report-pdf', methods=['GET'])
+def get_agent_performance_report_pdf():
+    """Generate and stream agent performance report as PDF."""
+    try:
+        start_date = request.args.get('start_date')
+        end_date = request.args.get('end_date')
+        date_range = request.args.get('date_range', 'custom')
+        company_id = request.args.get('company_id', type=int)
+        commission_threshold = request.args.get('commission_threshold', type=float, default=5000.0)
+        float_threshold = request.args.get('float_threshold', type=float, default=50000.0)
+
+        report = agent_performance_report_service.generate_report(
+            start_date=start_date,
+            end_date=end_date,
+            date_range=date_range,
+            company_id=company_id,
+            commission_threshold=commission_threshold,
+            float_threshold=float_threshold,
+        )
+
+        generated_at = datetime.now().strftime('%d %b %Y, %H:%M')
+        html = render_template(
+            'agent_performance_report_pdf.html',
+            report=report,
+            generated_at=generated_at,
+            fraud_category_labels={
+                'split_transaction':    'Split Transaction',
+                'high_frequency_daily': 'High Frequency Daily',
+                'rapid_back_forth':     'Rapid Back & Forth',
+            },
+        )
+
+        from weasyprint import HTML as WeasyHTML
+        pdf_bytes = WeasyHTML(string=html).write_pdf()
+
+        filename = f"agent_performance_report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf"
+        response = make_response(pdf_bytes)
+        response.headers['Content-Type'] = 'application/pdf'
+        response.headers['Content-Disposition'] = f'attachment; filename="{filename}"'
+        return response
+
+    except ValueError as e:
+        return jsonify({'success': False, 'error': str(e)}), 400
+    except Exception as e:
+        print(f"Error generating agent performance PDF: {str(e)}")
+        import traceback; traceback.print_exc()
+        return jsonify({'success': False, 'error': 'Internal server error'}), 500
+
+
 @transaction_bp.route('/export', methods=['GET'])
 def export_transactions():
     """Export transactions"""
@@ -239,12 +321,20 @@ def handle_options():
     return jsonify({'message': 'OK'}), 200
 
 @transaction_bp.route('/', methods=['GET'])
+@jwt_required()
 def get_transactions():
     """
-    Get transactions with filtering and pagination
+    Get transactions with filtering and pagination.
+    Results are scoped to the current user's companies unless the user is an admin.
     """
     try:
-        print("we are here")
+        current_user_id = get_jwt_identity()
+        current_user = UserService.get_user_by_id(user_id=current_user_id)
+        if not current_user:
+            return jsonify({"error": "User not found"}), 404
+
+        role = (current_user.role or 'user').lower()
+
         # Get query parameters
         filters = {
             'agent_id': request.args.get('agent_id', type=int),
@@ -256,20 +346,39 @@ def get_transactions():
             'transaction_type': request.args.get('transaction_type', 'float'),
             'search': request.args.get('search', '')
         }
-        
+
         # Remove None values
         filters = {k: v for k, v in filters.items() if v is not None}
-        
+
+        # Scope results to the current user's companies for non-admin roles
+        if role not in ('admin', 'administrator'):
+            if role == 'agent':
+                company_ids = [
+                    c.id for c in Company.query.filter_by(agent_user_id=current_user_id).all()
+                ]
+            else:
+                # Regular user: companies they own
+                company_ids = [
+                    c.id for c in Company.query.filter_by(user_id=current_user_id).all()
+                ]
+
+            # If a specific company_id was requested, ensure it belongs to this user
+            if filters.get('company_id'):
+                if filters['company_id'] not in company_ids:
+                    return jsonify({"error": "Unauthorized"}), 403
+            else:
+                filters['company_ids'] = company_ids
+
         page = request.args.get('page', 1, type=int)
         per_page = request.args.get('per_page', 10, type=int)
-        
+
         result = transaction_service.get_transactions(filters, page, per_page)
-        
+
         if result['success']:
             return jsonify(result), 200
         else:
             return jsonify(result), 400
-            
+
     except Exception as e:
         current_app.logger.error(f"Error fetching transactions: {str(e)}")
         return jsonify({"error": f"Failed to fetch transactions: {str(e)}"}), 500
@@ -459,11 +568,19 @@ def scrape_and_process_transactions():
 
 
 @transaction_bp.route('/stats', methods=['GET'])
+@jwt_required()
 def get_transaction_stats():
     """
-    Get transaction statistics
+    Get transaction statistics scoped to the current user's companies.
     """
     try:
+        current_user_id = get_jwt_identity()
+        current_user = UserService.get_user_by_id(user_id=current_user_id)
+        if not current_user:
+            return jsonify({"error": "User not found"}), 404
+
+        role = (current_user.role or 'user').lower()
+
         filters = {
             'agent_id': request.args.get('agent_id', type=int),
             'company_id': request.args.get('company_id', type=int),
@@ -474,6 +591,18 @@ def get_transaction_stats():
 
         # Remove None values
         filters = {k: v for k, v in filters.items() if v is not None}
+
+        if role not in ('admin', 'administrator'):
+            if role == 'agent':
+                company_ids = [c.id for c in Company.query.filter_by(agent_user_id=current_user_id).all()]
+            else:
+                company_ids = [c.id for c in Company.query.filter_by(user_id=current_user_id).all()]
+
+            if filters.get('company_id'):
+                if filters['company_id'] not in company_ids:
+                    return jsonify({"error": "Unauthorized"}), 403
+            else:
+                filters['company_ids'] = company_ids
 
         result = transaction_service.get_transaction_stats(filters)
 
@@ -488,12 +617,17 @@ def get_transaction_stats():
 
 
 @transaction_bp.route('/dashboard-analytics', methods=['GET'])
+@jwt_required()
 def get_dashboard_analytics():
     """
     Get comprehensive analytics data for the dashboard.
     Returns KPIs, trends, distribution, and recent activity.
     """
     try:
+        current_user_id = get_jwt_identity()
+        current_user = UserService.get_user_by_id(user_id=current_user_id)
+        role = (current_user.role or 'user').lower() if current_user else 'user'
+
         filters = {
             'company_id': request.args.get('company_id', type=int),
             'agent_id': request.args.get('agent_id', type=int),
@@ -502,6 +636,16 @@ def get_dashboard_analytics():
 
         # Remove None values
         filters = {k: v for k, v in filters.items() if v is not None}
+
+        # Resolve commission shortcodes for the current user's companies
+        if role in ('admin', 'administrator'):
+            filters['commission_shortcodes'] = None  # all shortcodes
+        elif role == 'agent':
+            companies = Company.query.filter_by(agent_user_id=current_user_id).all()
+            filters['commission_shortcodes'] = [c.shortcode for c in companies if c.shortcode]
+        else:
+            companies = Company.query.filter_by(user_id=current_user_id).all()
+            filters['commission_shortcodes'] = [c.shortcode for c in companies if c.shortcode]
 
         result = transaction_service.get_dashboard_analytics(filters)
 
@@ -513,6 +657,22 @@ def get_dashboard_analytics():
     except Exception as e:
         current_app.logger.error(f"Error fetching dashboard analytics: {str(e)}")
         return jsonify({"error": f"Failed to fetch dashboard analytics: {str(e)}"}), 500
+
+
+@transaction_bp.route('/clawbacks', methods=['GET'])
+def get_clawbacks():
+    """Return commission clawback transactions."""
+    try:
+        filters = {
+            'start_date': request.args.get('start_date'),
+            'end_date': request.args.get('end_date'),
+        }
+        filters = {k: v for k, v in filters.items() if v}
+        result = transaction_service.get_clawbacks(filters)
+        return jsonify(result), 200 if result['success'] else 400
+    except Exception as e:
+        current_app.logger.error(f"Error fetching clawbacks: {e}")
+        return jsonify({'error': str(e)}), 500
 
 
 @transaction_bp.route('/export', methods=['GET'])

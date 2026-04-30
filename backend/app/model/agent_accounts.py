@@ -8,7 +8,7 @@ class AgentAccount(db.Model):
 
     agent_company_id = db.Column(
         db.Integer,
-        db.ForeignKey('agentcompanies.id'),
+        db.ForeignKey('agentcompanies.id', ondelete='CASCADE'),
         nullable=False
     )
 

@@ -1,4 +1,4 @@
-from flask import Blueprint, request, jsonify
+from flask import Blueprint, request, jsonify, current_app
 from app import db
 from app.service.company_service import CompanyService
 from app.model.agentcompany import AgentCompany
@@ -10,6 +10,8 @@ from flask_jwt_extended import jwt_required,get_jwt_identity
 from app.model.mpesa_scrape_job import MpesaScrapeJob
 from decimal import Decimal, InvalidOperation
 from datetime import datetime
+import threading
+import os
 import json
 
 
@@ -100,7 +102,7 @@ def create_or_update_company(company_id=None):
         print(f"Traceback: {traceback.format_exc()}")
         return jsonify({'error': f'Failed to {"update" if company_id else "create"} company: {str(e)}'}), 500
 
-@company_bp.route('/company/<int:id>', methods=['PUT'])
+@company_bp.route('/<int:id>', methods=['PUT'])
 def update_company(id):
     try:
         data = request.form.to_dict()
@@ -256,9 +258,25 @@ def login_company():
     db.session.add(job)
     db.session.commit()
 
+    if os.getenv('USE_LOCAL_AUTOMATION', '').lower() == 'true':
+        from app.utils.mpesa_automation import login_to_mpesa
+        app = current_app._get_current_object()
+        def run_local():
+            with app.app_context():
+                login_to_mpesa(
+                    password=password,
+                    username=user_name,
+                    short_code=short_code,
+                    user_id_passed=current_user_id,
+                )
+        threading.Thread(target=run_local, daemon=True).start()
+        message = "Running automation locally on backend."
+    else:
+        message = "Scraping job queued. The desktop agent will process it shortly."
+
     return jsonify({
         "success": True,
-        "message": "Scraping job queued. The desktop agent will process it shortly.",
+        "message": message,
         "job_id": job.id,
     })
 
@@ -631,14 +649,14 @@ def get_single_company_hierarchy(company_id):
             'error': str(e)
         }), 500
     
-@company_bp.route('/company/<int:id>', methods=['DELETE'])
+@company_bp.route('/<int:id>', methods=['DELETE'])
 def delete_company(id):
     success, error = company_service.delete_company(id)
     if error:
         return jsonify({'error': error}), 400
     return jsonify({'message': 'Company deleted successfully'}), 200
 
-@company_bp.route('/company/validate-batch', methods=['POST'])
+@company_bp.route('/validate-batch', methods=['POST'])
 def validate_batch_company():
     file = request.files.get('file')
     result, error = company_service.validate_batch_company(file)
@@ -646,7 +664,7 @@ def validate_batch_company():
         return jsonify({'error': error}), 400
     return jsonify(result), 200
 
-@company_bp.route('/company/batch', methods=['POST'])
+@company_bp.route('/batch', methods=['POST'])
 def batch_create_company():
     file = request.files.get('file')
     result, error = company_service.batch_create_company(file)

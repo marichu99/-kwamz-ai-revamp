@@ -1382,8 +1382,8 @@ def run_scrape_job(job: dict) -> None:
         page.goto(login_url, timeout=600000)
         time.sleep(3)
 
-        captcha_solution = capture_and_solve_captcha(page)
         fill_login_form(page, short_code, username, password)
+        captcha_solution = capture_and_solve_captcha(page)
 
         while len(captcha_solution) > 4:
             captcha_solution = retry_captcha_login(page)
@@ -1535,6 +1535,9 @@ def main():
     api = BackendClient(BACKEND_URL, AGENT_SECRET)
     print(f'[INFO] Kwamz AI Mpesa Agent started — polling {BACKEND_URL} every {POLL_INTERVAL}s')
 
+    MAX_CONSECUTIVE_FAILURES = 5
+    consecutive_failures = 0
+
     while True:
         try:
             # ── Mpesa scrape jobs ──────────────────────────────────────────
@@ -1544,11 +1547,16 @@ def main():
                 try:
                     run_scrape_job(job)
                     api.complete_job(job_id)
+                    consecutive_failures = 0
                     print(f'[JOB] {job_id} completed.')
                 except Exception as e:
                     error_msg = traceback.format_exc()
+                    consecutive_failures += 1
                     print(f'[JOB] {job_id} failed:\n{error_msg}')
                     api.fail_job(job_id, str(e))
+                    if consecutive_failures >= MAX_CONSECUTIVE_FAILURES:
+                        print(f'[ERROR] {MAX_CONSECUTIVE_FAILURES} consecutive job failures. Stopping agent.')
+                        sys.exit(1)
                 continue  # re-poll immediately
 
             # ── KRA / DCI verification jobs ────────────────────────────────

@@ -10,6 +10,7 @@ from flask import Blueprint, jsonify, request, send_from_directory
 from app import db
 from app.model.mpesa_scrape_job import MpesaScrapeJob
 from app.model.verification_job import VerificationJob
+from app.controller.verification_controller import _sync_authenticity
 from app.service.transaction_service import TransactionService
 from app.service.agentcompany_service import AgentCompanyService
 from app.service.email_outbox_service import EmailOutboxService
@@ -22,6 +23,7 @@ from app.tasks.fraud_detection_tasks import run_fraud_detection_for_user
 from datetime import datetime
 from functools import wraps
 from openai import OpenAI
+import anthropic
 from PIL import Image
 import pytesseract
 import pandas as pd
@@ -254,7 +256,7 @@ def post_organization():
 @agent_auth_required
 def solve_captcha_vision():
     """
-    Solves an image CAPTCHA using xAI (grok-2-vision).
+    Solves an image CAPTCHA using Anthropic Claude (claude-haiku-4-5).
     The agent sends the captcha as base64; we return the extracted text.
 
     Body: { "image_b64": "..." }
@@ -264,35 +266,40 @@ def solve_captcha_vision():
     if not image_b64:
         return jsonify({'error': 'image_b64 is required'}), 400
 
-    xai_key = os.getenv('XAI_API_KEY')
-    if not xai_key:
-        return jsonify({'error': 'XAI_API_KEY not configured on server'}), 500
+    anthropic_key = os.getenv('ANTHROPIC_API_KEY')
+    import logging
+    logging.warning(f'[CAPTCHA] ANTHROPIC_API_KEY present: {bool(anthropic_key)}, value: {anthropic_key[:20] + "..." if anthropic_key else "None"}')
+    if not anthropic_key:
+        return jsonify({'error': 'ANTHROPIC_API_KEY not configured on server'}), 500
 
     try:
-        client = OpenAI(api_key=xai_key, base_url='https://api.x.ai/v1')
-        response = client.chat.completions.create(
-            model='grok-2-vision-1212',
+        client = anthropic.Anthropic(api_key=anthropic_key)
+        response = client.messages.create(
+            model='claude-haiku-4-5-20251001',
+            max_tokens=50,
             messages=[{
                 'role': 'user',
                 'content': [
+                    {
+                        'type': 'image',
+                        'source': {
+                            'type': 'base64',
+                            'media_type': 'image/png',
+                            'data': image_b64,
+                        },
+                    },
                     {
                         'type': 'text',
                         'text': (
                             'Extract the exact digits from this CAPTCHA image. '
                             'It is a 4-6 digit code with possible lines or distortions. '
-                            'Respond only with the number.'
+                            'Respond only with the digits, nothing else.'
                         ),
-                    },
-                    {
-                        'type': 'image_url',
-                        'image_url': {'url': f'data:image/png;base64,{image_b64}'},
                     },
                 ],
             }],
-            max_tokens=50,
-            temperature=0.1,
         )
-        answer = response.choices[0].message.content.strip()
+        answer = response.content[0].text.strip()
         return jsonify({'answer': answer}), 200
     except Exception as e:
         return jsonify({'error': str(e)}), 500
@@ -463,6 +470,7 @@ def verification_complete(job_id):
     job.police_result = data.get('police_result')
     job.status = 'completed'
     job.completed_at = datetime.utcnow()
+    _sync_authenticity(job)
     db.session.commit()
     return jsonify({'ok': True}), 200
 

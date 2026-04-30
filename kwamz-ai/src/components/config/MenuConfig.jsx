@@ -9,6 +9,7 @@ import {
     Shield,
     Repeat,
     Download,
+    CreditCard,
 } from 'lucide-react';
 
 export const adminMenuItems = [
@@ -45,6 +46,11 @@ export const adminMenuItems = [
         id: "transactions",
         icon: Wallet,
         label: "Transactions",
+    },
+    {
+        id: "admin-billing",
+        icon: CreditCard,
+        label: "Billing",
     },
     {
         id: "agent-download",
@@ -90,7 +96,7 @@ const userMenuItems = [
         label: "Users",
         count: "12",
         submenu: [
-            { id: "user-list", label: "Agents" },
+            { id: "user-list", label: "Sub-Agents" },
             { id: "agent-list", label: "Tills" },
             { id: "company-list", label: "Companies" },
         ]
@@ -101,17 +107,13 @@ const userMenuItems = [
         label: "Operations",
         submenu: [
             { id: "swap-history", label: "Swap History" },
+            { id: "clawbacks", label: "Commission Clawbacks" },
         ]
     },
     {
         id: "transactions-list",
         icon: Wallet,
         label: "Transaction List",
-    },
-    {
-        id: "transactions",
-        icon: Wallet,
-        label: "Transactions",
     },
     {
         id: "fraud-detection",

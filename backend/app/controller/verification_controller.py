@@ -1,6 +1,7 @@
 from flask import Blueprint, jsonify, request, send_file
 from app import db
 from app.model.verification_job import VerificationJob
+from app.model.useragent import UserAgent
 from flask_jwt_extended import jwt_required
 from functools import wraps
 from datetime import datetime
@@ -10,6 +11,15 @@ import base64
 import tempfile
 import os
 import re
+
+
+def _sync_authenticity(job):
+    """Set is_authentic on the matching UserAgent based on KRA + DCI results."""
+    kra_valid = bool(job.kra_result and 'Active' in job.kra_result)
+    dci_valid = bool(job.police_result and 'VALID' in job.police_result.upper())
+    agent = UserAgent.query.filter_by(idnumber=job.id_number).first()
+    if agent:
+        agent.is_authentic = kra_valid and dci_valid
 
 verification_bp = Blueprint('verification', __name__)
 
@@ -169,6 +179,7 @@ def post_result(job_id):
     job.police_result = data.get('police_result')
     job.status = data.get('status', 'completed')
     job.completed_at = datetime.utcnow()
+    _sync_authenticity(job)
     db.session.commit()
 
     return jsonify({'success': True}), 200

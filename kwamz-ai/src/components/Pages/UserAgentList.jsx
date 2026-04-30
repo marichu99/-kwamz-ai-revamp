@@ -412,6 +412,15 @@ function UserAgentList() {
                   <Plus className="w-4 h-4 mr-3" />
                   Create User
                 </button>
+                <button
+                  onClick={() => { handleDownloadAgentDocs(); setIsDropdownOpen(false); }}
+                  disabled={selectedUserIds.length === 0}
+                  className="w-full flex items-center px-4 py-2 text-sm text-slate-800 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-600 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                  role="menuitem"
+                >
+                  <Download className="w-4 h-4 mr-3" />
+                  Download Documents
+                </button>
               </div>
 
               {/* Templates submenu */}
@@ -553,10 +562,10 @@ function UserAgentList() {
               <th className="px-4 py-3 font-semibold">Last Name</th>
               <th className="px-4 py-3 font-semibold">ID Number</th>
               <th className="px-4 py-3 font-semibold">Phone Number</th>
+              <th className="px-4 py-3 font-semibold">Role</th>
               <th className="px-4 py-3 font-semibold">Primary Company</th>
               <th className="px-4 py-3 font-semibold">Companies</th>
               <th className="px-4 py-3 font-semibold">Authentic</th>
-              <th className="px-4 py-3 font-semibold">Action</th>
             </tr>
           </thead>
           <tbody>
@@ -578,6 +587,18 @@ function UserAgentList() {
                 <td className="px-4 py-3">{user.lastname}</td>
                 <td className="px-4 py-3">{user.idnumber}</td>
                 <td className="px-4 py-3">{user.phone_number || 'N/A'}</td>
+                <td className="px-4 py-3">
+                  {user.operator_role ? (
+                    <span className={`inline-flex items-center px-2 py-1 rounded-full text-xs font-medium whitespace-nowrap
+                      ${user.operator_role === 'Agent Primary Till Operator'
+                        ? 'bg-purple-100 text-purple-700 dark:bg-purple-900/40 dark:text-purple-300'
+                        : 'bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300'}`}>
+                      {user.operator_role === 'Agent Primary Till Operator' ? 'Primary Operator' : 'Till Operator'}
+                    </span>
+                  ) : (
+                    <span className="text-xs text-slate-400">—</span>
+                  )}
+                </td>
                 <td className="px-4 py-3">
                   {user.primary_company ? (
                     <div className="flex flex-col">
@@ -624,18 +645,6 @@ function UserAgentList() {
                   >
                     {user.is_authentic ? 'Yes' : 'No'}
                   </span>
-                </td>
-                <td className="px-4 py-3">
-                  <button
-                    onClick={() => {
-                      setSelectedUserIds([user.id]);
-                      handleDownloadAgentDocs();
-                    }}
-                    className="flex items-center space-x-1 text-blue-500 hover:text-blue-600 dark:hover:text-blue-400"
-                  >
-                    <Download className="w-4 h-4" />
-                    <span>Documents</span>
-                  </button>
                 </td>
               </tr>
             ))}

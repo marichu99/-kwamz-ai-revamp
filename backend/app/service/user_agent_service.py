@@ -1,6 +1,7 @@
 from app import db
 from app.model.useragent import UserAgent
 from app.model.agentcompany import AgentCompany
+from app.utils.gcs_storage import upload_agent_image, delete_agent_image
 from datetime import datetime
 from openpyxl import load_workbook
 from io import BytesIO
@@ -42,6 +43,7 @@ class UserAgentService:
             'authenticity_desc': user_agent.authenticity_desc,
             'image_loc': user_agent.image_loc,
             'date_of_birth': user_agent.date_of_birth.isoformat() if user_agent.date_of_birth else None,
+            'operator_role': user_agent.operator_role,
             'agent_company_id': user_agent.agent_company_id,
             'agent_company_name': primary.company_name if primary else None,
             'agent_company_ids': user_agent.get_agent_company_ids(),
@@ -125,22 +127,16 @@ class UserAgentService:
                 except ValueError:
                     return None, 'Invalid date_of_birth format. Use YYYY-MM-DD'
 
-            # Handle file upload
+            # Handle file upload to GCS
             image_loc = None
             if 'image' in files:
                 file = files['image']
                 if file.filename == '':
                     return None, 'No file selected'
-                if not self.allowed_file(file.filename):
-                    return None, 'Invalid file type. Allowed types: jpg, jpeg, png, gif'
-                if file.content_length > self.max_file_size:
-                    return None, 'File size exceeds 5MB limit'
-                ext = file.filename.rsplit('.', 1)[1].lower()
-                filename = f"{user_id}.{ext}"
-                upload_dir = self.get_upload_dir()
-                file_path = os.path.join(upload_dir, filename)
-                file.save(file_path)
-                image_loc = os.path.abspath(file_path)
+                result = upload_agent_image(file, user_id)
+                if not result['success']:
+                    return None, result['error']
+                image_loc = result['gcs_path']
 
             # Create new user
             new_user = UserAgent(
@@ -152,6 +148,7 @@ class UserAgentService:
                 authenticity_desc=data.get('authenticity_desc'),
                 image_loc=image_loc,
                 date_of_birth=date_of_birth,
+                operator_role=data.get('operator_role') or None,
                 user_id=user_id,
                 agent_company_id=primary_company_id
             )
@@ -287,6 +284,9 @@ class UserAgentService:
                 else:
                     user.date_of_birth = None
 
+            if 'operator_role' in data:
+                user.operator_role = data['operator_role'] or None
+
             # Handle primary agent company update
             if 'agent_company_id' in data:
                 agent_company_id = data.get('agent_company_id')
@@ -322,23 +322,18 @@ class UserAgentService:
                 else:
                     user.agent_companies.clear()
 
-            # Handle file upload
+            # Handle file upload to GCS
             if 'image' in files:
                 file = files['image']
                 if file.filename == '':
                     return None, 'No file selected'
-                if not self.allowed_file(file.filename):
-                    return None, 'Invalid file type. Allowed types: jpg, jpeg, png, gif'
-                if file.content_length > self.max_file_size:
-                    return None, 'File size exceeds 5MB limit'
-                if user.image_loc and os.path.exists(user.image_loc):
-                    os.remove(user.image_loc)
-                ext = file.filename.rsplit('.', 1)[1].lower()
-                filename = f"{user_id}.{ext}"
-                upload_dir = self.get_upload_dir()
-                file_path = os.path.join(upload_dir, filename)
-                file.save(file_path)
-                user.image_loc = f"useragents/profiles/{filename}"
+                # Delete old image from GCS if present
+                if user.image_loc:
+                    delete_agent_image(user.image_loc)
+                result = upload_agent_image(file, user_id)
+                if not result['success']:
+                    return None, result['error']
+                user.image_loc = result['gcs_path']
 
             db.session.commit()
             return self.serialize_user_agent(user), None
@@ -361,8 +356,8 @@ class UserAgentService:
         """Delete a UserAgent."""
         try:
             user = UserAgent.query.get_or_404(user_id)
-            if user.image_loc and os.path.exists(user.image_loc):
-                os.remove(user.image_loc)
+            if user.image_loc:
+                delete_agent_image(user.image_loc)
             db.session.delete(user)
             db.session.commit()
             return True, None

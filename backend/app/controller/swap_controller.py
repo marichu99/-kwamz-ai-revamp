@@ -19,15 +19,18 @@ def initiate_swap():
 
     agent_company_id = data.get('agent_company_id')
     new_agent_ids = data.get('new_agent_ids', [])
+    outgoing_agent_ids = data.get('outgoing_agent_ids', None)  # None = remove all current
     notes = data.get('notes', '')
 
     if not agent_company_id:
         return jsonify({'error': 'agent_company_id is required'}), 400
     if not new_agent_ids:
         return jsonify({'error': 'new_agent_ids is required'}), 400
+    if outgoing_agent_ids is not None and len(outgoing_agent_ids) == 0:
+        return jsonify({'error': 'outgoing_agent_ids cannot be empty when provided'}), 400
 
     service = SwapService()
-    result, error = service.initiate_swap(agent_company_id, new_agent_ids, notes, current_user_id)
+    result, error = service.initiate_swap(agent_company_id, new_agent_ids, notes, current_user_id, outgoing_agent_ids)
     if error:
         return jsonify({'error': error}), 400
     return jsonify({'message': 'Swap initiated successfully', 'swap': result}), 201

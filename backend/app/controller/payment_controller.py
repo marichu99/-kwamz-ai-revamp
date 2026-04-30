@@ -125,6 +125,7 @@ def get_latest_payment():
         'status': billing_status['status'],
         'user_id': user.id,
         'user_name': getattr(user, "username", ""),
+        'user_role': getattr(user, "role", "user") or "user",
         'user_created_at': user.created_at.isoformat() if user.created_at else None,
         'trial_end_date': billing_status.get('trial_end_date'),
         'trial_days_remaining': billing_status.get('trial_days_remaining', 0),

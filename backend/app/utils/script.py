@@ -4,7 +4,7 @@ from app import db
 from app.model.document import Document
 from app.model.useragent import UserAgent
 import pytesseract
-from openai import OpenAI
+import anthropic
 import re
 import sys
 import time
@@ -229,49 +229,36 @@ def fill_login_form(page, short_code: str, username: str, password: str):
     
         
 def solveCaptchaXai(image_path):
-    # Initialize client with your xAI key
-    xai_key = os.getenv("XAI_API_KEY")
-    print(f"The api key is {xai_key}")
-    
-    client = OpenAI(
-        api_key=xai_key,  # Replace with your key
-        base_url="https://api.x.ai/v1"
-    )
+    anthropic_key = os.getenv("ANTHROPIC_API_KEY")
+    print(f"[INFO] Solving CAPTCHA with Anthropic Claude...")
 
-    # Function to encode image to base64
-    def encode_image(image_path):
-        with open(image_path, "rb") as image_file:
-            return base64.b64encode(image_file.read()).decode("utf-8")
+    with open(image_path, "rb") as f:
+        image_b64 = base64.b64encode(f.read()).decode()
 
-    # Your CAPTCHA image path (e.g., from Playwright screenshot)
-    base64_image = encode_image(image_path)
-
-    # Send request
-    response = client.chat.completions.create(
-        model="grok-2-vision-1212",
-        messages=[
-            {
-                "role": "user",
-                "content": [
-                    {
-                        "type": "text",
-                        "text": "Extract the exact digits from this CAPTCHA image. It's a 4-6 digit code with possible lines or distortions. Respond only with the number."
+    client = anthropic.Anthropic(api_key=anthropic_key)
+    response = client.messages.create(
+        model="claude-haiku-4-5-20251001",
+        max_tokens=50,
+        messages=[{
+            "role": "user",
+            "content": [
+                {
+                    "type": "image",
+                    "source": {
+                        "type": "base64",
+                        "media_type": "image/png",
+                        "data": image_b64,
                     },
-                    {
-                        "type": "image_url",
-                        "image_url": {
-                            "url": f"data:image/png;base64,{base64_image}"  # Use 'jpeg' if JPG
-                        }
-                    }
-                ]
-            }
-        ],
-        max_tokens=50,  # Short output for just the number
-        temperature=0.1  # Low for accurate extraction
+                },
+                {
+                    "type": "text",
+                    "text": "Extract the exact digits from this CAPTCHA image. It's a 4-6 digit code with possible lines or distortions. Respond only with the digits, nothing else.",
+                },
+            ],
+        }],
     )
 
-    # Print the extracted CAPTCHA
-    captcha_text = response.choices[0].message.content.strip()
+    captcha_text = response.content[0].text.strip()
     print(f"Extracted CAPTCHA: {captcha_text}")
     return captcha_text
 

@@ -18,7 +18,9 @@ import ConfigGrid from '../Pages/ConfigGrid';
 import UserReportConfigGrid from '../Pages/UserReportConfigGrid';
 import FraudAlertsGrid from '../Pages/FraudAlertsGrid';
 import SwapHistoryGrid from '../Pages/SwapHistoryGrid';
+import ClawbacksGrid from '../Pages/ClawbacksGrid';
 import AgentDownloadPage from '../Pages/AgentDownloadPage';
+import AdminBillingPage from '../Pages/AdminBillingPage';
 import { analyticsApi } from '../../service/AnalyticsApi';
 import { Loader2, AlertCircle, RefreshCw } from 'lucide-react';
 
@@ -102,20 +104,32 @@ function Dashboard({ currentPage, setCurrentPage }) {
           healthMetrics={analyticsData?.health_metrics}
         />
 
-        <StatsGrid kpis={analyticsData?.kpis} isLoading={isLoading} />
+        {(() => {
+          const trends = analyticsData?.monthly_trends || [];
+          const recent = analyticsData?.recent_transactions || [];
+          const totalTx = analyticsData?.kpis?.total_transactions?.value || 0;
+          const isOnboarding = trends.length === 0 && recent.length === 0 && totalTx === 0;
 
-        <div className="grid grid-cols-1 xl:grid-cols-3 gap-6">
-          <RevenueChart
-            data={analyticsData?.monthly_trends || []}
-            healthMetrics={analyticsData?.health_metrics}
-          />
-          <TrafficSourcesChart data={analyticsData?.type_distribution || []} />
-        </div>
+          return (
+            <>
+              <StatsGrid kpis={analyticsData?.kpis} isLoading={isLoading} isOnboarding={isOnboarding} />
 
-        <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
-          <OrdersChart data={analyticsData?.monthly_trends || []} />
-          <RecentActivity transactions={analyticsData?.recent_transactions || []} />
-        </div>
+              <div className="grid grid-cols-1 xl:grid-cols-3 gap-6">
+                <RevenueChart
+                  data={trends}
+                  healthMetrics={analyticsData?.health_metrics}
+                  isOnboarding={isOnboarding}
+                />
+                <TrafficSourcesChart data={analyticsData?.type_distribution || []} />
+              </div>
+
+              <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
+                <OrdersChart data={trends} isOnboarding={isOnboarding} />
+                <RecentActivity transactions={recent} isOnboarding={isOnboarding} />
+              </div>
+            </>
+          );
+        })()}
       </>
     );
   };
@@ -137,7 +151,9 @@ function Dashboard({ currentPage, setCurrentPage }) {
         {currentPage === 'report-schedules' && <UserReportConfigGrid />}
         {currentPage === 'fraud-alerts' && <FraudAlertsGrid />}
         {currentPage === 'swap-history' && <SwapHistoryGrid />}
+        {currentPage === 'clawbacks' && <ClawbacksGrid />}
         {currentPage === 'agent-download' && <AgentDownloadPage />}
+        {currentPage === 'admin-billing' && <AdminBillingPage />}
       </div>
     </div>
   );

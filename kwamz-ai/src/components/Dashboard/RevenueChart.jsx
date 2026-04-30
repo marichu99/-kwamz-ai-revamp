@@ -1,4 +1,4 @@
-import { TrendingUp, TrendingDown } from 'lucide-react'
+import { TrendingUp, TrendingDown, Building2 } from 'lucide-react'
 import React from 'react'
 import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts'
 
@@ -27,7 +27,7 @@ const CustomTooltip = ({ active, payload, label }) => {
   return null
 }
 
-function RevenueChart({ data = [], healthMetrics }) {
+function RevenueChart({ data = [], healthMetrics, isOnboarding = false }) {
   const weeklyGrowth = healthMetrics?.weekly_growth || 0
   const isPositiveGrowth = weeklyGrowth >= 0
 
@@ -45,8 +45,17 @@ function RevenueChart({ data = [], healthMetrics }) {
         <div className='flex items-center justify-between mb-6'>
           <h3 className='text-xl font-bold text-slate-800 dark:text-white'>Transaction Volume</h3>
         </div>
-        <div className="flex items-center justify-center h-[300px] text-slate-500 dark:text-slate-400">
-          No data available
+        <div className="flex flex-col items-center justify-center h-[300px] gap-3 text-center px-6">
+          {isOnboarding ? (
+            <>
+              <Building2 className="w-10 h-10 text-slate-300 dark:text-slate-600" />
+              <p className="text-sm font-medium text-slate-500 dark:text-slate-400">
+                Transaction volume will appear here once your company information has been onboarded to the system.
+              </p>
+            </>
+          ) : (
+            <p className="text-slate-500 dark:text-slate-400">No data available</p>
+          )}
         </div>
       </div>
     )

@@ -1,4 +1,4 @@
-import { Activity, Clock, ArrowDownLeft, ArrowUpRight, Receipt } from 'lucide-react'
+import { Activity, Clock, ArrowDownLeft, ArrowUpRight, Receipt, Building2 } from 'lucide-react'
 import React from 'react'
 
 function ActivityItem({ activity, index }) {
@@ -57,7 +57,7 @@ function ActivityItem({ activity, index }) {
   )
 }
 
-function RecentActivity({ transactions = [] }) {
+function RecentActivity({ transactions = [], isOnboarding = false }) {
   return (
     <>
       <style jsx>{`
@@ -84,8 +84,17 @@ function RecentActivity({ transactions = [] }) {
         </div>
 
         {transactions.length === 0 ? (
-          <div className="flex items-center justify-center h-[200px] text-slate-500 dark:text-slate-400">
-            No recent transactions
+          <div className="flex flex-col items-center justify-center h-[200px] gap-3 text-center px-6">
+            {isOnboarding ? (
+              <>
+                <Building2 className="w-10 h-10 text-slate-300 dark:text-slate-600" />
+                <p className="text-sm font-medium text-slate-500 dark:text-slate-400">
+                  Recent transactions will appear here once your company information has been onboarded to the system.
+                </p>
+              </>
+            ) : (
+              <p className="text-slate-500 dark:text-slate-400">No recent transactions</p>
+            )}
           </div>
         ) : (
           <div className='space-y-2 max-h-[300px] overflow-y-auto'>

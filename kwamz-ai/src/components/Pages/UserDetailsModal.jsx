@@ -88,6 +88,7 @@ function UserDetailsModal({ isOpen, onClose, onSubmit, isLoading, user }) {
         imagePreview: user.image_loc ? `/useragents/profiles/${user.image_loc.split('/').pop()}` : null,
         agent_company_ids: user.agent_company_ids || [],
         agent_company_id: user.agent_company_id || '',
+        operator_role: user.operator_role || '',
       });
     } else {
       setFormData({
@@ -102,6 +103,7 @@ function UserDetailsModal({ isOpen, onClose, onSubmit, isLoading, user }) {
         imagePreview: null,
         agent_company_ids: [],
         agent_company_id: '',
+        operator_role: '',
       });
     }
     setErrors({});
@@ -781,6 +783,25 @@ function UserDetailsModal({ isOpen, onClose, onSubmit, isLoading, user }) {
                 </p>
               )}
             </div>
+          </div>
+
+          {/* Operator Role */}
+          <div>
+            <label className="flex items-center space-x-2 text-sm font-bold text-slate-700 dark:text-slate-300 mb-3">
+              <Shield className="w-4 h-4 text-blue-600 dark:text-blue-400" />
+              <span>Operator Role</span>
+            </label>
+            <select
+              name="operator_role"
+              value={formData.operator_role}
+              onChange={handleInputChange}
+              className="w-full px-4 py-3.5 border-2 rounded-xl font-medium transition-all bg-white dark:bg-slate-800 text-slate-900 dark:text-white border-slate-200 dark:border-slate-700 focus:border-blue-500 focus:ring-2 focus:ring-blue-200 dark:focus:ring-blue-900 hover:border-slate-300 focus:outline-none"
+              disabled={isLoading}
+            >
+              <option value="">— Not set —</option>
+              <option value="Agent Primary Till Operator">Agent Primary Till Operator</option>
+              <option value="Agent Till Operator">Agent Till Operator</option>
+            </select>
           </div>
 
           {/* Authentication Section */}

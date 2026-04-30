@@ -79,7 +79,10 @@ function App() {
           const paymentData = paymentResponse.data;
           setBillingStatus(paymentData);
 
-          if (paymentData.status === 'NOT_PAID' && location.pathname !== '/checkout') {
+          const userRole = paymentData.user_role || localStorage.getItem('userRole') || 'user';
+          const isAdmin = ['admin', 'administrator'].includes(userRole.toLowerCase());
+
+          if (paymentData.status === 'NOT_PAID' && location.pathname !== '/checkout' && !isAdmin) {
             setIsAuthenticated(true);
             setIsLoading(false);
             navigate('/checkout');

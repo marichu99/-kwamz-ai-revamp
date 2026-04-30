@@ -9,8 +9,19 @@
             "port": 5432,
             "askForPassword": true,
             "driver": "PostgreSQL",
-            "name": "mpesaglobal",
+            "name": "mpesaglobaldev",
             "database": "mpesaglobal",
+            "username": "postgres"
+        },
+        {
+            "ssh": "Disabled",
+            "previewLimit": 50,
+            "server": "localhost",
+            "port": 5432,
+            "askForPassword": true,
+            "driver": "PostgreSQL",
+            "name": "latest",
+            "database": "mpesaglobaldev",
             "username": "postgres"
         }
     ]

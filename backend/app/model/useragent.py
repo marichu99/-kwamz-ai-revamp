@@ -12,14 +12,15 @@ class UserAgent(db.Model):
     __tablename__ = 'useragents'
 
     id = db.Column(db.Integer, primary_key=True)
-    firstname = db.Column(db.String(80), nullable=False)        
-    lastname = db.Column(db.String(80), nullable=False)          
-    idnumber = db.Column(db.String(80), unique=True, nullable=False)  
-    phone_number = db.Column(db.String(20), unique=True, nullable=True) 
-    is_authentic = db.Column(db.Boolean, default=False, nullable=False)  
-    authenticity_desc = db.Column(db.String(255), nullable=True)       
+    firstname = db.Column(db.String(80), nullable=False)
+    lastname = db.Column(db.String(80), nullable=False)
+    idnumber = db.Column(db.String(80), unique=True, nullable=False)
+    phone_number = db.Column(db.String(20), unique=True, nullable=True)
+    is_authentic = db.Column(db.Boolean, default=False, nullable=False)
+    authenticity_desc = db.Column(db.String(255), nullable=True)
     image_loc = db.Column(db.Text, nullable=True)
     date_of_birth = db.Column(db.Date, nullable=True)
+    operator_role = db.Column(db.String(100), nullable=True)  # e.g. "Agent Primary Till Operator" / "Agent Till Operator"
     user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=True)
     agent_company_id = db.Column(db.Integer, db.ForeignKey('agentcompanies.id'), nullable=True)
 
@@ -30,7 +31,8 @@ class UserAgent(db.Model):
                                     lazy='select')
 
     def __init__(self, firstname, lastname, idnumber, phone_number=None,
-                 is_authentic=False, authenticity_desc=None, image_loc=None, date_of_birth=None, user_id=None, agent_company_id=None):
+                 is_authentic=False, authenticity_desc=None, image_loc=None,
+                 date_of_birth=None, operator_role=None, user_id=None, agent_company_id=None):
         self.firstname = firstname
         self.lastname = lastname
         self.idnumber = idnumber
@@ -39,6 +41,7 @@ class UserAgent(db.Model):
         self.authenticity_desc = authenticity_desc
         self.image_loc = image_loc
         self.date_of_birth = date_of_birth
+        self.operator_role = operator_role
         self.user_id = user_id
         self.agent_company_id = agent_company_id
 

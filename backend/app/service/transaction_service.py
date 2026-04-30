@@ -196,18 +196,39 @@ class TransactionService:
     def _parse_date_to_string(self, value: Optional[datetime]) -> Optional[str]:
         """Convert datetime to ISO string for safe JSON/API return."""
         return value.isoformat() if value else None
+
+    def _clean_nullable_str(self, value) -> Optional[str]:
+        """Return None for NaN/empty values, otherwise a stripped string."""
+        import math
+        if value is None:
+            return None
+        if isinstance(value, float) and math.isnan(value):
+            return None
+        s = str(value).strip()
+        return None if s.lower() in ('nan', 'none', 'nat', '') else s
     
     def _parse_date(self, date_string):
         """Parse date string to datetime object, handling multiple formats"""
-        if not date_string:
-            return datetime.now()
-        
+        if date_string is None:
+            return None
+
+        # Catch pandas / float NaN before converting to string
+        if isinstance(date_string, float):
+            import math
+            if math.isnan(date_string):
+                return None
+            date_string = str(date_string)
+
         # Convert to string if it's not already
         if not isinstance(date_string, str):
             date_string = str(date_string)
-        
+
         # Remove any whitespace
         date_string = date_string.strip()
+
+        # Treat blank / nan / NaT strings as missing
+        if date_string.lower() in ('', 'nan', 'none', 'nat'):
+            return None
         
         # Try multiple date formats
         date_formats = [
@@ -264,9 +285,9 @@ class TransactionService:
         except Exception:
             pass
         
-        # If all else fails, log and use current time
-        print(f"Warning: Could not parse date '{date_string}'. Using current time.")
-        return datetime.now()
+        # Genuinely unparseable — return None so the caller can skip or default
+        print(f"Warning: Could not parse date '{date_string}'. Storing as null.")
+        return None
         
     def map_transaction_keys(self, original_data: Dict[str, Any]) -> Dict[str, Any]:
         """
@@ -355,9 +376,11 @@ class TransactionService:
                     transaction_type=transaction_type
                 ).first()
                 
-                # Parse dates
+                # Parse dates — completion_time is NOT NULL so fall back to now() if unparseable
                 completion_time = self._parse_date(trans_data.get('completion_time'))
                 initiation_time = self._parse_date(trans_data.get('initiation_time', trans_data.get('completion_time')))
+                completion_time = completion_time or initiation_time or datetime.now()
+                initiation_time = initiation_time or completion_time
                 
                 # Parse balance confirmed
                 balance_confirmed = trans_data.get('balance_confirmed', False)
@@ -381,9 +404,9 @@ class TransactionService:
                     'balance': self._parse_decimal(trans_data.get('balance', '0')),
                     'balance_confirmed': balance_confirmed,
                     'reason_type': trans_data.get('reason_type', ''),
-                    'other_party_info': trans_data.get('other_party_info'),
-                    'linked_transaction_id': trans_data.get('linked_transaction_id'),
-                    'account_number': trans_data.get('account_number'),
+                    'other_party_info': self._clean_nullable_str(trans_data.get('other_party_info')),
+                    'linked_transaction_id': self._clean_nullable_str(trans_data.get('linked_transaction_id')),
+                    'account_number': self._clean_nullable_str(trans_data.get('account_number')),
                     'currency': trans_data.get('currency', 'KES'),
                     'transaction_type': transaction_type,
                     'company_id': company_id,
@@ -438,6 +461,7 @@ class TransactionService:
                     print(f"  💾 Committed batch of 100 transactions...")
                 
             except Exception as e:
+                db.session.rollback()  # reset poisoned session so subsequent rows can proceed
                 error_count += 1
                 error_msg = f"Row {idx+1} (Receipt: {trans_data.get('receipt_no', 'N/A')}): {str(e)}"
                 errors.append(error_msg)
@@ -498,8 +522,104 @@ class TransactionService:
                 "traceback": traceback.format_exc()
             }
 
-    def update_transactions_from_dataframe(self, df: pd.DataFrame, transaction_type: str, 
-                                          company_shortcode: int, agent_id: int, 
+    def save_head_office_commission_balances(self, csv_path: str, parent_shortcode: str) -> Dict:
+        """
+        Parse a Head Office Balance Overview CSV (Level 1 = parent, Level 2 = children)
+        and upsert one commission transaction per child shortcode per day.
+
+        The receipt_no is COMM-{child_shortcode}-{YYYYMMDD} so re-running on the same
+        day updates rather than duplicates the record.
+        """
+        import re, csv as _csv
+        from datetime import date as _date
+
+        try:
+            parent_company = Company.query.filter_by(shortcode=str(parent_shortcode)).first()
+            if not parent_company:
+                return {'success': False, 'error': f'No company found for shortcode {parent_shortcode}'}
+            company_id = parent_company.id
+
+            today = datetime.now().replace(hour=12, minute=0, second=0, microsecond=0)
+            date_tag = today.strftime('%Y%m%d')
+
+            created = updated = skipped = 0
+            errors = []
+
+            with open(csv_path, newline='', encoding='utf-8-sig') as f:
+                reader = _csv.reader(f)
+                headers = next(reader, None)  # skip header row
+                for row in reader:
+                    if not row or len(row) < 5:
+                        continue
+                    level = str(row[0]).strip()
+                    if level != '2':
+                        continue
+
+                    org_name = str(row[1]).strip().strip('"').strip()
+                    # Shortcode is the leading digits before the first '-'
+                    m = re.match(r'^(\d+)-', org_name)
+                    if not m:
+                        continue
+                    child_shortcode = m.group(1)
+
+                    # Parse "KSH51,773.01" → 51773.01
+                    raw_balance = str(row[4]).strip().strip('"').replace('KSH', '').replace(',', '').strip()
+                    try:
+                        amount = Decimal(raw_balance)
+                    except Exception:
+                        errors.append(f'Bad balance for {child_shortcode}: {raw_balance}')
+                        continue
+
+                    if amount <= 0:
+                        skipped += 1
+                        continue
+
+                    receipt_no = f'COMM-{child_shortcode}-{date_tag}'
+
+                    existing = Transaction.query.filter_by(receipt_no=receipt_no).first()
+                    if existing:
+                        existing.paid_in = amount
+                        existing.balance = amount
+                        existing.commission_amount = amount
+                        existing.details = org_name
+                        existing.updated_at = datetime.utcnow()
+                        updated += 1
+                    else:
+                        txn = Transaction(
+                            receipt_no=receipt_no,
+                            completion_time=today,
+                            initiation_time=today,
+                            details=org_name,
+                            transaction_status='Completed',
+                            paid_in=amount,
+                            withdrawn=Decimal('0.00'),
+                            balance=amount,
+                            reason_type='Commission',
+                            other_party_info=parent_company.company_name,
+                            business_shortcode=child_shortcode,
+                            currency='KES',
+                            transaction_type='commission',
+                            commission_amount=amount,
+                            commission_rate=Decimal('0.00'),
+                            company_id=company_id,
+                        )
+                        db.session.add(txn)
+                        created += 1
+
+            db.session.commit()
+            print(f'[COMM-BALANCE] created={created} updated={updated} skipped={skipped} errors={len(errors)}')
+            return {
+                'success': True,
+                'summary': {'created': created, 'updated': updated, 'skipped': skipped, 'errors': errors}
+            }
+
+        except Exception as e:
+            db.session.rollback()
+            print(f'[COMM-BALANCE] Failed: {e}')
+            return {'success': False, 'error': str(e)}
+
+    def update_transactions_from_dataframe(self, df: pd.DataFrame, transaction_type: str,
+                                          company_shortcode: int, agent_id: int,
                                           business_shortcode: str = None) -> Dict:
         """
         Update transactions directly from a pandas DataFrame
@@ -579,20 +699,24 @@ class TransactionService:
                     row['balance']=row['balance']*0.25
                 
                 # Prepare transaction data from row
+                _ct = self._parse_date(row.get('completion_time'))
+                _it = self._parse_date(row.get('initiation_time', row.get('completion_time')))
+                _ct = _ct or _it or datetime.now()
+                _it = _it or _ct
                 transaction_data = {
                     'receipt_no': receipt_no,
-                    'completion_time': self._parse_date(row.get('completion_time')),
-                    'initiation_time': self._parse_date(row.get('initiation_time', row.get('completion_time'))),
+                    'completion_time': _ct,
+                    'initiation_time': _it,
                     'details': str(row.get('details', '')),
                     'transaction_status': str(row.get('transaction_status', 'Completed')),
                     'paid_in': self._parse_decimal(row.get('paid_in')),
                     'withdrawn': self._parse_decimal(row.get('withdrawn')),
                     'balance': self._parse_decimal(row.get('balance', '0')),
                     'balance_confirmed': str(row.get('balance_confirmed', 'FALSE')).upper() in ['TRUE', 'YES', '1', 'Y'],
-                    'reason_type': str(row.get('reason_type', '')),
-                    'other_party_info': str(row.get('other_party_info', '')),
-                    'linked_transaction_id': str(row.get('linked_transaction_id', '')),
-                    'account_number': str(row.get('account_number', '')),
+                    'reason_type': self._clean_nullable_str(row.get('reason_type')) or '',
+                    'other_party_info': self._clean_nullable_str(row.get('other_party_info')),
+                    'linked_transaction_id': self._clean_nullable_str(row.get('linked_transaction_id')),
+                    'account_number': self._clean_nullable_str(row.get('account_number')),
                     'currency': str(row.get('currency', 'KES')),
                     'transaction_type': transaction_type,
                     'company_id': company_id,
@@ -791,6 +915,13 @@ class TransactionService:
 
             if filters.get('company_id'):
                 query = query.filter(Transaction.company_id == filters['company_id'])
+            elif filters.get('company_ids') is not None:
+                # Scope to a specific list of company IDs (used for user-based access control)
+                if len(filters['company_ids']) == 0:
+                    # User has no companies — return nothing
+                    query = query.filter(False)
+                else:
+                    query = query.filter(Transaction.company_id.in_(filters['company_ids']))
 
             if filters.get('transaction_type'):
                 query = query.filter(Transaction.transaction_type == filters['transaction_type'])
@@ -876,9 +1007,14 @@ class TransactionService:
             # Re-apply all the same filters to the totals query
             if filters.get('agent_id'):
                 totals_query = totals_query.filter(Transaction.agent_id == filters['agent_id'])
-            
+
             if filters.get('company_id'):
                 totals_query = totals_query.filter(Transaction.company_id == filters['company_id'])
+            elif filters.get('company_ids') is not None:
+                if len(filters['company_ids']) == 0:
+                    totals_query = totals_query.filter(False)
+                else:
+                    totals_query = totals_query.filter(Transaction.company_id.in_(filters['company_ids']))
             
             if filters.get('transaction_type'):
                 totals_query = totals_query.filter(Transaction.transaction_type == filters['transaction_type'])
@@ -1103,7 +1239,15 @@ class TransactionService:
             if 'company_id' in filters:
                 conditions.append("company_id = %s")
                 params.append(filters['company_id'])
-            
+            elif 'company_ids' in filters:
+                ids = filters['company_ids']
+                if len(ids) == 0:
+                    conditions.append("1 = 0")  # return nothing
+                else:
+                    placeholders = ', '.join(['%s'] * len(ids))
+                    conditions.append(f"company_id IN ({placeholders})")
+                    params.extend(ids)
+
             if 'reason_type' in filters:
                 conditions.append("reason_type = %s")
                 params.append(filters['reason_type'])
@@ -4260,20 +4404,29 @@ class TransactionService:
                 cursor.execute(kpi_query, params + [prev_start_date, prev_end_date])
                 prev_stats = cursor.fetchone()
 
-                # Commission stats - separate query matching commission report approach
+                # Commission earned: sum ABS(withdrawn) for commission transactions
+                # scoped to the current user's company shortcodes when provided.
+                commission_shortcodes = filters.get('commission_shortcodes')
+                if commission_shortcodes is not None and len(commission_shortcodes) > 0:
+                    sc_placeholders = ','.join(['%s'] * len(commission_shortcodes))
+                    commission_where = f"{where_clause} AND transaction_type = 'commission' AND business_shortcode IN ({sc_placeholders})"
+                    commission_params = params + list(commission_shortcodes)
+                else:
+                    commission_where = f"{where_clause} AND transaction_type IN ('commission_held', 'commission')"
+                    commission_params = params
+
                 commission_query = f"""
                     SELECT
                         COUNT(*) as commission_transactions,
-                        COALESCE(SUM(COALESCE(commission_amount, 0)), 0) as total_commissions
+                        COALESCE(SUM(ABS(COALESCE(withdrawn, 0))), 0) as total_commissions
                     FROM transactions
-                    WHERE {where_clause}
-                    AND transaction_type = 'commission'
+                    WHERE {commission_where}
                     AND completion_time BETWEEN %s AND %s
                 """
-                cursor.execute(commission_query, params + [start_date, end_date])
+                cursor.execute(commission_query, commission_params + [start_date, end_date])
                 current_commissions = cursor.fetchone()
 
-                cursor.execute(commission_query, params + [prev_start_date, prev_end_date])
+                cursor.execute(commission_query, commission_params + [prev_start_date, prev_end_date])
                 prev_commissions = cursor.fetchone()
 
                 # Calculate growth percentages
@@ -4553,4 +4706,35 @@ class TransactionService:
                 'success': False,
                 'error': f"Failed to fetch dashboard analytics: {str(e)}"
             }
+
+    def get_clawbacks(self, filters: Dict = None) -> Dict:
+        """Return commission_clawback transactions, newest first."""
+        try:
+            from app.model.transaction import Transaction
+            query = Transaction.query.filter_by(transaction_type='commission_clawback')
+
+            if filters:
+                if filters.get('start_date'):
+                    query = query.filter(Transaction.completion_time >= filters['start_date'])
+                if filters.get('end_date'):
+                    query = query.filter(Transaction.completion_time <= filters['end_date'])
+
+            rows = query.order_by(Transaction.completion_time.desc()).all()
+            data = [
+                {
+                    'id': r.id,
+                    'receipt_no': r.receipt_no,
+                    'completion_time': r.completion_time.isoformat() if r.completion_time else None,
+                    'details': r.details,
+                    'withdrawn': float(r.withdrawn or 0),
+                    'reason_type': r.reason_type,
+                    'currency': r.currency,
+                    'transaction_status': r.transaction_status,
+                }
+                for r in rows
+            ]
+            return {'success': True, 'data': data, 'total': len(data)}
+        except Exception as e:
+            logger.error(f"Error fetching clawbacks: {e}", exc_info=True)
+            return {'success': False, 'error': str(e)}
 

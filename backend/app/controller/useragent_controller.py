@@ -5,6 +5,7 @@ from app.service.user_agent_service import UserAgentService
 
 user_agent_bp = Blueprint('user_agent', __name__, url_prefix='/useragent')
 
+@user_agent_bp.route('', methods=['POST', 'OPTIONS'])
 @user_agent_bp.route('/', methods=['POST', 'OPTIONS'])
 @jwt_required()
 def create_user_agent():

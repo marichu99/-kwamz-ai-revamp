@@ -10,7 +10,7 @@ class AgentAccountBalance(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     agent_account_id = db.Column(
         db.Integer,
-        db.ForeignKey('agent_accounts.id'),
+        db.ForeignKey('agent_accounts.id', ondelete='CASCADE'),
         nullable=False
     )
 

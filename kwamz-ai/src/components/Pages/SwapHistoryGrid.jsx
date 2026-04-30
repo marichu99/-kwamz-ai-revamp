@@ -62,7 +62,8 @@ function SwapHistoryGrid() {
       setFilteredData(
         groupedData.filter(
           (group) =>
-            group.agent_company_name?.toLowerCase().includes(term) ||
+            group.company_name?.toLowerCase().includes(term) ||
+            group.till_name?.toLowerCase().includes(term) ||
             group.till_number?.toLowerCase().includes(term)
         )
       );
@@ -481,10 +482,11 @@ function SwapHistoryGrid() {
                       <ChevronRight className="w-4 h-4 text-slate-500" />
                     )}
                     <div className="text-left">
-                      <div className="font-semibold text-slate-800 dark:text-white">{group.agent_company_name}</div>
-                      {group.till_number && (
-                        <div className="text-xs text-slate-500 dark:text-slate-400">Till: {group.till_number}</div>
-                      )}
+                      <div className="font-semibold text-slate-800 dark:text-white">{group.company_name || group.till_name}</div>
+                      <div className="text-xs text-slate-500 dark:text-slate-400">
+                        {group.till_name && <span>Till: {group.till_name}</span>}
+                        {group.till_number && <span className="ml-2">#{group.till_number}</span>}
+                      </div>
                     </div>
                   </div>
                   <span className="px-2.5 py-1 rounded-full text-xs font-medium bg-orange-100 text-orange-700 dark:bg-orange-900/30 dark:text-orange-400">
@@ -629,7 +631,10 @@ function SwapHistoryGrid() {
                 </div>
                 <div>
                   <h2 className="text-lg font-semibold text-slate-800 dark:text-white">Swap Details</h2>
-                  <p className="text-sm text-slate-500 dark:text-slate-400">#{swapDetail.id} — {swapDetail.agent_company_name}</p>
+                  <p className="text-sm text-slate-500 dark:text-slate-400">
+                    #{swapDetail.id} — {swapDetail.company_name || swapDetail.till_name}
+                    {swapDetail.till_name && swapDetail.company_name && <span className="ml-1 text-slate-400">· {swapDetail.till_name}</span>}
+                  </p>
                 </div>
               </div>
               <button onClick={() => setSwapDetail(null)} className="p-2 hover:bg-slate-100 dark:hover:bg-slate-700 rounded-lg transition-colors">
@@ -866,7 +871,10 @@ function SwapHistoryGrid() {
                 </div>
                 <div>
                   <h2 className="text-lg font-semibold text-slate-800 dark:text-white">Initiate Payout</h2>
-                  <p className="text-sm text-slate-500 dark:text-slate-400">Swap #{payoutModal.id} — {payoutModal.agent_company_name}</p>
+                  <p className="text-sm text-slate-500 dark:text-slate-400">
+                    Swap #{payoutModal.id} — {payoutModal.company_name || payoutModal.till_name}
+                    {payoutModal.till_name && payoutModal.company_name && <span className="ml-1 text-slate-400">· {payoutModal.till_name}</span>}
+                  </p>
                 </div>
               </div>
               <button onClick={() => setPayoutModal(null)} className="p-2 hover:bg-slate-100 dark:hover:bg-slate-700 rounded-lg transition-colors">
@@ -1048,8 +1056,11 @@ function SwapHistoryGrid() {
                           <tbody>
                             {reportData.companies.map((company, idx) => (
                               <tr key={company.agent_company_id} className={`border-b border-slate-100 dark:border-slate-700 ${idx % 2 === 0 ? '' : 'bg-slate-50 dark:bg-slate-700/30'}`}>
-                                <td className="px-3 py-2 font-medium">{company.company_name}</td>
-                                <td className="px-3 py-2 text-slate-500">{company.till_number || 'N/A'}</td>
+                                <td className="px-3 py-2 font-medium">{company.company_name || '—'}</td>
+                                <td className="px-3 py-2 text-slate-500">
+                                  <div>{company.till_name || '—'}</div>
+                                  {company.till_number && <div className="text-xs text-slate-400">#{company.till_number}</div>}
+                                </td>
                                 <td className="px-3 py-2 text-center">
                                   <span className="px-2 py-0.5 rounded-full text-xs bg-orange-100 text-orange-700 dark:bg-orange-900/30 dark:text-orange-400">{company.swap_count}</span>
                                 </td>

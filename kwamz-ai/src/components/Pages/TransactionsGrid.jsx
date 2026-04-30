@@ -26,6 +26,7 @@ import TransactionDetailsModal from './TransactionDetailsModal.jsx';
 import TransactionStatsModal from './TransactionStatsModal.jsx';
 import CommissionsReportModal from './CommissionsReportModal.jsx';
 import FraudReportModal from './FraudReportModal.jsx';
+import AgentPerformanceReportModal from './AgentPerformanceReportModal.jsx';
 
 function TransactionsGrid() {
     const [transactionsResponse, setTransactionsResponse] = useState({
@@ -39,6 +40,7 @@ function TransactionsGrid() {
     const [isTransactionModalOpen, setIsTransactionModalOpen] = useState(false);
     const [isCommissionsReportOpen, setIsCommissionsReportOpen] = useState(false);
     const [isFraudReportOpen, setIsFraudReportOpen] = useState(false);
+    const [isAgentPerformanceReportOpen, setIsAgentPerformanceReportOpen] = useState(false);
     const [isStatsModalOpen, setIsStatsModalOpen] = useState(false);
     const [isLoading, setIsLoading] = useState(false);
     const [currentPage, setCurrentPage] = useState(1);
@@ -677,6 +679,15 @@ function TransactionsGrid() {
                                         <ShieldAlert className="w-4 h-4 mr-3 text-red-500" />
                                         Fraud Report
                                     </button>
+                                    <button
+                                        onClick={() => { setIsAgentPerformanceReportOpen(true); setIsDropdownOpen(false); }}
+                                        disabled={transactionType !== 'commission'}
+                                        className="w-full flex items-center px-4 py-2 text-sm text-slate-800 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-600 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                                        role="menuitem"
+                                    >
+                                        <TrendingUp className="w-4 h-4 mr-3 text-emerald-500" />
+                                        Agent Performance Report
+                                    </button>
                                 </div>
                             </div>
                         )}
@@ -1135,6 +1146,11 @@ function TransactionsGrid() {
             <FraudReportModal
                 isOpen={isFraudReportOpen}
                 onClose={() => setIsFraudReportOpen(false)}
+            />
+
+            <AgentPerformanceReportModal
+                isOpen={isAgentPerformanceReportOpen}
+                onClose={() => setIsAgentPerformanceReportOpen(false)}
             />
         </div>
     );

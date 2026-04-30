@@ -1,5 +1,6 @@
 import React from 'react'
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend } from 'recharts'
+import { Building2 } from 'lucide-react'
 
 const formatNumber = (value) => {
   if (value >= 1000000) {
@@ -26,7 +27,7 @@ const CustomTooltip = ({ active, payload, label }) => {
   return null
 }
 
-function OrdersChart({ data = [] }) {
+function OrdersChart({ data = [], isOnboarding = false }) {
   // Transform data to show transaction counts
   const chartData = data.map(item => ({
     name: item.name,
@@ -37,8 +38,17 @@ function OrdersChart({ data = [] }) {
     return (
       <div className='bg-white/90 dark:bg-slate-800/90 backdrop-blur-xl rounded-2xl p-6 border border-slate-200/50 dark:border-slate-700/50'>
         <h3 className='text-xl font-bold text-slate-800 dark:text-white mb-6'>Monthly Transactions</h3>
-        <div className="flex items-center justify-center h-[250px] text-slate-500 dark:text-slate-400">
-          No data available
+        <div className="flex flex-col items-center justify-center h-[250px] gap-3 text-center px-6">
+          {isOnboarding ? (
+            <>
+              <Building2 className="w-10 h-10 text-slate-300 dark:text-slate-600" />
+              <p className="text-sm font-medium text-slate-500 dark:text-slate-400">
+                Monthly transaction data will appear here once your company information has been onboarded to the system.
+              </p>
+            </>
+          ) : (
+            <p className="text-slate-500 dark:text-slate-400">No data available</p>
+          )}
         </div>
       </div>
     )
