@@ -2990,22 +2990,6 @@ def process_organization_rows(page: Page) -> None:
     while go_previous_on_organisation(page):
         pass # Go back to first page
 
-    # [TEST] Scrape head office commission before any row processing
-    print("[INFO] [TEST] Navigating to dashboard for Head Office Commission scraping...")
-    try:
-        page.locator("(//*[name()='svg'][@class='svg-icon'])[1]").first.click()
-        time.sleep(2)
-    except Exception as _nav_err:
-        print(f"[WARN] Dashboard nav click failed: {_nav_err}")
-    scrape_head_office_commission(page)
-    print("[INFO] [TEST] Returning to Child Organisation list after head office scraping...")
-
-    # scrape children commissions
-    # scrape_child_org_commission(page)
-    _navigate_to_child_org_list(page)
-    wait_for_table_load(page)
-    # [END TEST]
-
     # Page is already settled — skip the networkidle re-wait on first iteration
     first_iteration = True
 
@@ -3082,9 +3066,17 @@ def process_organization_rows(page: Page) -> None:
         print(f"[WARN] {len(to_be_rerun)} organizations failed and need reprocessing: {to_be_rerun}")
         if rerun_failed_codes(page, to_be_rerun):
             print("[SUCCESS] All failed organizations reprocessed successfully!")
-            # get into the second pass
         else:
             print("[ERROR] Some organizations still failed after retries.")
+
+    # Scrape Head Office Commission after all rows are processed
+    print("[INFO] All rows processed. Navigating to dashboard for Head Office Commission scraping...")
+    try:
+        page.locator("(//*[name()='svg'][@class='svg-icon'])[1]").first.click()
+        time.sleep(2)
+    except Exception as _nav_err:
+        print(f"[WARN] Dashboard nav click failed: {_nav_err}")
+    scrape_head_office_commission(page)
 
 def start_second_pass(page:Page,total_in_list:int,total_processed_so_far:int,priority_short_codes:List[int],to_be_rerun:List[int],pass_value:str):
     while True:
