@@ -24,6 +24,8 @@ from app.utils.email_utils import _send_email
 from app.service.company_service import CompanyService
 from app.service.agentcompany_service import AgentCompanyService
 from app.model.agentcompany import AgentCompany
+from app.model.agent_accounts import AgentAccount
+from app.model.agent_account_balances import AgentAccountBalance
 from app.service.fraud_detector import FraudDetectionService
 from app.service.config_service import ConfigService
 from app.model.fraud_alert import FraudAlert, FraudReportHistory
@@ -433,9 +435,10 @@ class TransactionService:
                     })
                 
                 if existing:
-                    # Update existing transaction
+                    # Update existing transaction — protect business_shortcode so a receipt
+                    # that appears in two tills' exports doesn't get reassigned
                     for key, value in transaction_data.items():
-                        if key not in ['receipt_no', 'transaction_type']:  # Don't update these
+                        if key not in ['receipt_no', 'transaction_type', 'business_shortcode']:
                             setattr(existing, key, value)
                     
                     updated_transactions.append(existing)
@@ -545,11 +548,16 @@ class TransactionService:
             created = updated = skipped = 0
             errors = []
 
+            def _parse_ksh(cell: str) -> Decimal:
+                return Decimal(
+                    str(cell).strip().strip('"').replace('KSH', '').replace(',', '').strip()
+                )
+
             with open(csv_path, newline='', encoding='utf-8-sig') as f:
                 reader = _csv.reader(f)
-                headers = next(reader, None)  # skip header row
+                next(reader, None)  # skip header row
                 for row in reader:
-                    if not row or len(row) < 5:
+                    if not row or len(row) < 6:
                         continue
                     level = str(row[0]).strip()
                     if level != '2':
@@ -562,49 +570,94 @@ class TransactionService:
                         continue
                     child_shortcode = m.group(1)
 
-                    # Parse "KSH51,773.01" → 51773.01
-                    raw_balance = str(row[4]).strip().strip('"').replace('KSH', '').replace(',', '').strip()
+                    # Parse all four balance columns (CSV layout):
+                    # col 4 = Current Balance, col 5 = Avaliable Balance,
+                    # col 6 = Reserved Balance, col 7 = Unclear Balance
                     try:
-                        amount = Decimal(raw_balance)
-                    except Exception:
-                        errors.append(f'Bad balance for {child_shortcode}: {raw_balance}')
+                        current_amount   = _parse_ksh(row[4])
+                        available_amount = _parse_ksh(row[5])
+                        reserved_amount  = _parse_ksh(row[6]) if len(row) > 6 else Decimal('0.00')
+                        unclear_amount   = _parse_ksh(row[7]) if len(row) > 7 else Decimal('0.00')
+                    except Exception as parse_err:
+                        errors.append(f'Bad balance for {child_shortcode}: {parse_err}')
                         continue
 
-                    if amount <= 0:
-                        skipped += 1
-                        continue
-
+                    # ── Transaction record (daily snapshot receipt) ──────────────────
                     receipt_no = f'COMM-{child_shortcode}-{date_tag}'
-
-                    existing = Transaction.query.filter_by(receipt_no=receipt_no).first()
-                    if existing:
-                        existing.paid_in = amount
-                        existing.balance = amount
-                        existing.commission_amount = amount
-                        existing.details = org_name
-                        existing.updated_at = datetime.utcnow()
+                    existing_txn = Transaction.query.filter_by(receipt_no=receipt_no).first()
+                    if existing_txn:
+                        existing_txn.paid_in = current_amount
+                        existing_txn.balance = current_amount
+                        existing_txn.commission_amount = available_amount
+                        existing_txn.details = org_name
+                        existing_txn.updated_at = datetime.utcnow()
                         updated += 1
-                    else:
+                    elif current_amount > 0:
                         txn = Transaction(
                             receipt_no=receipt_no,
                             completion_time=today,
                             initiation_time=today,
                             details=org_name,
                             transaction_status='Completed',
-                            paid_in=amount,
+                            paid_in=current_amount,
                             withdrawn=Decimal('0.00'),
-                            balance=amount,
+                            balance=current_amount,
                             reason_type='Commission',
                             other_party_info=parent_company.company_name,
                             business_shortcode=child_shortcode,
                             currency='KES',
                             transaction_type='commission',
-                            commission_amount=amount,
+                            commission_amount=available_amount,
                             commission_rate=Decimal('0.00'),
                             company_id=company_id,
                         )
                         db.session.add(txn)
                         created += 1
+                    else:
+                        skipped += 1
+
+                    # ── AgentAccount + AgentAccountBalance snapshot ──────────────────
+                    # Find the parent AgentCompany by child shortcode
+                    agent_company = AgentCompany.query.filter(
+                        db.or_(
+                            AgentCompany.short_code == child_shortcode,
+                            AgentCompany.business_short_code == child_shortcode,
+                            AgentCompany.agentcompany_code == child_shortcode,
+                        )
+                    ).first()
+                    if not agent_company:
+                        continue
+
+                    # Find or create the COMMISSION AgentAccount for this company
+                    commission_account = AgentAccount.query.filter(
+                        AgentAccount.agent_company_id == agent_company.id,
+                        AgentAccount.account_type == 'COMMISSION',
+                    ).first()
+                    if not commission_account:
+                        commission_account = AgentAccount(
+                            agent_company_id=agent_company.id,
+                            account_number=f'COMM-{child_shortcode}',
+                            account_type='COMMISSION',
+                            account_alias='Commission Account',
+                            currency='KES',
+                            relationship='Owned',
+                            status='ACTIVE',
+                        )
+                        db.session.add(commission_account)
+                        db.session.flush()  # populate commission_account.id
+
+                    commission_account.last_scraped_at = today
+
+                    # Insert a fresh balance snapshot
+                    balance_snapshot = AgentAccountBalance(
+                        agent_account_id=commission_account.id,
+                        current_balance=current_amount,
+                        available_balance=available_amount,
+                        reserved_balance=reserved_amount,
+                        unclear_balance=unclear_amount,
+                        snapshot_at=today,
+                    )
+                    db.session.add(balance_snapshot)
 
             db.session.commit()
             print(f'[COMM-BALANCE] created={created} updated={updated} skipped={skipped} errors={len(errors)}')

@@ -698,10 +698,11 @@ def parse_element_plus_transactions(html_content: str, transaction_type: str, bu
     
     return df,df.columns
 
-def save_table_to_dataframe_download(page: Page,business_shortcode:int,additional_category:str="") -> tuple:
+def save_table_to_dataframe_download(page: Page, business_shortcode: int, additional_category: str = "", _retry_count: int = 0) -> tuple:
+    max_retries = 3
     try:
         close_irritative_dialog_box(page)
-        print("[EXPORT] Starting Excel export...")
+        print(f"[EXPORT] Starting Excel export... (attempt {_retry_count + 1}/{max_retries})")
 
         export_trigger = page.locator("div.el-dropdown.padding-export >> span").first
         export_trigger.wait_for(state="visible", timeout=30000)
@@ -773,7 +774,11 @@ def save_table_to_dataframe_download(page: Page,business_shortcode:int,additiona
         return df, success_value
     except Exception as e:
         print(f"[ERROR] An error has occurred {e}")
-        save_table_to_dataframe_download(page=page,business_shortcode=business_shortcode,additional_category=additional_category)
+        if _retry_count + 1 >= max_retries:
+            print(f"[ERROR] Export failed after {max_retries} attempts — sending session timeout email")
+            send_session_timeout_email("martinmaati31@gmail.com")
+            return pd.DataFrame(), False
+        return save_table_to_dataframe_download(page=page, business_shortcode=business_shortcode, additional_category=additional_category, _retry_count=_retry_count + 1)
 
 def save_table_to_dataframe_download_head_office(
     page: Page,
@@ -876,18 +881,18 @@ def save_table_to_dataframe_download_head_office(
         print(f"[EXPORT] Reading {download.suggested_filename} directly into pandas...")
         temp_path = download.path()
 
-        # Save a debug copy so we can inspect the raw file if parsing fails
-        try:
-            import shutil, datetime as _dt
-            debug_dir = os.path.join(os.path.dirname(__file__), "..", "..", "debug_exports")
-            os.makedirs(debug_dir, exist_ok=True)
-            ext = os.path.splitext(download.suggested_filename)[1] or ".xlsx"
-            ts = _dt.datetime.now().strftime("%Y%m%d_%H%M%S")
-            debug_path = os.path.join(debug_dir, f"head_office_{business_shortcode}_{ts}{ext}")
-            shutil.copy2(temp_path, debug_path)
-            print(f"[DEBUG] Raw export saved to: {debug_path}")
-        except Exception as _e:
-            print(f"[DEBUG] Could not save debug copy: {_e}")
+        # # Save a debug copy so we can inspect the raw file if parsing fails
+        # try:
+        #     import shutil, datetime as _dt
+        #     debug_dir = os.path.join(os.path.dirname(__file__), "..", "..", "debug_exports")
+        #     os.makedirs(debug_dir, exist_ok=True)
+        #     ext = os.path.splitext(download.suggested_filename)[1] or ".xlsx"
+        #     ts = _dt.datetime.now().strftime("%Y%m%d_%H%M%S")
+        #     debug_path = os.path.join(debug_dir, f"head_office_{business_shortcode}_{ts}{ext}")
+        #     shutil.copy2(temp_path, debug_path)
+        #     print(f"[DEBUG] Raw export saved to: {debug_path}")
+        # except Exception as _e:
+        #     print(f"[DEBUG] Could not save debug copy: {_e}")
 
         # M-PESA sometimes returns a JSON error payload instead of a spreadsheet.
         # Detect this before handing the file to pandas.
@@ -2972,105 +2977,8 @@ def return_to_organization_list(page) -> bool:
         print(f"[ERROR] Failed to return to organization list: {e}")
         return False
 
-def process_organization_rows(page: Page) -> None:
-    """
-    Main orchestrator: Processes all organization rows across pagination and virtual scrolling.
-    """
-    total_processed = 0
-    to_be_rerun: list[int] = []
-    close_irritative_dialog_box(page)
-    all_shortcodes_ :Set[str] =set()
-    time.sleep(1)
-    all_shortcodes = extract_all_business_short_codes(page,all_shortcodes_)
-    print(f"[INFO] Extracted {len(all_shortcodes)} business short codes on all pages")
-    
-    priority_short_codes = _get_priority_shortcodes_(all_shortcodes)
-    print(f"[INFO] {len(priority_short_codes)} priority short codes identified for processing")
-    
-    while go_previous_on_organisation(page):
-        pass # Go back to first page
-
-    # Page is already settled — skip the networkidle re-wait on first iteration
-    first_iteration = True
-
-    while True:
-        print("\n[INFO] Starting new pagination page...")
-
-        if first_iteration:
-            time.sleep(0.5)  # page already loaded, avoid redundant networkidle wait
-            first_iteration = False
-        else:
-            wait_for_table_load(page)
-
-        total_in_list = get_total_from_pagination(page)
-        if total_in_list == 0:
-            print("[INFO] No organizations found.")
-            break
-
-        # Try to queue fraud detection task, but don't fail if Redis/Celery is unavailable
-        try:
-            task = run_fraud_detection_for_user.delay(user_id)
-            print(f"[INFO] Fraud detection task queued: {task.id}")
-        except Exception as celery_err:
-            print(f"[WARNING] Could not queue fraud detection task (Redis/Celery may be unavailable): {celery_err}")
-            # Continue with the main flow even if Celery task queueing fails
-
-        processed_on_this_page = process_page_rows(
-            page=page,
-            total_in_list=total_in_list,
-            total_processed_so_far=total_processed,
-            priority_short_codes=priority_short_codes,
-            to_be_rerun=to_be_rerun,
-            pass_value="first"
-        )
-
-        total_processed += processed_on_this_page
-
-
-        # Move to next pagination page
-        if not go_forth_on_organization(page, total_in_list):
-            print("[INFO] No more pages or navigation failed.")
-            print(f"[SUCCESS] All {total_processed} organizations processed successfully!")
-            stats = transaction_service.gather_scraping_statistics(
-                start_date=datetime.now() - timedelta(days=180),
-                end_date=datetime.now(),
-                company_shortcode=company_shortcode
-            )
-            
-            # send_scraping_report_email(user.email, stats)
-            send_scraping_report_email("martinmaati31@gmail.com", stats)
-
-            # # === Head Office Commission (between float and commission passes) ===
-            # print("[INFO] Children float complete. Scraping Head Office Commission...")
-            # scrape_head_office_commission(page)  # also calls scrape_head_office_commission_held_account
-
-            # # Navigate back to Child Organisation list for the commission pass
-            # print("[INFO] Returning to Child Organisation list for commission pass...")
-            # _navigate_to_child_org_list(page)
-            # wait_for_table_load(page)
-
-            while go_previous_on_organisation(page):
-                pass
-
-            # start the second pass
-            start_second_pass(page=page,
-                              total_in_list=total_in_list,
-                              total_processed_so_far=total_processed,
-                              priority_short_codes=all_shortcodes,
-                              to_be_rerun=to_be_rerun,
-                              pass_value="second")            
-
-        time.sleep(1)  # Gentle pause between pages
-
-    if to_be_rerun:
-        print(f"[WARN] {len(to_be_rerun)} organizations failed and need reprocessing: {to_be_rerun}")
-        if rerun_failed_codes(page, to_be_rerun):
-            print("[SUCCESS] All failed organizations reprocessed successfully!")
-        else:
-            print("[ERROR] Some organizations still failed after retries.")
-
-    # Scrape Head Office Commission after all rows are processed
-    print("[INFO] All rows processed. Navigating to dashboard for Head Office Commission scraping...")
+def _scrape_head_office(page: Page) -> None:
+    """Navigate to the dashboard and run head office + children commission scraping."""
     try:
         page.locator("(//*[name()='svg'][@class='svg-icon'])[1]").first.click()
         time.sleep(2)
@@ -3078,19 +2986,101 @@ def process_organization_rows(page: Page) -> None:
         print(f"[WARN] Dashboard nav click failed: {_nav_err}")
     scrape_head_office_commission(page)
 
-def start_second_pass(page:Page,total_in_list:int,total_processed_so_far:int,priority_short_codes:List[int],to_be_rerun:List[int],pass_value:str):
+
+def _run_float_pass(page: Page, active_short_codes: Set[str], to_be_rerun: list) -> int:
+    """Run a float-only pagination loop for the given set of shortcodes. Returns total processed."""
+    total = 0
+    first = True
     while True:
-        try:
-            processed_on_this_page = process_page_rows(
-                                        page=page,
-                                        total_in_list=total_in_list,
-                                        total_processed_so_far=total_processed_so_far,
-                                        priority_short_codes=priority_short_codes,
-                                        to_be_rerun=to_be_rerun,
-                                        pass_value=pass_value
-                                    )
-        except Exception as e:
-            print(f"[ERROR] An error has occured here {str(e)}")
+        if first:
+            time.sleep(0.5)
+            first = False
+        else:
+            wait_for_table_load(page)
+
+        total_in_list = get_total_from_pagination(page)
+        if total_in_list == 0:
+            break
+
+        processed = process_page_rows(
+            page=page,
+            total_in_list=total_in_list,
+            total_processed_so_far=total,
+            priority_short_codes=active_short_codes,
+            to_be_rerun=to_be_rerun,
+            pass_value="first",
+        )
+        total += processed
+
+        if not go_forth_on_organization(page, total_in_list):
+            break
+        time.sleep(1)
+    return total
+
+
+def process_organization_rows(page: Page) -> None:
+    """
+    Main orchestrator: Processes all organization rows across pagination and virtual scrolling.
+    """
+    total_processed = 0
+    to_be_rerun: list[int] = []
+    close_irritative_dialog_box(page)
+    all_shortcodes_: Set[str] = set()
+    time.sleep(1)
+    all_shortcodes = extract_all_business_short_codes(page, all_shortcodes_)
+    print(f"[INFO] Extracted {len(all_shortcodes)} business short codes on all pages")
+
+    priority_short_codes = _get_priority_shortcodes_(all_shortcodes)
+    print(f"[INFO] {len(priority_short_codes)} priority short codes identified for processing")
+    has_priority_codes = bool(priority_short_codes)
+
+    while go_previous_on_organisation(page):
+        pass  # Go back to first page
+
+    if not has_priority_codes:
+        # ── Case 1: no priority shortcodes ──────────────────────────────────
+        # Scrape head office + children commission first, then float all children.
+        print("[INFO] No priority shortcodes. Scraping Head Office Commission and Children Commission first...")
+        _scrape_head_office(page)
+        print("[INFO] Navigating back to Child Organisation list for float scraping...")
+        _navigate_to_child_org_list(page)
+        wait_for_table_load(page)
+        total_processed = _run_float_pass(page, all_shortcodes, to_be_rerun)
+        print(f"[SUCCESS] Float pass complete — {total_processed} organizations processed.")
+    else:
+        # ── Case 2: priority shortcodes exist ───────────────────────────────
+        # Pass 1: float transactions for priority children only.
+        print("[INFO] Starting priority float pass...")
+        total_processed = _run_float_pass(page, priority_short_codes, to_be_rerun)
+
+        stats = transaction_service.gather_scraping_statistics(
+            start_date=datetime.now() - timedelta(days=180),
+            end_date=datetime.now(),
+            company_shortcode=company_shortcode,
+        )
+        send_scraping_report_email("martinmaati31@gmail.com", stats)
+
+        # Scrape head office + children commission after the priority float pass.
+        print("[INFO] Priority float pass complete. Scraping Head Office Commission and Children Commission...")
+        _scrape_head_office(page)
+
+        # Pass 2: float transactions for every child.
+        print("[INFO] Navigating back to Child Organisation list for all-children float pass...")
+        _navigate_to_child_org_list(page)
+        wait_for_table_load(page)
+        all_pass_total = _run_float_pass(page, all_shortcodes, to_be_rerun)
+        print(f"[SUCCESS] All-children float pass complete — {all_pass_total} organizations processed.")
+
+        # Scrape head office + children commission again after the all-children float pass.
+        print("[INFO] All-children float pass complete. Scraping Head Office Commission and Children Commission...")
+        _scrape_head_office(page)
+
+    if to_be_rerun:
+        print(f"[WARN] {len(to_be_rerun)} organizations failed and need reprocessing: {to_be_rerun}")
+        if rerun_failed_codes(page, to_be_rerun):
+            print("[SUCCESS] All failed organizations reprocessed successfully!")
+        else:
+            print("[ERROR] Some organizations still failed after retries.")
 
 def scrape_child_org_commission(page:Page,business_shortcode:str=""):
     try:

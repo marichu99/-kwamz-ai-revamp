@@ -44,7 +44,7 @@ def create_app():
             'pool_pre_ping': True,
         }
     app.config['JWT_SECRET_KEY'] = os.getenv('JWT_SECRET_KEY', 'your-secret-key')
-    app.config['JWT_ACCESS_TOKEN_EXPIRES'] = 3600
+    app.config['JWT_ACCESS_TOKEN_EXPIRES'] = 14400  # 4 hours
     app.config['GCP_BUCKET'] = os.getenv('GCP_BUCKET', 'trovana-docs')
     app.config['SECRET_KEY']   = 'my-secret-key'
     app.config['DEBUG']        = False
