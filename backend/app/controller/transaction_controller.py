@@ -675,6 +675,37 @@ def get_clawbacks():
         return jsonify({'error': str(e)}), 500
 
 
+@transaction_bp.route('/commission-till-balances', methods=['GET'])
+@jwt_required()
+def get_commission_till_balances():
+    """Return latest commission balance snapshot per child-org till."""
+    try:
+        current_user_id = get_jwt_identity()
+        current_user = UserService.get_user_by_id(user_id=current_user_id)
+        if not current_user:
+            return jsonify({'error': 'User not found'}), 404
+
+        role = (current_user.role or 'user').lower()
+
+        if role in ('admin', 'administrator'):
+            company_ids = None  # all
+        elif role == 'agent':
+            company_ids = [c.id for c in Company.query.filter_by(agent_user_id=current_user_id).all()]
+        else:
+            company_ids = [c.id for c in Company.query.filter_by(user_id=current_user_id).all()]
+
+        page = request.args.get('page', 1, type=int)
+        per_page = request.args.get('per_page', 10, type=int)
+
+        result = transaction_service.get_commission_till_balances(
+            company_ids=company_ids, page=page, per_page=per_page
+        )
+        return jsonify(result), 200 if result['success'] else 400
+    except Exception as e:
+        current_app.logger.error(f"Error fetching commission till balances: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
 @transaction_bp.route('/export', methods=['GET'])
 def export_transactions_():
     """

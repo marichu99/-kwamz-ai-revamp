@@ -121,6 +121,7 @@ function FraudAlertsGrid() {
 
     return (
         <div className="space-y-6">
+            <div className="sticky top-0 z-20 bg-slate-50 dark:bg-slate-900">
             {/* Header */}
             <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
                 <div>
@@ -161,6 +162,7 @@ function FraudAlertsGrid() {
                         />
                     </div>
                 </div>
+            </div>
             </div>
 
             {/* Summary Cards */}

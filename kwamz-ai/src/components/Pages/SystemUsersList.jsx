@@ -397,6 +397,7 @@ function SystemUsersList() {
         </div>
       )}
 
+      <div className="sticky top-0 z-20 bg-white dark:bg-slate-800">
       {/* Action Buttons */}
       <div className="flex justify-end mb-4 space-x-4">
         <button
@@ -502,6 +503,7 @@ function SystemUsersList() {
             <option value="inactive">Inactive</option>
           </select>
         </div>
+      </div>
       </div>
 
       {/* Users Grid */}

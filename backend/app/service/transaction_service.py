@@ -648,16 +648,29 @@ class TransactionService:
 
                     commission_account.last_scraped_at = today
 
-                    # Insert a fresh balance snapshot
-                    balance_snapshot = AgentAccountBalance(
-                        agent_account_id=commission_account.id,
-                        current_balance=current_amount,
-                        available_balance=available_amount,
-                        reserved_balance=reserved_amount,
-                        unclear_balance=unclear_amount,
-                        snapshot_at=today,
-                    )
-                    db.session.add(balance_snapshot)
+                    # Upsert today's balance snapshot — update if already exists, insert otherwise
+                    day_start = today.replace(hour=0, minute=0, second=0, microsecond=0)
+                    day_end   = today.replace(hour=23, minute=59, second=59, microsecond=999999)
+                    existing_snapshot = AgentAccountBalance.query.filter(
+                        AgentAccountBalance.agent_account_id == commission_account.id,
+                        AgentAccountBalance.snapshot_at >= day_start,
+                        AgentAccountBalance.snapshot_at <= day_end,
+                    ).first()
+                    if existing_snapshot:
+                        existing_snapshot.current_balance   = current_amount
+                        existing_snapshot.available_balance = available_amount
+                        existing_snapshot.reserved_balance  = reserved_amount
+                        existing_snapshot.unclear_balance   = unclear_amount
+                        existing_snapshot.snapshot_at       = today
+                    else:
+                        db.session.add(AgentAccountBalance(
+                            agent_account_id=commission_account.id,
+                            current_balance=current_amount,
+                            available_balance=available_amount,
+                            reserved_balance=reserved_amount,
+                            unclear_balance=unclear_amount,
+                            snapshot_at=today,
+                        ))
 
             db.session.commit()
             print(f'[COMM-BALANCE] created={created} updated={updated} skipped={skipped} errors={len(errors)}')
@@ -669,6 +682,73 @@ class TransactionService:
         except Exception as e:
             db.session.rollback()
             print(f'[COMM-BALANCE] Failed: {e}')
+            return {'success': False, 'error': str(e)}
+
+    def get_commission_till_balances(self, company_ids: list = None, page: int = 1, per_page: int = 10) -> dict:
+        """
+        Return the latest COMM-{shortcode}-{YYYYMMDD} snapshot per till, paginated.
+        One row per business_shortcode, ordered by shortcode.
+        """
+        try:
+            latest_sub = (
+                db.session.query(
+                    Transaction.business_shortcode,
+                    func.max(Transaction.completion_time).label('latest_time'),
+                )
+                .filter(
+                    Transaction.transaction_type == 'commission',
+                    Transaction.receipt_no.like('COMM-%'),
+                )
+            )
+            if company_ids is not None:
+                latest_sub = latest_sub.filter(Transaction.company_id.in_(company_ids))
+            latest_sub = latest_sub.group_by(Transaction.business_shortcode).subquery()
+
+            base_query = (
+                db.session.query(Transaction)
+                .join(
+                    latest_sub,
+                    and_(
+                        Transaction.business_shortcode == latest_sub.c.business_shortcode,
+                        Transaction.completion_time == latest_sub.c.latest_time,
+                    ),
+                )
+                .filter(
+                    Transaction.transaction_type == 'commission',
+                    Transaction.receipt_no.like('COMM-%'),
+                )
+                .order_by(Transaction.business_shortcode)
+            )
+
+            total = base_query.count()
+            pages = max(1, (total + per_page - 1) // per_page)
+            rows = base_query.offset((page - 1) * per_page).limit(per_page).all()
+
+            data = []
+            for t in rows:
+                data.append({
+                    'id': t.id,
+                    'shortcode': t.business_shortcode,
+                    'till_name': t.details or t.business_shortcode,
+                    'current_balance': str(t.paid_in or '0.00'),
+                    'available_balance': str(t.commission_amount or '0.00'),
+                    'last_updated': t.completion_time.isoformat() if t.completion_time else None,
+                    'receipt_no': t.receipt_no,
+                })
+
+            return {
+                'success': True,
+                'data': data,
+                'pagination': {
+                    'page': page,
+                    'per_page': per_page,
+                    'total': total,
+                    'pages': pages,
+                    'has_next': page < pages,
+                    'has_prev': page > 1,
+                },
+            }
+        except Exception as e:
             return {'success': False, 'error': str(e)}
 
     def update_transactions_from_dataframe(self, df: pd.DataFrame, transaction_type: str,

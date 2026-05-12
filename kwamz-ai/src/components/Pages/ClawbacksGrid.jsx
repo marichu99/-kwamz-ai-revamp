@@ -75,6 +75,7 @@ function ClawbacksGrid() {
   return (
     <div className="bg-white dark:bg-slate-800 rounded-xl shadow-lg p-6">
 
+      <div className="sticky top-0 z-20 bg-white dark:bg-slate-800">
       {/* Header */}
       <div className="flex items-center justify-between mb-6">
         <div className="flex items-center gap-3">
@@ -148,6 +149,7 @@ function ClawbacksGrid() {
             </button>
           )}
         </div>
+      </div>
       </div>
 
       {/* Loading */}

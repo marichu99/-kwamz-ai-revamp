@@ -284,6 +284,7 @@ function UserReportConfigGrid() {
         </p>
       </div>
 
+      <div className="sticky top-0 z-20 bg-white dark:bg-slate-800">
       {/* Action Buttons */}
       <div className="flex justify-between items-center mb-6">
         <div className="flex space-x-4">
@@ -359,6 +360,7 @@ function UserReportConfigGrid() {
             className="w-full pl-10 pr-4 py-2.5 bg-slate-100 dark:bg-slate-700 border border-slate-200 dark:border-slate-600 rounded-xl text-slate-800 dark:text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all"
           />
         </div>
+      </div>
       </div>
 
       {/* Configs Grid */}

@@ -881,18 +881,18 @@ def save_table_to_dataframe_download_head_office(
         print(f"[EXPORT] Reading {download.suggested_filename} directly into pandas...")
         temp_path = download.path()
 
-        # # Save a debug copy so we can inspect the raw file if parsing fails
-        # try:
-        #     import shutil, datetime as _dt
-        #     debug_dir = os.path.join(os.path.dirname(__file__), "..", "..", "debug_exports")
-        #     os.makedirs(debug_dir, exist_ok=True)
-        #     ext = os.path.splitext(download.suggested_filename)[1] or ".xlsx"
-        #     ts = _dt.datetime.now().strftime("%Y%m%d_%H%M%S")
-        #     debug_path = os.path.join(debug_dir, f"head_office_{business_shortcode}_{ts}{ext}")
-        #     shutil.copy2(temp_path, debug_path)
-        #     print(f"[DEBUG] Raw export saved to: {debug_path}")
-        # except Exception as _e:
-        #     print(f"[DEBUG] Could not save debug copy: {_e}")
+        # Save a debug copy so we can inspect the raw file if parsing fails
+        try:
+            import shutil, datetime as _dt
+            debug_dir = os.path.join(os.path.dirname(__file__), "..", "..", "debug_exports")
+            os.makedirs(debug_dir, exist_ok=True)
+            ext = os.path.splitext(download.suggested_filename)[1] or ".xlsx"
+            ts = _dt.datetime.now().strftime("%Y%m%d_%H%M%S")
+            debug_path = os.path.join(debug_dir, f"head_office_{business_shortcode}_{ts}{ext}")
+            shutil.copy2(temp_path, debug_path)
+            print(f"[DEBUG] Raw export saved to: {debug_path}")
+        except Exception as _e:
+            print(f"[DEBUG] Could not save debug copy: {_e}")
 
         # M-PESA sometimes returns a JSON error payload instead of a spreadsheet.
         # Detect this before handing the file to pandas.

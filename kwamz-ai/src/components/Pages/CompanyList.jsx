@@ -369,6 +369,7 @@ function CompanyList() {
   };
   return (
     <div className="bg-white dark:bg-slate-800 rounded-xl shadow-lg p-6">
+      <div className="sticky top-0 z-20 bg-white dark:bg-slate-800">
       {/* Action Buttons */}
       <div className="flex justify-end mb-4 space-x-4">
         <button
@@ -514,6 +515,7 @@ function CompanyList() {
             className="w-full pl-10 pr-4 py-2.5 bg-slate-100 dark:bg-slate-700 border border-slate-200 dark:border-slate-600 rounded-xl text-slate-800 dark:text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all"
           />
         </div>
+      </div>
       </div>
 
       {/* Companies Grid */}

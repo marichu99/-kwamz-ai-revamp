@@ -386,6 +386,52 @@ function AgentCompanyList() {
     }
   };
 
+  // Export filtered tills to Excel
+  const handleExportToExcel = () => {
+    const rows = filteredAgentCompanies.map((ac) => {
+      const floatAcc = getFloatAccount(ac);
+      const commAcc = getCommissionAccount(ac);
+      const alertInfo = fraudAlertData[ac.id];
+      return {
+        ID: ac.id,
+        'Company Name': ac.company_name || '',
+        Location: ac.location || '',
+        'Agent Code': ac.agentcompany_code || '',
+        'Till Number': ac.till_number || '',
+        'Short Code': ac.short_code || '',
+        'Float Balance (Current)': parseFloat(floatAcc.balances?.current_balance || 0).toFixed(2),
+        'Float Balance (Available)': parseFloat(floatAcc.balances?.available_balance || 0).toFixed(2),
+        'Float Account No.': floatAcc.account_number || '',
+        'Float Account Status': floatAcc.status || '',
+        'Commission Balance (Current)': parseFloat(commAcc.balances?.current_balance || 0).toFixed(2),
+        'Commission Balance (Available)': parseFloat(commAcc.balances?.available_balance || 0).toFixed(2),
+        'Commission Account No.': commAcc.account_number || '',
+        'Commission Account Status': commAcc.status || '',
+        'Last Scraped At': ac.last_scraped_at ? new Date(ac.last_scraped_at).toLocaleString() : '',
+        'Fraud Risk Level': alertInfo?.fraud_risk || ac.fraud_risk_level || 'low',
+        'Fraud Alerts': alertInfo?.total_alerts || 0,
+        Status: ac.status || '',
+      };
+    });
+
+    // Add applied filter info as a second sheet
+    const filterRows = [
+      ['Filter', 'Value'],
+      ['Search', searchTerm || 'None'],
+      ['Float Balance Below (KES)', floatThreshold || 'None'],
+      ['Commission Balance Below (KES)', commissionThreshold || 'None'],
+      ['Fraud Status', fraudFilter === 'all' ? 'All' : fraudFilter === 'flagged' ? 'Flagged' : 'Not Flagged'],
+      ['Total Results', filteredAgentCompanies.length],
+      ['Exported At', new Date().toLocaleString()],
+    ];
+
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(rows), 'Tills');
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(filterRows), 'Filters Applied');
+    XLSX.writeFile(wb, `tills_export_${new Date().toISOString().slice(0, 10)}.xlsx`);
+    showToast(`Exported ${rows.length} tills to Excel`, 'success');
+  };
+
   // Handle create agent company
   const handleOpenCreateModal = () => {
     setSelectedAgentCompanyIds([]);
@@ -520,8 +566,20 @@ function AgentCompanyList() {
 
   return (
     <div className="bg-white dark:bg-slate-800 rounded-xl shadow-lg p-6">
+      <div className="sticky top-0 z-20 bg-white dark:bg-slate-800">
       {/* Action Buttons */}
       <div className="flex justify-end mb-4 space-x-4">
+        <button
+          onClick={handleExportToExcel}
+          disabled={filteredAgentCompanies.length === 0}
+          className="flex items-center space-x-2 py-2 px-4 bg-emerald-500 text-white rounded-xl hover:bg-emerald-600 transition-colors disabled:bg-emerald-300 disabled:cursor-not-allowed"
+        >
+          <Download className="w-4 h-4" />
+          <span>Export Excel</span>
+          {hasActiveFilters && (
+            <span className="bg-white/20 text-xs px-1.5 py-0.5 rounded-full">{filteredAgentCompanies.length}</span>
+          )}
+        </button>
         <button
           onClick={() => fetchAgentCompanies(true)}
           disabled={isLoading}
@@ -796,6 +854,7 @@ function AgentCompanyList() {
             )}
           </div>
         )}
+      </div>
       </div>
 
       {/* Agent Companies Grid */}

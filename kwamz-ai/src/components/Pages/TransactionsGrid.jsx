@@ -58,6 +58,13 @@ function TransactionsGrid() {
     const [expandedCompanies, setExpandedCompanies] = useState(new Set());
     const [expandedBusinesses, setExpandedBusinesses] = useState(new Set());
 
+    // Commission till balances (latest per till, for commission view)
+    const [tillBalances, setTillBalances] = useState([]);
+    const [isTillBalancesLoading, setIsTillBalancesLoading] = useState(false);
+    const [tillPage, setTillPage] = useState(1);
+    const [tillPageSize, setTillPageSize] = useState(10);
+    const [tillPagination, setTillPagination] = useState({ total: 0, pages: 1, has_next: false, has_prev: false });
+
     // Transaction type toggle: 'float' or 'commission'
     const [transactionType, setTransactionType] = useState('float');
 
@@ -228,6 +235,29 @@ function TransactionsGrid() {
         }
     };
 
+    // Fetch latest commission balance per till
+    const fetchTillBalances = async (page = tillPage, perPage = tillPageSize) => {
+        setIsTillBalancesLoading(true);
+        try {
+            const token = localStorage.getItem('token');
+            const response = await axios.get(`${config.API_URL}/transactions/commission-till-balances`, {
+                headers: { Authorization: `Bearer ${token}` },
+                params: { page, per_page: perPage }
+            });
+            if (response.data.success) {
+                setTillBalances(response.data.data || []);
+                setTillPagination(response.data.pagination || { total: 0, pages: 1, has_next: false, has_prev: false });
+            } else {
+                showToast(response.data.error || 'Failed to load till balances', 'error');
+            }
+        } catch (error) {
+            console.error('Error fetching till balances:', error.response?.data || error.message);
+            showToast('Failed to fetch commission till balances', 'error');
+        } finally {
+            setIsTillBalancesLoading(false);
+        }
+    };
+
     // Fetch statistics
     const fetchStats = async () => {
         try {
@@ -256,9 +286,13 @@ function TransactionsGrid() {
     };
 
     useEffect(() => {
-        fetchTransactions();
-        fetchStats();
-    }, [currentPage, pageSize, filters, transactionType]);
+        if (transactionType === 'commission') {
+            fetchTillBalances(tillPage, tillPageSize);
+        } else {
+            fetchTransactions();
+            fetchStats();
+        }
+    }, [currentPage, pageSize, filters, transactionType, tillPage, tillPageSize]);
 
     useEffect(() => {
         if (searchTerm !== '') {
@@ -516,10 +550,10 @@ function TransactionsGrid() {
                     }`}>
                     <div className={`text-sm font-medium ${transactionType === 'float' ? 'text-blue-600 dark:text-blue-400' : 'text-amber-600 dark:text-amber-400'
                         }`}>
-                        Total Items
+                        {transactionType === 'float' ? 'Total Items' : 'Active Tills'}
                     </div>
                     <div className="text-2xl font-bold text-slate-800 dark:text-white">
-                        {pagination.total || 0}
+                        {transactionType === 'float' ? (pagination.total || 0) : (tillPagination.total || tillBalances.length)}
                     </div>
                 </div>
 
@@ -563,27 +597,40 @@ function TransactionsGrid() {
                 ) : (
                     <>
                         <div className="bg-green-50 dark:bg-slate-700 rounded-xl p-4">
-                            <div className="text-sm text-green-600 dark:text-green-400 font-medium">Total Commission</div>
+                            <div className="text-sm text-green-600 dark:text-green-400 font-medium">Total Available Balance</div>
                             <div className="text-2xl font-bold text-slate-800 dark:text-white">
-                                {formatCurrency(summary.total_commission || '0.00')}
+                                {formatCurrency(
+                                    tillBalances.reduce((sum, t) => sum + parseFloat(t.available_balance || 0), 0).toFixed(2)
+                                )}
                             </div>
                         </div>
                         <div className="bg-blue-50 dark:bg-slate-700 rounded-xl p-4">
-                            <div className="text-sm text-blue-600 dark:text-blue-400 font-medium">Total Deposits</div>
+                            <div className="text-sm text-blue-600 dark:text-blue-400 font-medium">Total Current Balance</div>
                             <div className="text-2xl font-bold text-slate-800 dark:text-white">
-                                {formatCurrency(summary.total_paid_in || '0.00')}
+                                {formatCurrency(
+                                    tillBalances.reduce((sum, t) => sum + parseFloat(t.current_balance || 0), 0).toFixed(2)
+                                )}
                             </div>
                         </div>
-                        <div className="bg-red-50 dark:bg-slate-700 rounded-xl p-4">
-                            <div className="text-sm text-red-600 dark:text-red-400 font-medium">Total Withdrawals</div>
-                            <div className="text-2xl font-bold text-slate-800 dark:text-white">
-                                {formatCurrency(summary.total_withdrawn || '0.00')}
+                        <div className="bg-amber-50 dark:bg-slate-700 rounded-xl p-4">
+                            <div className="text-sm text-amber-600 dark:text-amber-400 font-medium">Highest Balance Till</div>
+                            <div className="text-lg font-bold text-slate-800 dark:text-white truncate">
+                                {tillBalances.length > 0
+                                    ? (() => {
+                                        const top = tillBalances.reduce((max, t) =>
+                                            parseFloat(t.available_balance) > parseFloat(max.available_balance) ? t : max
+                                        , tillBalances[0]);
+                                        return `${top.shortcode} — ${formatCurrency(top.available_balance)}`;
+                                    })()
+                                    : '—'
+                                }
                             </div>
                         </div>
                     </>
                 )}
             </div>
 
+            <div className="sticky top-0 z-20 bg-white dark:bg-slate-800">
             {/* Action Buttons */}
             <div className="flex justify-between mb-4">
                 {/* Filter Buttons */}
@@ -595,7 +642,7 @@ function TransactionsGrid() {
                         <BarChart3 className="w-4 h-4" />
                         <span>Statistics</span>
                     </button>
-                    {groupedData.length > 0 && (
+                    {transactionType === 'float' && groupedData.length > 0 && (
                         <button
                             onClick={toggleExpandAll}
                             className="flex items-center space-x-2 py-2 px-4 bg-slate-500 text-white rounded-xl hover:bg-slate-600 transition-colors"
@@ -618,11 +665,11 @@ function TransactionsGrid() {
                 {/* Action Buttons */}
                 <div className="flex space-x-4">
                     <button
-                        onClick={fetchTransactions}
-                        disabled={isLoading}
+                        onClick={() => transactionType === 'commission' ? fetchTillBalances() : fetchTransactions()}
+                        disabled={isLoading || isTillBalancesLoading}
                         className="flex items-center space-x-2 py-2 px-4 bg-green-500 text-white rounded-xl hover:bg-green-600 transition-colors disabled:bg-green-300 disabled:cursor-not-allowed"
                     >
-                        <RefreshCw className={`w-4 h-4 ${isLoading ? 'animate-spin' : ''}`} />
+                        <RefreshCw className={`w-4 h-4 ${(isLoading || isTillBalancesLoading) ? 'animate-spin' : ''}`} />
                         <span>Reload</span>
                     </button>
                     <div className="relative" ref={dropdownRef}>
@@ -695,8 +742,8 @@ function TransactionsGrid() {
                 </div>
             </div>
 
-            {/* Filters */}
-            <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
+            {/* Filters — float only */}
+            {transactionType === 'float' && <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
                 <div>
                     <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">
                         Start Date
@@ -758,9 +805,10 @@ function TransactionsGrid() {
                         <option value="Failed">Failed</option>
                     </select>
                 </div>
-            </div>
+            </div>}
 
-            {/* Search and Filter Controls */}
+            {/* Search and Filter Controls — float only */}
+            {transactionType === 'float' &&
             <div className="flex flex-col md:flex-row justify-between items-center mb-6 space-y-4 md:space-y-0">
                 <div className="relative w-full md:w-auto">
                     <Search className="w-4 h-4 absolute left-3 top-1/2 transform -translate-y-1/2 text-slate-400" />
@@ -785,10 +833,69 @@ function TransactionsGrid() {
                         <span>Reset Filters</span>
                     </button>
                 </div>
+            </div>}
             </div>
 
-            {/* Grouped Transactions Grid */}
-            <div className="space-y-3">
+            {/* Commission Till Balances (one row per till, latest balance) */}
+            {transactionType === 'commission' && (
+                <div className="overflow-x-auto">
+                    <table className="w-full text-sm">
+                        <thead>
+                            <tr className="bg-slate-100 dark:bg-slate-700 text-left text-slate-600 dark:text-slate-300">
+                                <th className="px-4 py-3 font-semibold rounded-l-xl">Till Name</th>
+                                <th className="px-4 py-3 font-semibold">Shortcode</th>
+                                <th className="px-4 py-3 font-semibold">Current Balance</th>
+                                <th className="px-4 py-3 font-semibold">Available Balance</th>
+                                <th className="px-4 py-3 font-semibold rounded-r-xl">Last Updated</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {isTillBalancesLoading ? (
+                                <tr>
+                                    <td colSpan={5} className="text-center py-8">
+                                        <div className="inline-block animate-spin rounded-full h-8 w-8 border-b-2 border-amber-600"></div>
+                                        <div className="mt-2 text-slate-500 dark:text-slate-400">Loading commission balances...</div>
+                                    </td>
+                                </tr>
+                            ) : tillBalances.length === 0 ? (
+                                <tr>
+                                    <td colSpan={5} className="text-center py-8 text-slate-500 dark:text-slate-400">
+                                        No commission till balances found
+                                    </td>
+                                </tr>
+                            ) : (
+                                tillBalances.map((till, index) => (
+                                    <tr
+                                        key={till.id}
+                                        className={`border-b border-slate-200 dark:border-slate-600 ${
+                                            index % 2 === 0 ? 'bg-white dark:bg-slate-800' : 'bg-slate-50 dark:bg-slate-700/50'
+                                        } hover:bg-amber-50 dark:hover:bg-slate-700 transition-colors`}
+                                    >
+                                        <td className="px-4 py-3 font-medium text-slate-800 dark:text-white">
+                                            {till.till_name}
+                                        </td>
+                                        <td className="px-4 py-3 font-mono text-amber-600 dark:text-amber-400">
+                                            {till.shortcode}
+                                        </td>
+                                        <td className="px-4 py-3 font-bold text-slate-800 dark:text-white">
+                                            {formatCurrency(till.current_balance)}
+                                        </td>
+                                        <td className="px-4 py-3 font-bold text-green-600 dark:text-green-400">
+                                            {formatCurrency(till.available_balance)}
+                                        </td>
+                                        <td className="px-4 py-3 text-slate-500 dark:text-slate-400 text-xs">
+                                            {formatDate(till.last_updated)}
+                                        </td>
+                                    </tr>
+                                ))
+                            )}
+                        </tbody>
+                    </table>
+                </div>
+            )}
+
+            {/* Float Grouped Transactions Grid */}
+            {transactionType === 'float' && <div className="space-y-3">
                 {groupedData.map(company => (
                     <div key={company.company_name} className="bg-slate-50 dark:bg-slate-800/50 rounded-lg overflow-hidden border border-slate-200 dark:border-slate-700">
                         {/* Company Header */}
@@ -1043,16 +1150,56 @@ function TransactionsGrid() {
 
                 {isLoading && (
                     <div className="text-center py-8">
-                        <div className={`inline-block animate-spin rounded-full h-8 w-8 border-b-2 ${transactionType === 'float' ? 'border-blue-600' : 'border-amber-600'
-                            }`}></div>
+                        <div className="inline-block animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600"></div>
                         <div className="mt-2 text-slate-500 dark:text-slate-400">
-                            Loading {transactionType === 'float' ? 'float' : 'commission'} transactions...
+                            Loading float transactions...
                         </div>
                     </div>
                 )}
-            </div>
+            </div>}
 
-            {/* Pagination Controls */}
+            {/* Commission till pagination */}
+            {transactionType === 'commission' && (
+                <div className="flex flex-col sm:flex-row justify-between items-center mt-4 space-y-4 sm:space-y-0">
+                    <div className="flex items-center space-x-2">
+                        <span className="text-sm text-slate-600 dark:text-slate-300">
+                            Showing {tillPagination.total === 0 ? 0 : (tillPage - 1) * tillPageSize + 1} - {Math.min(tillPage * tillPageSize, tillPagination.total)} of {tillPagination.total} tills
+                        </span>
+                        <select
+                            value={tillPageSize}
+                            onChange={(e) => { setTillPageSize(Number(e.target.value)); setTillPage(1); }}
+                            className="py-1 px-2 bg-slate-100 dark:bg-slate-700 border border-slate-200 dark:border-slate-600 rounded-xl text-slate-800 dark:text-white focus:outline-none focus:ring-2 focus:ring-amber-500"
+                        >
+                            <option value="5">5 per page</option>
+                            <option value="10">10 per page</option>
+                            <option value="20">20 per page</option>
+                            <option value="50">50 per page</option>
+                        </select>
+                    </div>
+                    <div className="flex items-center space-x-2">
+                        <button onClick={() => setTillPage(1)} disabled={!tillPagination.has_prev}
+                            className="py-1 px-3 bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300 rounded-xl hover:bg-slate-200 dark:hover:bg-slate-600 disabled:opacity-50 disabled:cursor-not-allowed">
+                            First
+                        </button>
+                        <button onClick={() => setTillPage(p => p - 1)} disabled={!tillPagination.has_prev}
+                            className="py-1 px-3 bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300 rounded-xl hover:bg-slate-200 dark:hover:bg-slate-600 disabled:opacity-50 disabled:cursor-not-allowed">
+                            Previous
+                        </button>
+                        <span className="text-sm text-slate-600 dark:text-slate-300">
+                            Page {tillPage} of {tillPagination.pages}
+                        </span>
+                        <button onClick={() => setTillPage(p => p + 1)} disabled={!tillPagination.has_next}
+                            className="py-1 px-3 bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300 rounded-xl hover:bg-slate-200 dark:hover:bg-slate-600 disabled:opacity-50 disabled:cursor-not-allowed">
+                            Next
+                        </button>
+                        <button onClick={() => setTillPage(tillPagination.pages)} disabled={!tillPagination.has_next}
+                            className="py-1 px-3 bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300 rounded-xl hover:bg-slate-200 dark:hover:bg-slate-600 disabled:opacity-50 disabled:cursor-not-allowed">
+                            Last
+                        </button>
+                    </div>
+                </div>
+            )}
+            {transactionType === 'float' &&
             <div className="flex flex-col sm:flex-row justify-between items-center mt-4 space-y-4 sm:space-y-0">
                 <div className="flex items-center space-x-2">
                     <span className="text-sm text-slate-600 dark:text-slate-300">
@@ -1114,7 +1261,7 @@ function TransactionsGrid() {
                         Last
                     </button>
                 </div>
-            </div>
+            </div>}
 
             {/* Modals */}
             <TransactionDetailsModal

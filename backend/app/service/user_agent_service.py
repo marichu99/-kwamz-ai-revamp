@@ -1,6 +1,7 @@
 from app import db
 from app.model.useragent import UserAgent
 from app.model.agentcompany import AgentCompany
+from app.model.company import Company
 from app.utils.gcs_storage import upload_agent_image, delete_agent_image
 from datetime import datetime
 from openpyxl import load_workbook
@@ -30,6 +31,26 @@ class UserAgentService:
         os.makedirs(upload_dir, exist_ok=True)
         return upload_dir
 
+    def _serialize_primary_company(self, primary):
+        if not primary:
+            return None
+        top_org_name = None
+        if primary.top_organization:
+            parent = Company.query.filter_by(shortcode=primary.top_organization).first()
+            if parent:
+                top_org_name = parent.company_name
+        return {
+            'id': primary.id,
+            'company_name': primary.company_name,
+            'short_code': primary.short_code,
+            'is_scraped': primary.last_scraped_at is not None,
+            'last_scraped_at': primary.last_scraped_at.isoformat() if primary.last_scraped_at else None,
+            'identity_status': primary.identity_status,
+            'top_organization': primary.top_organization,
+            'top_organization_name': top_org_name,
+            'parent_short_code': primary.parent_short_code,
+        }
+
     def serialize_user_agent(self, user_agent):
         """Serialize UserAgent object to JSON."""
         primary = user_agent.agent_company
@@ -56,16 +77,11 @@ class UserAgentService:
                 'is_scraped': company.last_scraped_at is not None,
                 'last_scraped_at': company.last_scraped_at.isoformat() if company.last_scraped_at else None,
                 'identity_status': company.identity_status,
+                'top_organization': company.top_organization,
+                'parent_short_code': company.parent_short_code,
                 'is_primary': company.id == user_agent.agent_company_id
             } for company in user_agent.agent_companies],
-            'primary_company': {
-                'id': primary.id,
-                'company_name': primary.company_name,
-                'short_code': primary.short_code,
-                'is_scraped': primary.last_scraped_at is not None,
-                'last_scraped_at': primary.last_scraped_at.isoformat() if primary.last_scraped_at else None,
-                'identity_status': primary.identity_status,
-            } if primary else None,
+            'primary_company': self._serialize_primary_company(primary),
         }
 
     def create_user_agent(self, data, files, user_id):

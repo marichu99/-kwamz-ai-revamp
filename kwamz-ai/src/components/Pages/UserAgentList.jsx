@@ -1,5 +1,5 @@
-import { useState, useEffect, useRef } from 'react';
-import { Search, Filter, MoreVertical, Binoculars, Edit, Plus, Download, Upload, RefreshCw, ChevronRight, Database, Building2 } from 'lucide-react';
+import { useState, useEffect, useRef, useMemo } from 'react';
+import { Search, Filter, MoreVertical, Binoculars, Edit, Plus, Download, Upload, RefreshCw, ChevronRight, ChevronDown, Database, Building2, Users, ChevronsUpDown } from 'lucide-react';
 import axios from 'axios';
 import * as XLSX from 'xlsx';
 import config from '../../Config';
@@ -26,6 +26,8 @@ function UserAgentList() {
   const [invalidUsers, setInvalidUsers] = useState([]);
   const [batchFile, setBatchFile] = useState(null);
   const [loadingDownload, setLoadingDownload] = useState(false);
+  const [expandedCompanies, setExpandedCompanies] = useState(() => new Set());
+  const [expandedTills, setExpandedTills] = useState(() => new Set());
   const { showToast } = useToast();
   const fileInputRef = useRef(null);
   const dropdownRef = useRef(null);
@@ -74,12 +76,15 @@ function UserAgentList() {
     let filtered = users;
 
     if (searchTerm) {
+      const term = searchTerm.toLowerCase();
       filtered = filtered.filter(
         (u) =>
-          u.firstname?.toLowerCase().includes(searchTerm.toLowerCase()) ||
-          u.lastname?.toLowerCase().includes(searchTerm.toLowerCase()) ||
-          u.idnumber?.toLowerCase().includes(searchTerm.toLowerCase()) ||
-          u.phone_number?.toLowerCase().includes(searchTerm.toLowerCase())
+          u.firstname?.toLowerCase().includes(term) ||
+          u.lastname?.toLowerCase().includes(term) ||
+          u.idnumber?.toLowerCase().includes(term) ||
+          u.phone_number?.toLowerCase().includes(term) ||
+          u.primary_company?.short_code?.toLowerCase().includes(term) ||
+          u.primary_company?.company_name?.toLowerCase().includes(term)
       );
     }
 
@@ -93,14 +98,11 @@ function UserAgentList() {
     setCurrentPage(1);
   }, [searchTerm, filter, users]);
 
-  // Pagination calculations
   const totalItems = filteredUsers.length;
-  const totalPages = Math.ceil(totalItems / pageSize);
+  const totalPages = Math.ceil(totalItems / pageSize) || 1;
   const startIndex = (currentPage - 1) * pageSize;
   const endIndex = startIndex + pageSize;
-  const paginatedUsers = filteredUsers.slice(startIndex, endIndex);
 
-  // Handle page change
   const handlePageChange = (page) => {
     if (page >= 1 && page <= totalPages) {
       setCurrentPage(page);
@@ -108,11 +110,82 @@ function UserAgentList() {
     }
   };
 
-  // Handle page size change
   const handlePageSizeChange = (e) => {
     setPageSize(Number(e.target.value));
     setCurrentPage(1);
     setSelectedUserIds([]);
+  };
+
+  // Build two-level grouped structure from the current page slice
+  const groupedData = useMemo(() => {
+    const pagedUsers = filteredUsers.slice(startIndex, endIndex);
+    const byCompany = {};
+    pagedUsers.forEach(user => {
+      const pc = user.primary_company;
+      const companyKey = pc?.top_organization ||
+        (pc?.company_name ? pc.company_name.split(' ').slice(0, 3).join(' ') : 'Unknown Company');
+      const tillKey = pc ? `${pc.company_name}||${pc.short_code || ''}` : '__no_till__';
+
+      if (!byCompany[companyKey]) {
+        byCompany[companyKey] = { tills: {}, userCount: 0, displayName: pc?.top_organization_name || null };
+      }
+      byCompany[companyKey].userCount++;
+
+      if (!byCompany[companyKey].tills[tillKey]) {
+        byCompany[companyKey].tills[tillKey] = {
+          till_key: tillKey,
+          till_name: pc?.company_name || 'No Till Assigned',
+          short_code: pc?.short_code || null,
+          is_scraped: pc?.is_scraped ?? false,
+          users: []
+        };
+      }
+      byCompany[companyKey].tills[tillKey].users.push(user);
+    });
+
+    return Object.entries(byCompany)
+      .map(([companyName, data]) => ({
+        company_key: companyName,
+        company_name: companyName,
+        display_name: data.displayName,
+        tills: Object.values(data.tills),
+        user_count: data.userCount
+      }))
+      .sort((a, b) => a.company_name.localeCompare(b.company_name));
+  }, [filteredUsers, startIndex, endIndex]);
+
+  // Auto-expand all groups whenever the page's data changes
+  useEffect(() => {
+    setExpandedCompanies(new Set(groupedData.map(g => g.company_key)));
+    setExpandedTills(new Set(groupedData.flatMap(g => g.tills.map(t => t.till_key))));
+  }, [groupedData]);
+
+  const toggleCompany = (key) => {
+    setExpandedCompanies(prev => {
+      const next = new Set(prev);
+      next.has(key) ? next.delete(key) : next.add(key);
+      return next;
+    });
+  };
+
+  const toggleTill = (key) => {
+    setExpandedTills(prev => {
+      const next = new Set(prev);
+      next.has(key) ? next.delete(key) : next.add(key);
+      return next;
+    });
+  };
+
+  const toggleExpandAll = () => {
+    const allCompanyKeys = groupedData.map(g => g.company_key);
+    const allTillKeys = groupedData.flatMap(g => g.tills.map(t => t.till_key));
+    if (expandedCompanies.size === groupedData.length) {
+      setExpandedCompanies(new Set());
+      setExpandedTills(new Set());
+    } else {
+      setExpandedCompanies(new Set(allCompanyKeys));
+      setExpandedTills(new Set(allTillKeys));
+    }
   };
 
   // Handle checkbox selection
@@ -126,10 +199,10 @@ function UserAgentList() {
 
   // Handle select all checkboxes
   const handleSelectAll = () => {
-    if (selectedUserIds.length === paginatedUsers.length) {
+    if (selectedUserIds.length === filteredUsers.length) {
       setSelectedUserIds([]);
     } else {
-      setSelectedUserIds(paginatedUsers.map((user) => user.id));
+      setSelectedUserIds(filteredUsers.map((user) => user.id));
     }
   };
 
@@ -359,8 +432,18 @@ function UserAgentList() {
 
   return (
     <div className="bg-white dark:bg-slate-800 rounded-xl shadow-lg p-3 sm:p-4 md:p-6">
+      <div className="sticky top-0 z-20 bg-white dark:bg-slate-800">
       {/* Action Buttons */}
-      <div className="flex flex-wrap justify-end mb-4 gap-2 sm:gap-4">
+      <div className="flex flex-wrap justify-between mb-4 gap-2 sm:gap-4">
+        <button
+          onClick={toggleExpandAll}
+          disabled={groupedData.length === 0}
+          className="flex items-center space-x-2 py-2 px-4 bg-slate-100 dark:bg-slate-700 text-slate-700 dark:text-slate-300 rounded-xl hover:bg-slate-200 dark:hover:bg-slate-600 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+        >
+          <ChevronsUpDown className="w-4 h-4" />
+          <span>{expandedCompanies.size === groupedData.length && groupedData.length > 0 ? 'Collapse All' : 'Expand All'}</span>
+        </button>
+        <div className="flex gap-2 sm:gap-4">
         <button
           onClick={fetchUsers}
           disabled={isLoading}
@@ -467,6 +550,7 @@ function UserAgentList() {
             </div>
           )}
         </div>
+        </div>
       </div>
 
       {/* Hidden file input */}
@@ -518,6 +602,7 @@ function UserAgentList() {
           </select>
         </div>
       </div>
+      </div>
 
       {loadingDownload && (
         <div className="fixed inset-0 bg-gradient-to-br from-black/60 via-black/50 to-black/40 backdrop-blur-sm flex items-center justify-center z-50 p-4">
@@ -544,163 +629,185 @@ function UserAgentList() {
         }
       `}</style>
 
-      {/* Users Grid */}
-      <div className="overflow-x-auto">
-        <table className="w-full table-auto">
-          <thead>
-            <tr className="bg-slate-100 dark:bg-slate-700 text-left text-slate-600 dark:text-slate-300">
-              <th className="px-4 py-3 font-semibold">
-                <input
-                  type="checkbox"
-                  checked={selectedUserIds.length === paginatedUsers.length && paginatedUsers.length > 0}
-                  onChange={handleSelectAll}
-                  className="w-4 h-4 text-blue-600 border-slate-300 rounded focus:ring-blue-500 dark:bg-slate-700 dark:border-slate-600"
-                />
-              </th>
-              <th className="px-4 py-3 font-semibold">ID</th>
-              <th className="px-4 py-3 font-semibold">First Name</th>
-              <th className="px-4 py-3 font-semibold">Last Name</th>
-              <th className="px-4 py-3 font-semibold">ID Number</th>
-              <th className="px-4 py-3 font-semibold">Phone Number</th>
-              <th className="px-4 py-3 font-semibold">Role</th>
-              <th className="px-4 py-3 font-semibold">Primary Company</th>
-              <th className="px-4 py-3 font-semibold">Companies</th>
-              <th className="px-4 py-3 font-semibold">Authentic</th>
-            </tr>
-          </thead>
-          <tbody>
-            {paginatedUsers.map((user, index) => (
-              <tr
-                key={user.id}
-                className={`border-b border-slate-200 dark:border-slate-600 ${index % 2 === 0 ? 'bg-white dark:bg-slate-800' : 'bg-slate-50 dark:bg-slate-700/50'} hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors`}
-              >
-                <td className="px-4 py-3">
-                  <input
-                    type="checkbox"
-                    checked={selectedUserIds.includes(user.id)}
-                    onChange={() => handleSelectUser(user.id)}
-                    className="w-4 h-4 text-blue-600 border-slate-300 rounded focus:ring-blue-500 dark:bg-slate-700 dark:border-slate-600"
-                  />
-                </td>
-                <td className="px-4 py-3">{user.id}</td>
-                <td className="px-4 py-3">{user.firstname}</td>
-                <td className="px-4 py-3">{user.lastname}</td>
-                <td className="px-4 py-3">{user.idnumber}</td>
-                <td className="px-4 py-3">{user.phone_number || 'N/A'}</td>
-                <td className="px-4 py-3">
-                  {user.operator_role ? (
-                    <span className={`inline-flex items-center px-2 py-1 rounded-full text-xs font-medium whitespace-nowrap
-                      ${user.operator_role === 'Agent Primary Till Operator'
-                        ? 'bg-purple-100 text-purple-700 dark:bg-purple-900/40 dark:text-purple-300'
-                        : 'bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300'}`}>
-                      {user.operator_role === 'Agent Primary Till Operator' ? 'Primary Operator' : 'Till Operator'}
-                    </span>
-                  ) : (
-                    <span className="text-xs text-slate-400">—</span>
-                  )}
-                </td>
-                <td className="px-4 py-3">
-                  {user.primary_company ? (
-                    <div className="flex flex-col">
-                      <span className="text-sm font-medium text-slate-800 dark:text-slate-200 flex items-center gap-1">
-                        <Building2 className="w-3.5 h-3.5 text-green-600" />
-                        {user.primary_company.company_name}
-                      </span>
-                      {user.primary_company.short_code && (
-                        <span className="text-xs text-slate-500 dark:text-slate-400">[{user.primary_company.short_code}]</span>
-                      )}
-                      <span className={`inline-flex items-center gap-1 text-xs mt-0.5 ${user.primary_company.is_scraped ? 'text-green-600 dark:text-green-400' : 'text-amber-500 dark:text-amber-400'}`}>
-                        <Database className="w-3 h-3" />
-                        {user.primary_company.is_scraped ? 'Scraped' : 'Not scraped'}
-                      </span>
-                    </div>
-                  ) : (
-                    <span className="text-xs text-slate-400">No primary company</span>
-                  )}
-                </td>
-                <td className="px-4 py-3">
-                  {user.agent_companies && user.agent_companies.length > 0 ? (
-                    <div className="flex flex-col gap-1">
-                      <span className="text-sm font-medium">{user.agent_companies.length} linked</span>
-                      <div className="flex flex-wrap gap-1">
-                        {user.agent_companies.slice(0, 2).map((c) => (
-                          <span key={c.id} className={`text-[10px] px-1.5 py-0.5 rounded ${c.is_scraped ? 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-300' : 'bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300'}`}>
-                            {c.company_name?.substring(0, 15)}{c.company_name?.length > 15 ? '...' : ''}
-                          </span>
-                        ))}
-                        {user.agent_companies.length > 2 && (
-                          <span className="text-[10px] px-1.5 py-0.5 rounded bg-slate-100 text-slate-600 dark:bg-slate-700 dark:text-slate-300">
-                            +{user.agent_companies.length - 2} more
-                          </span>
-                        )}
-                      </div>
-                    </div>
-                  ) : (
-                    <span className="text-xs text-slate-400">None</span>
-                  )}
-                </td>
-                <td className="px-4 py-3">
-                  <span
-                    className={`px-2 py-1 rounded-full text-xs ${user.is_authentic ? 'bg-green-100 text-green-600 dark:bg-green-900/50 dark:text-green-400' : 'bg-red-100 text-red-600 dark:bg-red-900/50 dark:text-red-400'}`}
-                  >
-                    {user.is_authentic ? 'Yes' : 'No'}
-                  </span>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+      {/* Grouped Users Grid */}
+      <div className="text-sm text-slate-500 dark:text-slate-400 mb-3 flex items-center gap-2">
+        <Users className="w-4 h-4" />
+        <span>{totalItems} agent{totalItems !== 1 ? 's' : ''} across {groupedData.length} compan{groupedData.length !== 1 ? 'ies' : 'y'}</span>
+        <label className="ml-auto flex items-center gap-2 cursor-pointer">
+          <input
+            type="checkbox"
+            checked={selectedUserIds.length === filteredUsers.length && filteredUsers.length > 0}
+            onChange={handleSelectAll}
+            className="w-4 h-4 text-blue-600 border-slate-300 rounded focus:ring-blue-500 dark:bg-slate-700 dark:border-slate-600"
+          />
+          <span className="text-xs">Select all</span>
+        </label>
       </div>
 
+      {groupedData.length === 0 ? (
+        <div className="text-center py-12">
+          <Users className="w-12 h-12 text-slate-300 dark:text-slate-600 mx-auto mb-3" />
+          <p className="text-slate-500 dark:text-slate-400">No agents found.</p>
+        </div>
+      ) : (
+        <div className="space-y-3">
+          {groupedData.map(company => (
+            <div key={company.company_key} className="rounded-xl border border-slate-200 dark:border-slate-700 overflow-hidden">
+              {/* Company header */}
+              <button
+                onClick={() => toggleCompany(company.company_key)}
+                className="w-full flex items-center justify-between px-4 py-3 bg-slate-700 dark:bg-slate-900 text-white hover:bg-slate-600 dark:hover:bg-slate-800 transition-colors"
+              >
+                <div className="flex items-center gap-3">
+                  {expandedCompanies.has(company.company_key)
+                    ? <ChevronDown className="w-4 h-4 text-slate-300" />
+                    : <ChevronRight className="w-4 h-4 text-slate-300" />}
+                  <Building2 className="w-4 h-4 text-blue-400" />
+                  <span className="font-semibold text-sm">{company.company_name}</span>
+                  {company.display_name && company.display_name !== company.company_name && (
+                    <span className="text-xs text-slate-300 font-normal">· {company.display_name}</span>
+                  )}
+                </div>
+                <div className="flex items-center gap-2 text-xs text-slate-300">
+                  <span>{company.tills.length} till{company.tills.length !== 1 ? 's' : ''}</span>
+                  <span className="bg-blue-500/30 text-blue-200 px-2 py-0.5 rounded-full">
+                    {company.user_count} agent{company.user_count !== 1 ? 's' : ''}
+                  </span>
+                </div>
+              </button>
+
+              {expandedCompanies.has(company.company_key) && (
+                <div className="divide-y divide-slate-100 dark:divide-slate-700">
+                  {company.tills.map(till => (
+                    <div key={till.till_key}>
+                      {/* Till header */}
+                      <button
+                        onClick={() => toggleTill(till.till_key)}
+                        className="w-full flex items-center justify-between px-6 py-2.5 bg-slate-100 dark:bg-slate-700/60 hover:bg-slate-200 dark:hover:bg-slate-700 transition-colors"
+                      >
+                        <div className="flex items-center gap-2">
+                          {expandedTills.has(till.till_key)
+                            ? <ChevronDown className="w-3.5 h-3.5 text-slate-500" />
+                            : <ChevronRight className="w-3.5 h-3.5 text-slate-500" />}
+                          <Database className={`w-3.5 h-3.5 ${till.is_scraped ? 'text-green-500' : 'text-amber-500'}`} />
+                          <span className="text-sm font-medium text-slate-700 dark:text-slate-200">{till.till_name}</span>
+                          {till.short_code && (
+                            <span className="text-xs text-slate-400 dark:text-slate-500">[{till.short_code}]</span>
+                          )}
+                          <span className={`text-xs ${till.is_scraped ? 'text-green-600 dark:text-green-400' : 'text-amber-500 dark:text-amber-400'}`}>
+                            {till.is_scraped ? '· Scraped' : '· Not scraped'}
+                          </span>
+                        </div>
+                        <span className="text-xs text-slate-500 dark:text-slate-400 bg-slate-200 dark:bg-slate-600 px-2 py-0.5 rounded-full">
+                          {till.users.length} agent{till.users.length !== 1 ? 's' : ''}
+                        </span>
+                      </button>
+
+                      {expandedTills.has(till.till_key) && (
+                        <div className="overflow-x-auto">
+                          <table className="w-full table-auto">
+                            <thead>
+                              <tr className="bg-slate-50 dark:bg-slate-800 text-left text-slate-500 dark:text-slate-400 text-xs border-b border-slate-200 dark:border-slate-700">
+                                <th className="px-4 py-2 font-medium">
+                                  <input
+                                    type="checkbox"
+                                    checked={till.users.every(u => selectedUserIds.includes(u.id))}
+                                    onChange={() => {
+                                      const ids = till.users.map(u => u.id);
+                                      const allSelected = ids.every(id => selectedUserIds.includes(id));
+                                      setSelectedUserIds(prev =>
+                                        allSelected
+                                          ? prev.filter(id => !ids.includes(id))
+                                          : [...new Set([...prev, ...ids])]
+                                      );
+                                    }}
+                                    className="w-3.5 h-3.5 text-blue-600 border-slate-300 rounded focus:ring-blue-500 dark:bg-slate-700 dark:border-slate-600"
+                                  />
+                                </th>
+                                <th className="px-4 py-2 font-medium">ID</th>
+                                <th className="px-4 py-2 font-medium">First Name</th>
+                                <th className="px-4 py-2 font-medium">Last Name</th>
+                                <th className="px-4 py-2 font-medium">ID Number</th>
+                                <th className="px-4 py-2 font-medium">Phone Number</th>
+                                <th className="px-4 py-2 font-medium">Role</th>
+                                <th className="px-4 py-2 font-medium">Authentic</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {till.users.map((user, idx) => (
+                                <tr
+                                  key={user.id}
+                                  className={`border-b border-slate-100 dark:border-slate-700/50 ${idx % 2 === 0 ? 'bg-white dark:bg-slate-800' : 'bg-slate-50/50 dark:bg-slate-800/50'} hover:bg-blue-50 dark:hover:bg-slate-700 transition-colors`}
+                                >
+                                  <td className="px-4 py-2.5">
+                                    <input
+                                      type="checkbox"
+                                      checked={selectedUserIds.includes(user.id)}
+                                      onChange={() => handleSelectUser(user.id)}
+                                      className="w-3.5 h-3.5 text-blue-600 border-slate-300 rounded focus:ring-blue-500 dark:bg-slate-700 dark:border-slate-600"
+                                    />
+                                  </td>
+                                  <td className="px-4 py-2.5 text-sm text-slate-600 dark:text-slate-400">{user.id}</td>
+                                  <td className="px-4 py-2.5 text-sm font-medium text-slate-800 dark:text-slate-200">{user.firstname}</td>
+                                  <td className="px-4 py-2.5 text-sm text-slate-800 dark:text-slate-200">{user.lastname}</td>
+                                  <td className="px-4 py-2.5 text-sm text-slate-600 dark:text-slate-400">{user.idnumber}</td>
+                                  <td className="px-4 py-2.5 text-sm text-slate-600 dark:text-slate-400">{user.phone_number || 'N/A'}</td>
+                                  <td className="px-4 py-2.5">
+                                    {user.operator_role ? (
+                                      <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium whitespace-nowrap
+                                        ${user.operator_role === 'Agent Primary Till Operator'
+                                          ? 'bg-purple-100 text-purple-700 dark:bg-purple-900/40 dark:text-purple-300'
+                                          : 'bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300'}`}>
+                                        {user.operator_role === 'Agent Primary Till Operator' ? 'Primary Operator' : 'Till Operator'}
+                                      </span>
+                                    ) : (
+                                      <span className="text-xs text-slate-400">—</span>
+                                    )}
+                                  </td>
+                                  <td className="px-4 py-2.5">
+                                    <span className={`px-2 py-0.5 rounded-full text-xs ${user.is_authentic ? 'bg-green-100 text-green-600 dark:bg-green-900/50 dark:text-green-400' : 'bg-red-100 text-red-600 dark:bg-red-900/50 dark:text-red-400'}`}>
+                                      {user.is_authentic ? 'Yes' : 'No'}
+                                    </span>
+                                  </td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+
       {/* Pagination Controls */}
-      <div className="flex flex-col sm:flex-row justify-between items-center mt-4 space-y-4 sm:space-y-0">
-        <div className="flex items-center space-x-2">
-          <span className="text-sm text-slate-600 dark:text-slate-300">
-            Showing {startIndex + 1} - {Math.min(endIndex, totalItems)} of {totalItems} users
-          </span>
+      <div className="flex flex-col sm:flex-row justify-between items-center mt-4 gap-3">
+        <div className="flex items-center gap-2 text-sm text-slate-600 dark:text-slate-300">
+          <span>Showing {Math.min(startIndex + 1, totalItems)}–{Math.min(endIndex, totalItems)} of {totalItems} agents</span>
           <select
             value={pageSize}
             onChange={handlePageSizeChange}
             className="py-1 px-2 bg-slate-100 dark:bg-slate-700 border border-slate-200 dark:border-slate-600 rounded-xl text-slate-800 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
           >
-            <option value="5">5 per page</option>
             <option value="10">10 per page</option>
             <option value="20">20 per page</option>
             <option value="50">50 per page</option>
+            <option value="100">100 per page</option>
           </select>
+          {selectedUserIds.length > 0 && (
+            <span className="text-blue-600 dark:text-blue-400 font-medium">{selectedUserIds.length} selected</span>
+          )}
         </div>
-        <div className="flex items-center space-x-2">
-          <button
-            onClick={() => handlePageChange(1)}
-            disabled={currentPage === 1}
-            className="py-1 px-3 bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300 rounded-xl hover:bg-slate-200 dark:hover:bg-slate-600 disabled:opacity-50 disabled:cursor-not-allowed"
-          >
-            First
-          </button>
-          <button
-            onClick={() => handlePageChange(currentPage - 1)}
-            disabled={currentPage === 1}
-            className="py-1 px-3 bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300 rounded-xl hover:bg-slate-200 dark:hover:bg-slate-600 disabled:opacity-50 disabled:cursor-not-allowed"
-          >
-            Previous
-          </button>
-          <span className="text-sm text-slate-600 dark:text-slate-300">
-            Page {currentPage} of {totalPages}
-          </span>
-          <button
-            onClick={() => handlePageChange(currentPage + 1)}
-            disabled={currentPage === totalPages}
-            className="py-1 px-3 bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300 rounded-xl hover:bg-slate-200 dark:hover:bg-slate-600 disabled:opacity-50 disabled:cursor-not-allowed"
-          >
-            Next
-          </button>
-          <button
-            onClick={() => handlePageChange(totalPages)}
-            disabled={currentPage === totalPages}
-            className="py-1 px-3 bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300 rounded-xl hover:bg-slate-200 dark:hover:bg-slate-600 disabled:opacity-50 disabled:cursor-not-allowed"
-          >
-            Last
-          </button>
+        <div className="flex items-center gap-1">
+          <button onClick={() => handlePageChange(1)} disabled={currentPage === 1} className="py-1 px-3 bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300 rounded-xl hover:bg-slate-200 dark:hover:bg-slate-600 disabled:opacity-50 disabled:cursor-not-allowed text-sm">First</button>
+          <button onClick={() => handlePageChange(currentPage - 1)} disabled={currentPage === 1} className="py-1 px-3 bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300 rounded-xl hover:bg-slate-200 dark:hover:bg-slate-600 disabled:opacity-50 disabled:cursor-not-allowed text-sm">Previous</button>
+          <span className="text-sm text-slate-600 dark:text-slate-300 px-2">Page {currentPage} of {totalPages}</span>
+          <button onClick={() => handlePageChange(currentPage + 1)} disabled={currentPage === totalPages} className="py-1 px-3 bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300 rounded-xl hover:bg-slate-200 dark:hover:bg-slate-600 disabled:opacity-50 disabled:cursor-not-allowed text-sm">Next</button>
+          <button onClick={() => handlePageChange(totalPages)} disabled={currentPage === totalPages} className="py-1 px-3 bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300 rounded-xl hover:bg-slate-200 dark:hover:bg-slate-600 disabled:opacity-50 disabled:cursor-not-allowed text-sm">Last</button>
         </div>
       </div>
 
