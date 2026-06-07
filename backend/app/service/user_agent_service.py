@@ -1,6 +1,7 @@
 from app import db
-from app.model.useragent import UserAgent
+from app.model.useragent import UserAgent, user_agent_companies
 from app.model.agentcompany import AgentCompany
+from sqlalchemy import exists, or_
 from app.model.company import Company
 from app.utils.gcs_storage import upload_agent_image, delete_agent_image
 from datetime import datetime
@@ -198,11 +199,32 @@ class UserAgentService:
             return [], 'Internal server error'
         
         
-    def get_all_users_by_userid(self,user_id):
-        """Retrieve all UserAgents."""
+    def get_all_users_by_userid(self, user_id):
+        """
+        Retrieve active UserAgents for this user.
+
+        Scraped agents (idnumber starts with 'MPESA-') are only shown when
+        they still have an active M2M entry in user_agent_companies — meaning
+        they haven't been swapped out. Manually-created agents (real ID numbers)
+        are always shown.
+        """
         try:
             print(f"The user id is {user_id}")
-            users = UserAgent.query.filter_by(user_id=user_id).all()
+            is_scraped   = UserAgent.idnumber.like('MPESA-%')
+            still_linked = exists().where(
+                user_agent_companies.c.user_agent_id == UserAgent.id
+            )
+            users = (
+                UserAgent.query
+                .filter_by(user_id=user_id)
+                .filter(
+                    or_(
+                        ~is_scraped,   # manual agent — always include
+                        still_linked,  # scraped agent — only if still on a till
+                    )
+                )
+                .all()
+            )
             return [self.serialize_user_agent(user) for user in users], None
         except Exception as e:
             print(f"Error fetching users: {str(e)}")

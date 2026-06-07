@@ -64,8 +64,10 @@ function TransactionsGrid() {
     const [tillPage, setTillPage] = useState(1);
     const [tillPageSize, setTillPageSize] = useState(10);
     const [tillPagination, setTillPagination] = useState({ total: 0, pages: 1, has_next: false, has_prev: false });
+    const [tillUpdatedAfter, setTillUpdatedAfter] = useState('');
+    const [tillSortDir, setTillSortDir] = useState('desc');
 
-    // Transaction type toggle: 'float' or 'commission'
+    // Transaction type toggle: 'float' | 'commission'
     const [transactionType, setTransactionType] = useState('float');
 
     const { showToast } = useToast();
@@ -76,6 +78,15 @@ function TransactionsGrid() {
     const pagination = transactionsResponse.pagination || {};
     const summary = transactionsResponse.summary || {};
     const filters_applied = transactionsResponse.filters_applied || {};
+
+    const sortedTillBalances = useMemo(() => {
+        if (!tillBalances.length) return tillBalances;
+        return [...tillBalances].sort((a, b) => {
+            const ta = a.last_updated ? new Date(a.last_updated).getTime() : 0;
+            const tb = b.last_updated ? new Date(b.last_updated).getTime() : 0;
+            return tillSortDir === 'asc' ? ta - tb : tb - ta;
+        });
+    }, [tillBalances, tillSortDir]);
 
     // Group transactions by company and business
     const groupedData = useMemo(() => {
@@ -210,7 +221,7 @@ function TransactionsGrid() {
                     filters_applied: response.data.filters_applied || {}
                 });
                 setSelectedTransactionIds([]);
-                showToast(`${transactionType === 'float' ? 'Float' : 'Commission'} transactions loaded`, 'success');
+                showToast(`${getTransactionTypeLabel()} loaded`, 'success');
             } else {
                 // Handle unsuccessful response
                 setTransactionsResponse({
@@ -240,9 +251,11 @@ function TransactionsGrid() {
         setIsTillBalancesLoading(true);
         try {
             const token = localStorage.getItem('token');
+            const params = { page, per_page: perPage };
+            if (tillUpdatedAfter) params.updated_after = tillUpdatedAfter;
             const response = await axios.get(`${config.API_URL}/transactions/commission-till-balances`, {
                 headers: { Authorization: `Bearer ${token}` },
-                params: { page, per_page: perPage }
+                params
             });
             if (response.data.success) {
                 setTillBalances(response.data.data || []);
@@ -292,7 +305,7 @@ function TransactionsGrid() {
             fetchTransactions();
             fetchStats();
         }
-    }, [currentPage, pageSize, filters, transactionType, tillPage, tillPageSize]);
+    }, [currentPage, pageSize, filters, transactionType, tillPage, tillPageSize, tillUpdatedAfter]);
 
     useEffect(() => {
         if (searchTerm !== '') {
@@ -436,7 +449,7 @@ function TransactionsGrid() {
             link.click();
             link.remove();
 
-            showToast(`${transactionType === 'float' ? 'Float' : 'Commission'} transactions exported successfully`, 'success');
+            showToast(`${getTransactionTypeLabel()} exported successfully`, 'success');
         } catch (error) {
             console.error('Error exporting transactions:', error.response?.data || error.message);
             showToast('Failed to export transactions', 'error');
@@ -474,12 +487,7 @@ function TransactionsGrid() {
         setTransactionType(newType);
         setCurrentPage(1);
         setSelectedTransactionIds([]);
-        setFilters({
-            startDate: '',
-            endDate: '',
-            reasonType: '',
-            transactionStatus: ''
-        });
+        setFilters({ startDate: '', endDate: '', reasonType: '', transactionStatus: '' });
         setSearchTerm('');
         setExpandedCompanies(new Set());
         setExpandedBusinesses(new Set());
@@ -838,6 +846,25 @@ function TransactionsGrid() {
 
             {/* Commission Till Balances (one row per till, latest balance) */}
             {transactionType === 'commission' && (
+                <div>
+                <div className="flex items-center gap-3 mb-4">
+                    <Calendar className="w-4 h-4 text-amber-500 shrink-0" />
+                    <label className="text-sm font-medium text-slate-600 dark:text-slate-300 shrink-0">Updated after</label>
+                    <input
+                        type="date"
+                        value={tillUpdatedAfter}
+                        onChange={e => { setTillUpdatedAfter(e.target.value); setTillPage(1); }}
+                        className="py-1.5 px-3 bg-slate-100 dark:bg-slate-700 border border-slate-200 dark:border-slate-600 rounded-lg text-sm text-slate-800 dark:text-white focus:outline-none focus:ring-2 focus:ring-amber-500"
+                    />
+                    {tillUpdatedAfter && (
+                        <button
+                            onClick={() => { setTillUpdatedAfter(''); setTillPage(1); }}
+                            className="text-xs text-slate-500 dark:text-slate-400 hover:text-red-500 transition-colors"
+                        >
+                            Clear
+                        </button>
+                    )}
+                </div>
                 <div className="overflow-x-auto">
                     <table className="w-full text-sm">
                         <thead>
@@ -846,7 +873,18 @@ function TransactionsGrid() {
                                 <th className="px-4 py-3 font-semibold">Shortcode</th>
                                 <th className="px-4 py-3 font-semibold">Current Balance</th>
                                 <th className="px-4 py-3 font-semibold">Available Balance</th>
-                                <th className="px-4 py-3 font-semibold rounded-r-xl">Last Updated</th>
+                                <th className="px-4 py-3 font-semibold rounded-r-xl">
+                                    <button
+                                        onClick={() => setTillSortDir(d => d === 'asc' ? 'desc' : 'asc')}
+                                        className="flex items-center gap-1 hover:text-amber-600 dark:hover:text-amber-400 transition-colors"
+                                    >
+                                        Last Updated
+                                        <span className="flex flex-col leading-none">
+                                            <span className={`text-[10px] ${tillSortDir === 'asc' ? 'text-amber-500' : 'text-slate-400'}`}>▲</span>
+                                            <span className={`text-[10px] ${tillSortDir === 'desc' ? 'text-amber-500' : 'text-slate-400'}`}>▼</span>
+                                        </span>
+                                    </button>
+                                </th>
                             </tr>
                         </thead>
                         <tbody>
@@ -864,7 +902,7 @@ function TransactionsGrid() {
                                     </td>
                                 </tr>
                             ) : (
-                                tillBalances.map((till, index) => (
+                                sortedTillBalances.map((till, index) => (
                                     <tr
                                         key={till.id}
                                         className={`border-b border-slate-200 dark:border-slate-600 ${
@@ -891,6 +929,7 @@ function TransactionsGrid() {
                             )}
                         </tbody>
                     </table>
+                </div>
                 </div>
             )}
 
@@ -1158,7 +1197,7 @@ function TransactionsGrid() {
                 )}
             </div>}
 
-            {/* Commission till pagination */}
+            {/* Commission till pagination — only shown on commission tab */}
             {transactionType === 'commission' && (
                 <div className="flex flex-col sm:flex-row justify-between items-center mt-4 space-y-4 sm:space-y-0">
                     <div className="flex items-center space-x-2">

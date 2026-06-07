@@ -248,6 +248,206 @@ class SwapService:
         except Exception as e:
             return None, str(e)
 
+    def get_swaps_grouped_by_agent(self, user_id, filters=None):
+        try:
+            filters = filters or {}
+            user_companies = AgentCompany.query.filter_by(user_id=user_id).all()
+            company_ids = [c.id for c in user_companies]
+            if not company_ids:
+                return [], None
+
+            query = AgentSwap.query.filter(AgentSwap.agent_company_id.in_(company_ids))
+            if filters.get('agent_company_id'):
+                query = query.filter_by(agent_company_id=int(filters['agent_company_id']))
+            if filters.get('start_date'):
+                query = query.filter(AgentSwap.swap_date >= datetime.fromisoformat(filters['start_date']))
+            if filters.get('end_date'):
+                query = query.filter(AgentSwap.swap_date <= datetime.fromisoformat(filters['end_date']))
+
+            swaps = query.order_by(AgentSwap.swap_date.desc()).all()
+
+            # Build an agent-centric map keyed by a stable agent identifier
+            agents: dict = {}
+
+            def _agent_name(a):
+                """Resolve name from agent JSON dict, trying all known field shapes."""
+                if a.get("name"):
+                    return a["name"]
+                parts = [a.get("firstname", ""), a.get("middlename", ""), a.get("lastname", "")]
+                joined = " ".join(p for p in parts if p).strip()
+                return joined or a.get("idnumber") or a.get("identity_id") or "Unknown"
+
+            for swap in swaps:
+                ac = swap.agent_company
+                till_name    = (ac.company_name or ac.organization_name) if ac else None
+                company_name = ac.company.company_name if ac and ac.company else None
+                is_scraper   = "Auto-detected" in (swap.notes or "")
+
+                float_val      = "—" if is_scraper else str(swap.float_balance_at_swap or "0.00")
+                commission_val = "—" if is_scraper else str(swap.commission_balance_at_swap or "0.00")
+
+                prev_names    = [_agent_name(a) for a in (swap.previous_agents or [])]
+                current_names = [_agent_name(a) for a in (swap.new_agents or [])]
+
+                swap_row_base = {
+                    "swap_id":            swap.id,
+                    "swap_date":          _to_eat(swap.swap_date),
+                    "till_name":          till_name,
+                    "company_name":       company_name,
+                    "float_at_swap":      float_val,
+                    "commission_at_swap": commission_val,
+                    "notes":              swap.notes,
+                    "initiated_by":       swap.initiator.username if swap.initiator else None,
+                    "previous_names":     prev_names,
+                    "current_names":      current_names,
+                }
+
+                for agent_data, agent_status in [
+                    (swap.previous_agents or [], "previous"),
+                    (swap.new_agents      or [], "current"),
+                ]:
+                    for a in agent_data:
+                        name = _agent_name(a)
+                        key  = a.get("id") or a.get("identity_id") or name
+                        if key not in agents:
+                            agents[key] = {
+                                "agent_id":     a.get("id"),
+                                "agent_name":   name,
+                                "idnumber":     a.get("idnumber"),
+                                "phone_number": a.get("phone_number"),
+                                "total_swaps":  0,
+                                "swaps":        [],
+                            }
+                        elif not agents[key]["agent_name"] or agents[key]["agent_name"] == "Unknown":
+                            agents[key]["agent_name"] = name
+                        agents[key]["total_swaps"] += 1
+                        agents[key]["swaps"].append({
+                            **swap_row_base,
+                            "agent_status": agent_status,
+                        })
+
+            return list(agents.values()), None
+
+        except Exception as e:
+            return None, str(e)
+
+    def get_swaps_by_company_and_till(self, user_id, filters=None):
+        """
+        Three-level structure: Company → AgentCompany (till) → agents.
+        Within each till:
+          - current_agents : new_agents of the most-recent swap
+          - previous_rows  : one entry per previous agent across all swaps
+        """
+        try:
+            filters = filters or {}
+            user_companies = AgentCompany.query.filter_by(user_id=user_id).all()
+            company_ids = [c.id for c in user_companies]
+            if not company_ids:
+                return [], None
+
+            query = AgentSwap.query.filter(AgentSwap.agent_company_id.in_(company_ids))
+            if filters.get('agent_company_id'):
+                query = query.filter_by(agent_company_id=int(filters['agent_company_id']))
+            if filters.get('start_date'):
+                query = query.filter(AgentSwap.swap_date >= datetime.fromisoformat(filters['start_date']))
+            if filters.get('end_date'):
+                query = query.filter(AgentSwap.swap_date <= datetime.fromisoformat(filters['end_date']))
+
+            swaps = query.order_by(AgentSwap.swap_date.desc()).all()
+
+            def _prev_name(p):
+                return (
+                    p.get("name")
+                    or " ".join(x for x in [p.get("firstname"), p.get("middlename"), p.get("lastname")] if x)
+                    or p.get("idnumber") or "Unknown"
+                )
+
+            companies: dict = {}   # keyed by (company_id or ac_id)
+
+            for swap in swaps:
+                ac = swap.agent_company
+                if not ac:          # orphaned swap — skip safely
+                    continue
+
+                parent    = ac.company   # may be None
+                ac_id     = ac.id
+
+                # ── Company-level grouping key & label ──────────────────────
+                if parent:
+                    cid          = f"co-{parent.id}"
+                    company_name = parent.company_name or ac.company_name or ac.organization_name or "Unknown"
+                else:
+                    # No parent Company — group each till as its own company entry
+                    cid          = f"ac-{ac_id}"
+                    company_name = ac.company_name or ac.organization_name or f"Till {ac_id}"
+
+                if cid not in companies:
+                    companies[cid] = {
+                        "company_id":   cid,
+                        "company_name": company_name,
+                        "tills":        {},
+                    }
+
+                # ── Till-level entry ────────────────────────────────────────
+                if ac_id not in companies[cid]["tills"]:
+                    till_label  = ac.company_name or ac.organization_name or f"Till {ac_id}"
+                    short_code  = ac.short_code or ac.business_short_code or ""
+
+                    # Current agents = those still linked via M2M (source of truth)
+                    live_agents = [
+                        {
+                            "name":         f"{ua.firstname} {ua.lastname}".strip(),
+                            "phone_number": ua.phone_number,
+                            "idnumber":     ua.idnumber,
+                            "role":         ua.operator_role,
+                        }
+                        for ua in ac.user_agents
+                    ]
+
+                    companies[cid]["tills"][ac_id] = {
+                        "agent_company_id": ac_id,
+                        "till_name":        till_label,
+                        "short_code":       short_code,
+                        "current_agents":   live_agents,
+                        "previous_rows":    [],
+                        "total_swaps":      0,
+                    }
+
+                till       = companies[cid]["tills"][ac_id]
+                is_scraper = "Auto-detected" in (swap.notes or "")
+                fv         = "—" if is_scraper else str(swap.float_balance_at_swap or "0.00")
+                cv         = "—" if is_scraper else str(swap.commission_balance_at_swap or "0.00")
+
+                for prev in (swap.previous_agents or []):
+                    till["previous_rows"].append({
+                        "swap_id":            swap.id,
+                        "swap_date":          _to_eat(swap.swap_date),
+                        "agent_name":         _prev_name(prev),
+                        "agent_idnumber":     prev.get("idnumber"),
+                        "agent_phone":        prev.get("phone_number"),
+                        "current_agents":     swap.new_agents or [],
+                        "float_at_swap":      fv,
+                        "commission_at_swap": cv,
+                        "notes":              swap.notes,
+                        "initiated_by":       swap.initiator.username if swap.initiator else None,
+                    })
+                    till["total_swaps"] += 1
+
+            result = []
+            for cd in companies.values():
+                tills = list(cd["tills"].values())
+                result.append({
+                    "company_id":   cd["company_id"],
+                    "company_name": cd["company_name"],
+                    "total_swaps":  sum(t["total_swaps"] for t in tills),
+                    "tills":        tills,
+                })
+
+            return result, None
+
+        except Exception as e:
+            return None, str(e)
+
     def generate_swap_report(self, user_id, filters=None):
         try:
             filters = filters or {}

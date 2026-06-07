@@ -48,6 +48,29 @@ RBF_MIN_TRANSACTIONS = 3         # minimum transactions in that window
 # High-frequency daily activity
 HF_MIN_TRANSACTIONS = 5          # minimum transactions in a single day to flag
 
+# Same-phone rapid same-direction (structuring)
+STRUCT_WINDOW_MINUTES = 180      # 3-hour window
+STRUCT_MIN_TRANSACTIONS = 3      # minimum same-direction transactions
+STRUCT_MIN_TOTAL = 5000.0        # minimum combined amount (KES)
+
+# Float cycling (till-level pass-through)
+FLOAT_TOP_UP_REASONS = {
+    'Organization Transfer from MMF Account to Float Account via STK',
+    'Organization Transfer from MMF Account to Float Account via API',
+    'Organization Transfer from MMF Account to Float Account via web',
+    'Merchant Withdraw at Agent Till',
+    'Merchant Withdraw at Agent Till with OD',
+}
+FLOAT_DRAIN_REASONS = {
+    'Business Deposit of Funds via API',
+    'Organization Transfer from Float Account to MMF Account via STK',
+    'Agency Redistribution of Float Funds via web',
+    'Business Withdrawal of Funds',
+}
+CYCLING_MIN_TOP_UP = 50000.0     # minimum single top-up to consider (KES)
+CYCLING_DRAIN_PCT  = 0.50        # drain events must total >= 50 % of the top-up
+CYCLING_WINDOW_MINUTES = 120     # top-up → drain must all land within this window
+
 
 class FraudReportService:
     def __init__(self):
@@ -101,10 +124,18 @@ class FraudReportService:
         logger.info(f"[FraudReport] deposit_withdrawal_recovery findings: {len(dwr_results)}")
 
         # High-frequency: same party, 5+ transactions in a single day
-        hf_results = self._detect_high_frequency_daily(txn_dicts)
+        hf_results = self._detect_high_frequency_daily(txn_dicts, detector)
         logger.info(f"[FraudReport] high_frequency_daily findings: {len(hf_results)}")
 
-        all_results = split_results + rollover_results + rapid_results + dwr_results + hf_results
+        # Structuring: same phone, same direction (all deposits or all withdrawals), rapid bursts
+        struct_results = self._detect_same_phone_rapid_same_direction(txn_dicts, detector)
+        logger.info(f"[FraudReport] structuring findings: {len(struct_results)}")
+
+        # Float cycling: till-level pass-through (large top-up immediately drained)
+        cycling_results = self._detect_float_cycling(txn_dicts, detector)
+        logger.info(f"[FraudReport] float_cycling findings: {len(cycling_results)}")
+
+        all_results = split_results + rollover_results + rapid_results + dwr_results + hf_results + struct_results + cycling_results
         logger.info(f"[FraudReport] Total findings: {len(all_results)}")
 
         # Assign risk levels
@@ -129,6 +160,8 @@ class FraudReportService:
                 'rapid_back_forth': len(rapid_results),
                 'deposit_withdrawal_recovery': len(dwr_results),
                 'high_frequency_daily': len(hf_results),
+                'structuring': len(struct_results),
+                'float_cycling': len(cycling_results),
                 'high_risk': sum(1 for r in all_results if r.get('risk_level') == 'HIGH'),
                 'medium_risk': sum(1 for r in all_results if r.get('risk_level') == 'MEDIUM'),
                 'low_risk': sum(1 for r in all_results if r.get('risk_level') == 'LOW'),
@@ -161,7 +194,7 @@ class FraudReportService:
             groups[key].append(txn)
 
         results = []
-        seen = set()
+        used_receipts = set()
 
         for (phone, shortcode), txns in groups.items():
             sorted_txns = sorted(txns, key=lambda x: x['completion_time'])
@@ -184,7 +217,6 @@ class FraudReportService:
                     if elapsed > SPLIT_WINDOW_MINUTES:
                         break
                     txn_is_deposit = txn.get('paid_in', 0) > 0
-                    # Opposite type: if anchor is deposit, look for withdrawals, and vice versa
                     if anchor_is_deposit and not txn_is_deposit:
                         subsequent.append(txn)
                     elif not anchor_is_deposit and txn_is_deposit:
@@ -193,10 +225,10 @@ class FraudReportService:
                 if len(subsequent) < SPLIT_MIN_SUBSEQUENT:
                     continue
 
-                receipt_key = frozenset([anchor['receipt_no']] + [t['receipt_no'] for t in subsequent])
-                if receipt_key in seen:
+                candidate_receipts = {anchor['receipt_no']} | {t['receipt_no'] for t in subsequent}
+                if candidate_receipts & used_receipts:
                     continue
-                seen.add(receipt_key)
+                used_receipts |= candidate_receipts
 
                 total_subsequent = sum(
                     t.get('paid_in', 0) if not anchor_is_deposit else abs(t.get('withdrawn', 0))
@@ -258,7 +290,7 @@ class FraudReportService:
                     'subsequent_total': total_subsequent,
                     'subsequent_count': len(subsequent),
                     'time_window_minutes': round(elapsed_total, 1),
-                    'receipt_nos': list(receipt_key),
+                    'receipt_nos': list(candidate_receipts),
                     'transaction_details': txn_details,
                     'explanation': explanation,
                     'detection_time': datetime.now(),
@@ -298,7 +330,7 @@ class FraudReportService:
         logger.info(f"[DWR] {len(groups)} (phone, shortcode) groups")
 
         results = []
-        seen = set()  # avoid double-counting the same deposit
+        used_receipts = set()
 
         for (phone, shortcode), txns in groups.items():
             sorted_txns = sorted(txns, key=lambda x: x['completion_time'])
@@ -310,7 +342,7 @@ class FraudReportService:
                 logger.debug(f"[DWR] ({phone}, {shortcode}): {len(deposits)} deposits >= {DWR_MIN_DEPOSIT}, {len(withdrawals)} withdrawals >= 1000")
 
             for dep in deposits:
-                if dep['receipt_no'] in seen:
+                if dep['receipt_no'] in used_receipts:
                     continue
 
                 dep_amount = dep['paid_in']
@@ -319,7 +351,8 @@ class FraudReportService:
                 # Find withdrawals after this deposit within DWR_WINDOW_HOURS
                 matching_withdrawals = [
                     w for w in withdrawals
-                    if w['completion_time'] > dep_time
+                    if w['receipt_no'] not in used_receipts
+                    and w['completion_time'] > dep_time
                     and (w['completion_time'] - dep_time).total_seconds() / 3600 <= DWR_WINDOW_HOURS
                 ]
 
@@ -334,7 +367,8 @@ class FraudReportService:
                     logger.debug(f"[DWR] ({phone}) deposit {dep['receipt_no']} KES {dep_amount} → recovery {recovery_pct*100:.1f}% < {DWR_RECOVERY_PCT*100}% threshold — skipped")
                     continue
 
-                seen.add(dep['receipt_no'])
+                candidate_receipts = {dep['receipt_no']} | {w['receipt_no'] for w in matching_withdrawals}
+                used_receipts |= candidate_receipts
 
                 time_to_first = (matching_withdrawals[0]['completion_time'] - dep_time).total_seconds() / 60
                 overdraw = recovery_pct > 1.0
@@ -434,7 +468,7 @@ class FraudReportService:
         logger.info(f"[RBF] {len(eligible_groups)}/{len(groups)} groups have >= {RBF_MIN_TRANSACTIONS} txns")
 
         results = []
-        seen = set()
+        used_receipts = set()
 
         for (phone, shortcode), txns in groups.items():
             if len(txns) < RBF_MIN_TRANSACTIONS:
@@ -461,10 +495,10 @@ class FraudReportService:
                     logger.debug(f"[RBF] ({phone}) window of {len(window)} txns skipped — missing {'deposit' if not has_deposit else 'withdrawal'}")
                     continue
 
-                receipt_key = frozenset(t['receipt_no'] for t in window)
-                if receipt_key in seen:
+                candidate_receipts = {t['receipt_no'] for t in window}
+                if candidate_receipts & used_receipts:
                     continue
-                seen.add(receipt_key)
+                used_receipts |= candidate_receipts
 
                 elapsed_total = (window[-1]['completion_time'] - window[0]['completion_time']).total_seconds() / 60
                 total_amount = sum(
@@ -509,7 +543,7 @@ class FraudReportService:
                     'total_amount': total_amount,
                     'net_flow': net_flow,
                     'time_window': elapsed_total,
-                    'receipt_nos': list(receipt_key),
+                    'receipt_nos': list(candidate_receipts),
                     'transaction_details': txn_details,
                     'explanation': explanation,
                     'detection_time': datetime.now(),
@@ -523,7 +557,7 @@ class FraudReportService:
     # ------------------------------------------------------------------
     # High-Frequency Daily Activity
     # ------------------------------------------------------------------
-    def _detect_high_frequency_daily(self, txn_dicts):
+    def _detect_high_frequency_daily(self, txn_dicts, detector=None):
         """
         Flag any party (phone) that has HF_MIN_TRANSACTIONS or more transactions
         on the same calendar day at the same shortcode.
@@ -544,16 +578,16 @@ class FraudReportService:
         logger.info(f"[HF] {len(groups)} (phone, shortcode, day) groups — {len(eligible)} have >= {HF_MIN_TRANSACTIONS} txns")
 
         results = []
-        seen = set()
+        used_receipts = set()
 
         for (phone, shortcode, day), txns in groups.items():
             if len(txns) < HF_MIN_TRANSACTIONS:
                 continue
 
-            receipt_key = frozenset(t['receipt_no'] for t in txns)
-            if receipt_key in seen:
+            candidate_receipts = {t['receipt_no'] for t in txns}
+            if candidate_receipts & used_receipts:
                 continue
-            seen.add(receipt_key)
+            used_receipts |= candidate_receipts
 
             sorted_txns = sorted(txns, key=lambda x: x['completion_time'])
             total_amount = sum(
@@ -584,14 +618,273 @@ class FraudReportService:
                 'total_amount': total_amount,
                 'day': str(day),
                 'business_shortcode': shortcode,
-                'receipt_nos': list(receipt_key),
+                'receipt_nos': list(candidate_receipts),
                 'transaction_details': txn_details,
                 'explanation': None,
                 'detection_time': datetime.now(),
                 'fraud_score': min(20 + len(sorted_txns) * 5, 70),
-                'agent_info': {'agent_companies': [], 'user_agents': [], 'shortcodes': [shortcode] if shortcode else []},
+                'agent_info': detector._extract_agent_info_from_transactions(sorted_txns) if detector else {'agent_companies': [], 'user_agents': [], 'shortcodes': [shortcode] if shortcode else []},
             })
 
+        return results
+
+    # ------------------------------------------------------------------
+    # Structuring: same phone, same direction, rapid burst
+    # Catches e.g. KIPKIRUI making 4 deposits of ~149K each in 3.4 minutes.
+    # The existing split/RBF detectors require MIXED directions — this one
+    # flags purely same-direction bursts that indicate structured layering.
+    # ------------------------------------------------------------------
+    def _detect_same_phone_rapid_same_direction(self, txn_dicts, detector):
+        CUSTOMER_REASONS = {
+            'Deposit at Agent Till',
+            'Customer Withdrawal at Agent Till',
+            'Customer Withdrawal at Agent Till with OD',
+        }
+
+        relevant = [
+            t for t in txn_dicts
+            if t.get('reason_type') in CUSTOMER_REASONS and t.get('phone_number')
+        ]
+        logger.info(f"[STRUCT] {len(relevant)} eligible txns")
+
+        groups = defaultdict(list)
+        for txn in relevant:
+            key = (txn['phone_number'], txn.get('business_shortcode') or '')
+            groups[key].append(txn)
+
+        results = []
+        used_receipts = set()
+
+        for (phone, shortcode), txns in groups.items():
+            if len(txns) < STRUCT_MIN_TRANSACTIONS:
+                continue
+
+            sorted_txns = sorted(txns, key=lambda x: x['completion_time'])
+
+            for i in range(len(sorted_txns)):
+                anchor = sorted_txns[i]
+                anchor_is_deposit = anchor.get('paid_in', 0) > 0
+                direction = 'deposit' if anchor_is_deposit else 'withdrawal'
+
+                # Collect same-direction transactions within the window
+                window = [anchor]
+                for j in range(i + 1, len(sorted_txns)):
+                    elapsed = (sorted_txns[j]['completion_time'] - anchor['completion_time']).total_seconds() / 60
+                    if elapsed > STRUCT_WINDOW_MINUTES:
+                        break
+                    txn_is_deposit = sorted_txns[j].get('paid_in', 0) > 0
+                    if txn_is_deposit == anchor_is_deposit:
+                        window.append(sorted_txns[j])
+
+                if len(window) < STRUCT_MIN_TRANSACTIONS:
+                    continue
+
+                total = sum(
+                    t.get('paid_in', 0) if anchor_is_deposit else abs(t.get('withdrawn', 0))
+                    for t in window
+                )
+                if total < STRUCT_MIN_TOTAL:
+                    continue
+
+                candidate_receipts = {t['receipt_no'] for t in window}
+                if candidate_receipts & used_receipts:
+                    continue
+                used_receipts |= candidate_receipts
+
+                span_mins = (window[-1]['completion_time'] - window[0]['completion_time']).total_seconds() / 60
+                amounts = [
+                    t.get('paid_in', 0) if anchor_is_deposit else abs(t.get('withdrawn', 0))
+                    for t in window
+                ]
+                max_amount = max(amounts)
+
+                # Structuring indicator: transactions clustered just below a round threshold
+                structuring_flag = any(
+                    round_threshold - amt < round_threshold * 0.05 and amt < round_threshold
+                    for amt in amounts
+                    for round_threshold in (70000, 100000, 150000, 200000, 300000, 500000)
+                )
+
+                fraud_score = min(55 + len(window) * 7, 100)
+                if structuring_flag:
+                    fraud_score = min(fraud_score + 15, 100)
+
+                name = anchor.get('name')
+                explanation = (
+                    f"STRUCTURING — SAME-DIRECTION BURST: {name or phone} made {len(window)} "
+                    f"{direction}s totalling KES {total:,.2f} at shortcode {shortcode} "
+                    f"within {span_mins:.1f} minute(s). "
+                    f"Largest single transaction: KES {max_amount:,.2f}. "
+                    + (
+                        "Amounts are clustered just below common reporting thresholds — "
+                        "consistent with deliberate structuring to avoid detection. "
+                        if structuring_flag else ""
+                    ) +
+                    "This pattern suggests layering or cash placement via structured same-direction transactions."
+                )
+
+                txn_details = [
+                    {
+                        'receipt_no': t['receipt_no'],
+                        'amount': t.get('paid_in', 0) if anchor_is_deposit else abs(t.get('withdrawn', 0)),
+                        'type': 'Deposit' if anchor_is_deposit else 'Withdrawal',
+                        'time': t['completion_time'].strftime('%Y-%m-%d %H:%M:%S')
+                            if hasattr(t['completion_time'], 'strftime') else str(t['completion_time']),
+                        'party_phone': phone,
+                        'party_name': t.get('name'),
+                        'other_party_info': t.get('other_party_info', ''),
+                        'business_shortcode': shortcode,
+                        'agent_id': t.get('agent_id'),
+                    }
+                    for t in window
+                ]
+
+                agent_info = detector._extract_agent_info_from_transactions(window)
+
+                results.append({
+                    'fraud_type': 'structuring',
+                    'account_phone': phone,
+                    'account_name': name,
+                    'transaction_count': len(window),
+                    'total_amount': total,
+                    'direction': direction,
+                    'span_minutes': round(span_mins, 1),
+                    'structuring_flag': structuring_flag,
+                    'receipt_nos': list(candidate_receipts),
+                    'transaction_details': txn_details,
+                    'explanation': explanation,
+                    'detection_time': datetime.now(),
+                    'fraud_score': fraud_score,
+                    'agent_info': agent_info,
+                    'business_shortcode': shortcode,
+                })
+
+        logger.info(f"[STRUCT] {len(results)} findings")
+        return results
+
+    # ------------------------------------------------------------------
+    # Float Cycling: large till top-up immediately drained via API/B2B
+    # Catches the pass-through pattern: MMF/merchant loads float,
+    # then Business Deposit via API or similar drains >= 50 % within 2 hrs.
+    # ------------------------------------------------------------------
+    def _detect_float_cycling(self, txn_dicts, detector):
+        # Group ALL float transactions by shortcode
+        by_shortcode = defaultdict(list)
+        for txn in txn_dicts:
+            if txn.get('transaction_type') == 'float':
+                sc = txn.get('business_shortcode') or ''
+                if sc:
+                    by_shortcode[sc].append(txn)
+
+        logger.info(f"[CYCLING] {len(by_shortcode)} shortcodes with float transactions")
+
+        results = []
+        used_receipts = set()
+
+        for shortcode, txns in by_shortcode.items():
+            sorted_txns = sorted(txns, key=lambda x: x['completion_time'])
+
+            top_ups = [
+                t for t in sorted_txns
+                if t.get('reason_type') in FLOAT_TOP_UP_REASONS
+                and t.get('paid_in', 0) >= CYCLING_MIN_TOP_UP
+            ]
+            drains = [
+                t for t in sorted_txns
+                if t.get('reason_type') in FLOAT_DRAIN_REASONS
+                and abs(t.get('withdrawn', 0)) > 0
+            ]
+
+            if not top_ups or not drains:
+                continue
+
+            for top_up in top_ups:
+                top_up_amount = top_up.get('paid_in', 0)
+                top_up_time = top_up['completion_time']
+
+                # Find drain events within CYCLING_WINDOW_MINUTES
+                matching_drains = [
+                    d for d in drains
+                    if d['receipt_no'] not in used_receipts
+                    and abs((d['completion_time'] - top_up_time).total_seconds() / 60) <= CYCLING_WINDOW_MINUTES
+                ]
+                if not matching_drains:
+                    continue
+
+                drain_total = sum(abs(d.get('withdrawn', 0)) for d in matching_drains)
+                drain_pct = drain_total / top_up_amount if top_up_amount > 0 else 0
+
+                if drain_pct < CYCLING_DRAIN_PCT:
+                    continue
+
+                candidate_receipts = {top_up['receipt_no']} | {d['receipt_no'] for d in matching_drains}
+                if candidate_receipts & used_receipts:
+                    continue
+                used_receipts |= candidate_receipts
+
+                span_mins = max(
+                    abs((d['completion_time'] - top_up_time).total_seconds() / 60)
+                    for d in matching_drains
+                )
+                overdrain = drain_pct > 1.0
+
+                fraud_score = min(65 + len(matching_drains) * 5, 100)
+                if span_mins <= 30:
+                    fraud_score = min(fraud_score + 15, 100)
+
+                explanation = (
+                    f"FLOAT CYCLING — PASS-THROUGH: Till {shortcode} received a float top-up of "
+                    f"KES {top_up_amount:,.2f} ({top_up['reason_type']}, receipt {top_up['receipt_no']}) "
+                    f"at {top_up_time.strftime('%Y-%m-%d %H:%M')}. "
+                    f"Within {span_mins:.0f} minute(s), {len(matching_drains)} outbound "
+                    f"transaction(s) drained KES {drain_total:,.2f} "
+                    f"({drain_pct * 100:.0f}% of the top-up)"
+                    + (" — exceeding the top-up amount, indicating pre-existing float was also swept." if overdrain else "") +
+                    ". This rapid load-then-drain cycle is consistent with float being used as a "
+                    "pass-through channel for funds laundering or unauthorized transfers."
+                )
+
+                all_txns = [top_up] + matching_drains
+                txn_details = [
+                    {
+                        'receipt_no': t['receipt_no'],
+                        'amount': t.get('paid_in', 0) if t.get('paid_in', 0) > 0 else abs(t.get('withdrawn', 0)),
+                        'type': 'Top-up' if t['receipt_no'] == top_up['receipt_no'] else 'Drain',
+                        'reason_type': t.get('reason_type', ''),
+                        'time': t['completion_time'].strftime('%Y-%m-%d %H:%M:%S')
+                            if hasattr(t['completion_time'], 'strftime') else str(t['completion_time']),
+                        'party_phone': t.get('phone_number'),
+                        'party_name': t.get('name'),
+                        'other_party_info': t.get('other_party_info', ''),
+                        'business_shortcode': shortcode,
+                        'agent_id': t.get('agent_id'),
+                    }
+                    for t in all_txns
+                ]
+
+                agent_info = detector._extract_agent_info_from_transactions(all_txns)
+
+                results.append({
+                    'fraud_type': 'float_cycling',
+                    'account_phone': None,
+                    'account_name': None,
+                    'transaction_count': len(all_txns),
+                    'total_amount': top_up_amount + drain_total,
+                    'top_up_amount': top_up_amount,
+                    'drain_total': drain_total,
+                    'drain_pct': round(drain_pct * 100, 1),
+                    'span_minutes': round(span_mins, 1),
+                    'overdrain': overdrain,
+                    'receipt_nos': list(candidate_receipts),
+                    'transaction_details': txn_details,
+                    'explanation': explanation,
+                    'detection_time': datetime.now(),
+                    'fraud_score': fraud_score,
+                    'agent_info': agent_info,
+                    'business_shortcode': shortcode,
+                })
+
+        logger.info(f"[CYCLING] {len(results)} findings")
         return results
 
     # ------------------------------------------------------------------
@@ -656,6 +949,8 @@ class FraudReportService:
                 'rapid_back_forth': 0,
                 'deposit_withdrawal_recovery': 0,
                 'high_frequency_daily': 0,
+                'structuring': 0,
+                'float_cycling': 0,
                 'high_risk': 0,
                 'medium_risk': 0,
                 'low_risk': 0,

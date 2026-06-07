@@ -9,6 +9,7 @@ function SwapHistoryGrid() {
   const [filteredData, setFilteredData] = useState([]);
   const [searchTerm, setSearchTerm] = useState('');
   const [expandedCompanies, setExpandedCompanies] = useState({});
+  const [expandedTills, setExpandedTills] = useState({});
   const [isLoading, setIsLoading] = useState(false);
   const [currentPage, setCurrentPage] = useState(1);
   const [pageSize, setPageSize] = useState(10);
@@ -28,6 +29,8 @@ function SwapHistoryGrid() {
   const { showToast } = useToast();
   const dropdownRef = useRef(null);
 
+  const toggleTill = (tillId) => setExpandedTills(prev => ({ ...prev, [tillId]: !prev[tillId] }));
+
   const fetchSwapHistory = async () => {
     setIsLoading(true);
     try {
@@ -36,7 +39,7 @@ function SwapHistoryGrid() {
       if (startDate) params.append('start_date', startDate);
       if (endDate) params.append('end_date', endDate);
 
-      const response = await axios.get(`${config.API_URL}/swaps/by-company?${params}`, {
+      const response = await axios.get(`${config.API_URL}/swaps/by-company-till?${params}`, {
         headers: { Authorization: `Bearer ${token}` },
       });
       setGroupedData(response.data || []);
@@ -60,11 +63,13 @@ function SwapHistoryGrid() {
     } else {
       const term = searchTerm.toLowerCase();
       setFilteredData(
-        groupedData.filter(
-          (group) =>
-            group.company_name?.toLowerCase().includes(term) ||
-            group.till_name?.toLowerCase().includes(term) ||
-            group.till_number?.toLowerCase().includes(term)
+        groupedData.filter(co =>
+          co.company_name?.toLowerCase().includes(term) ||
+          co.tills?.some(t =>
+            t.till_name?.toLowerCase().includes(term) ||
+            t.current_agents?.some(a => a.name?.toLowerCase().includes(term)) ||
+            t.previous_rows?.some(r => r.agent_name?.toLowerCase().includes(term))
+          )
         )
       );
     }
@@ -86,15 +91,20 @@ function SwapHistoryGrid() {
     setExpandedCompanies((prev) => ({ ...prev, [companyId]: !prev[companyId] }));
   };
 
-  const allExpanded = filteredData.length > 0 && filteredData.every((g) => expandedCompanies[g.agent_company_id]);
+  const allExpanded = filteredData.length > 0 && filteredData.every(co => expandedCompanies[co.company_id]);
 
   const toggleExpandAll = () => {
     if (allExpanded) {
       setExpandedCompanies({});
+      setExpandedTills({});
     } else {
-      const all = {};
-      filteredData.forEach((g) => { all[g.agent_company_id] = true; });
-      setExpandedCompanies(all);
+      const allCo = {}, allTill = {};
+      filteredData.forEach(co => {
+        allCo[co.company_id] = true;
+        (co.tills || []).forEach(t => { allTill[t.agent_company_id] = true; });
+      });
+      setExpandedCompanies(allCo);
+      setExpandedTills(allTill);
     }
   };
 
@@ -470,120 +480,144 @@ function SwapHistoryGrid() {
               <p className="text-slate-500 dark:text-slate-400">No swap history found</p>
             </div>
           ) : (
-            paginatedData.map((group) => (
-              <div key={group.agent_company_id} className="border border-slate-200 dark:border-slate-700 rounded-xl overflow-hidden">
-                {/* Company Header Row */}
+            paginatedData.map(company => (
+              <div key={company.company_id} className="border border-slate-200 dark:border-slate-700 rounded-xl overflow-hidden">
+
+                {/* ── Company header ── */}
                 <button
-                  onClick={() => toggleCompany(group.agent_company_id)}
+                  onClick={() => toggleCompany(company.company_id)}
                   className="w-full flex items-center justify-between px-4 py-3 bg-slate-50 dark:bg-slate-700/50 hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors"
                 >
                   <div className="flex items-center gap-3">
-                    {expandedCompanies[group.agent_company_id] ? (
-                      <ChevronDown className="w-4 h-4 text-slate-500" />
-                    ) : (
-                      <ChevronRight className="w-4 h-4 text-slate-500" />
-                    )}
-                    <div className="text-left">
-                      <div className="font-semibold text-slate-800 dark:text-white">{group.company_name || group.till_name}</div>
-                      <div className="text-xs text-slate-500 dark:text-slate-400">
-                        {group.till_name && <span>Till: {group.till_name}</span>}
-                        {group.till_number && <span className="ml-2">#{group.till_number}</span>}
-                      </div>
-                    </div>
+                    {expandedCompanies[company.company_id]
+                      ? <ChevronDown className="w-4 h-4 text-slate-500" />
+                      : <ChevronRight className="w-4 h-4 text-slate-500" />}
+                    <span className="font-bold text-slate-800 dark:text-white">
+                      {company.company_name || '—'}
+                    </span>
                   </div>
                   <span className="px-2.5 py-1 rounded-full text-xs font-medium bg-orange-100 text-orange-700 dark:bg-orange-900/30 dark:text-orange-400">
-                    {group.total_swaps} swap{group.total_swaps !== 1 ? 's' : ''}
+                    {company.total_swaps} swap{company.total_swaps !== 1 ? 's' : ''}
                   </span>
                 </button>
 
-                {/* Expanded Swap Rows */}
-                {expandedCompanies[group.agent_company_id] && (
+                {/* ── Tills ── */}
+                {expandedCompanies[company.company_id] && (
                   <div className="divide-y divide-slate-100 dark:divide-slate-700">
-                    {/* Sub-header */}
-                    <div className="grid grid-cols-[auto_1fr_1fr_1fr_1fr_1fr_1fr_1fr_auto] gap-2 px-4 py-2 bg-slate-100/50 dark:bg-slate-700/30 text-xs font-semibold text-slate-600 dark:text-slate-400">
-                      <div className="flex items-center">
-                        <input
-                          type="checkbox"
-                          checked={group.swaps.length > 0 && group.swaps.every((s) => selectedSwapIds.includes(s.id))}
-                          onChange={() => handleSelectAllInGroup(group)}
-                          className="w-3.5 h-3.5 text-blue-600 border-slate-300 rounded focus:ring-blue-500 dark:bg-slate-700 dark:border-slate-600"
-                        />
-                      </div>
-                      <div>Swap Date</div>
-                      <div>Previous Agents</div>
-                      <div>New Agents</div>
-                      <div className="text-right">Float at Swap</div>
-                      <div className="text-right">Commission at Swap</div>
-                      <div>Initiated By</div>
-                      <div>Notes</div>
-                      <div className="text-center">Payout</div>
-                    </div>
+                    {(company.tills || []).map(till => (
+                      <div key={till.agent_company_id}>
 
-                    {group.swaps.map((swap) => (
-                      <div
-                        key={swap.id}
-                        className={`grid grid-cols-[auto_1fr_1fr_1fr_1fr_1fr_1fr_1fr_auto] gap-2 px-4 py-3 text-sm hover:bg-slate-50 dark:hover:bg-slate-700/30 transition-colors cursor-pointer ${
-                          selectedSwapIds.includes(swap.id) ? 'bg-blue-50/50 dark:bg-blue-900/10' : ''
-                        }`}
-                        onClick={() => handleSelectSwap(swap.id)}
-                      >
-                        <div className="flex items-center" onClick={(e) => e.stopPropagation()}>
-                          <input
-                            type="checkbox"
-                            checked={selectedSwapIds.includes(swap.id)}
-                            onChange={() => handleSelectSwap(swap.id)}
-                            className="w-3.5 h-3.5 text-blue-600 border-slate-300 rounded focus:ring-blue-500 dark:bg-slate-700 dark:border-slate-600"
-                          />
-                        </div>
-                        <div className="text-slate-700 dark:text-slate-300">
-                          {formatDate(swap.swap_date)}
-                        </div>
-                        <div className="space-y-1">
-                          {(swap.previous_agents || []).map((a, i) => (
-                            <div key={i} className="text-xs text-red-600 dark:text-red-400">
-                              <div className="flex items-center gap-1 font-medium">
-                                <Users className="w-3 h-3 flex-shrink-0" />
-                                <span className="truncate">{a.name}</span>
-                              </div>
-                              <div className="ml-4 text-[10px] text-red-500/70 dark:text-red-400/60">
-                                {a.idnumber && <span>ID: {a.idnumber}</span>}
-                                {a.phone_number && <span className="ml-1">| {a.phone_number}</span>}
-                              </div>
+                        {/* Till sub-header */}
+                        <button
+                          onClick={() => toggleTill(till.agent_company_id)}
+                          className="w-full flex items-center justify-between px-6 py-2.5 bg-slate-100/60 dark:bg-slate-700/30 hover:bg-slate-100 dark:hover:bg-slate-700/50 transition-colors"
+                        >
+                          <div className="flex items-center gap-2">
+                            {expandedTills[till.agent_company_id]
+                              ? <ChevronDown className="w-3.5 h-3.5 text-slate-400" />
+                              : <ChevronRight className="w-3.5 h-3.5 text-slate-400" />}
+                            <ArrowRightLeft className="w-3.5 h-3.5 text-orange-500" />
+                            <span className="text-sm font-medium text-slate-700 dark:text-slate-300">{till.till_name || '—'}</span>
+                            {till.short_code && (
+                              <span className="text-xs font-mono text-slate-400 dark:text-slate-500 bg-slate-100 dark:bg-slate-700 px-1.5 py-0.5 rounded">
+                                {till.short_code}
+                              </span>
+                            )}
+                          </div>
+                          <span className="px-2 py-0.5 rounded-full text-xs font-medium bg-slate-200 text-slate-600 dark:bg-slate-600 dark:text-slate-300">
+                            {till.total_swaps} swap{till.total_swaps !== 1 ? 's' : ''}
+                          </span>
+                        </button>
+
+                        {/* Till rows */}
+                        {expandedTills[till.agent_company_id] && (
+                          <div className="divide-y divide-slate-100 dark:divide-slate-700">
+                            {/* Column headers */}
+                            <div className="grid grid-cols-[140px_1fr_auto_1fr_110px_110px_auto] gap-3 px-6 py-2 bg-slate-50 dark:bg-slate-800/50 text-xs font-semibold text-slate-500 dark:text-slate-400">
+                              <div>Swap Date</div>
+                              <div>Agent</div>
+                              <div className="text-center">Status</div>
+                              <div>Replaced By / Replaced</div>
+                              <div className="text-right">Float at Swap</div>
+                              <div className="text-right">Commission at Swap</div>
+                              <div className="text-center">Payout</div>
                             </div>
-                          ))}
-                          {(!swap.previous_agents || swap.previous_agents.length === 0) && (
-                            <span className="text-xs text-slate-400">None</span>
-                          )}
-                        </div>
-                        <div className="space-y-1">
-                          {(swap.new_agents || []).map((a, i) => (
-                            <div key={i} className="text-xs text-green-600 dark:text-green-400">
-                              <div className="flex items-center gap-1 font-medium">
-                                <Users className="w-3 h-3 flex-shrink-0" />
-                                <span className="truncate">{a.name}</span>
+
+                            {/* Current agents row (shown first) */}
+                            {(till.current_agents || []).length > 0 && (
+                              <div className="grid grid-cols-[140px_1fr_auto_1fr_110px_110px_auto] gap-3 px-6 py-3 bg-green-50/40 dark:bg-green-900/10">
+                                <div className="text-xs text-slate-400 italic self-start pt-0.5">Latest</div>
+                                <div className="space-y-1 self-start">
+                                  {till.current_agents.map((a, ai) => {
+                                    const name = a.name || [a.firstname, a.middlename, a.lastname].filter(Boolean).join(' ') || 'Unknown';
+                                    return (
+                                      <div key={ai} className="flex items-center gap-1.5 text-xs text-green-700 dark:text-green-300">
+                                        <Users className="w-3 h-3 flex-shrink-0" />
+                                        <span className="font-medium">{name}</span>
+                                        {a.phone_number && <span className="text-green-500/70">{a.phone_number}</span>}
+                                      </div>
+                                    );
+                                  })}
+                                </div>
+                                <div className="flex items-start justify-center pt-0.5">
+                                  <span className="px-2 py-0.5 rounded-full text-xs font-semibold bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400">
+                                    Current
+                                  </span>
+                                </div>
+                                <div />
+                                <div />
+                                <div />
+                                <div />
                               </div>
-                              <div className="ml-4 text-[10px] text-green-500/70 dark:text-green-400/60">
-                                {a.idnumber && <span>ID: {a.idnumber}</span>}
-                                {a.phone_number && <span className="ml-1">| {a.phone_number}</span>}
+                            )}
+
+                            {/* One row per previous agent */}
+                            {(till.previous_rows || []).map((row, ri) => (
+                              <div
+                                key={`${row.swap_id}-${ri}`}
+                                className="grid grid-cols-[140px_1fr_auto_1fr_110px_110px_auto] gap-3 px-6 py-3 hover:bg-slate-50 dark:hover:bg-slate-700/30 transition-colors"
+                              >
+                                <div className="text-xs text-slate-500 dark:text-slate-400 self-start pt-0.5">
+                                  {formatDate(row.swap_date)}
+                                </div>
+                                <div className="text-xs self-start">
+                                  <div className="font-medium text-slate-700 dark:text-slate-300">{row.agent_name}</div>
+                                  {row.agent_idnumber && <div className="text-slate-400">ID: {row.agent_idnumber}</div>}
+                                  {row.agent_phone && <div className="text-slate-400">{row.agent_phone}</div>}
+                                </div>
+                                <div className="flex items-start justify-center pt-0.5">
+                                  <span className="px-2 py-0.5 rounded-full text-xs font-semibold bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400 whitespace-nowrap">
+                                    Previous
+                                  </span>
+                                </div>
+                                <div className="text-xs self-start space-y-0.5">
+                                  {(row.current_agents || []).map((a, ai) => {
+                                    const name = a.name || [a.firstname, a.middlename, a.lastname].filter(Boolean).join(' ') || 'Unknown';
+                                    return (
+                                      <div key={ai} className="flex items-center gap-1 text-green-700 dark:text-green-300">
+                                        <Users className="w-3 h-3 flex-shrink-0" />
+                                        <span>{name}</span>
+                                      </div>
+                                    );
+                                  })}
+                                </div>
+                                <div className="text-right text-xs font-medium text-blue-700 dark:text-blue-400 self-start">
+                                  {row.float_at_swap === '—'
+                                    ? <span className="text-slate-400 font-normal">—</span>
+                                    : `KES ${parseFloat(row.float_at_swap || 0).toLocaleString(undefined, { minimumFractionDigits: 2 })}`}
+                                </div>
+                                <div className="text-right text-xs font-medium text-green-700 dark:text-green-400 self-start">
+                                  {row.commission_at_swap === '—'
+                                    ? <span className="text-slate-400 font-normal">—</span>
+                                    : `KES ${parseFloat(row.commission_at_swap || 0).toLocaleString(undefined, { minimumFractionDigits: 2 })}`}
+                                </div>
+                                <div className="flex items-start justify-center pt-0.5">
+                                  {getPayoutStatusIcon(row.swap_id)}
+                                </div>
                               </div>
-                            </div>
-                          ))}
-                        </div>
-                        <div className="text-right font-medium text-blue-700 dark:text-blue-400">
-                          KES {parseFloat(swap.float_balance_at_swap || 0).toLocaleString(undefined, { minimumFractionDigits: 2 })}
-                        </div>
-                        <div className="text-right font-medium text-green-700 dark:text-green-400">
-                          KES {parseFloat(swap.commission_balance_at_swap || 0).toLocaleString(undefined, { minimumFractionDigits: 2 })}
-                        </div>
-                        <div className="text-xs text-slate-600 dark:text-slate-400 truncate">
-                          {swap.initiator_name || 'N/A'}
-                        </div>
-                        <div className="text-xs text-slate-500 dark:text-slate-400 truncate" title={swap.notes}>
-                          {swap.notes || '-'}
-                        </div>
-                        <div className="flex items-center justify-center">
-                          {getPayoutStatusIcon(swap.id)}
-                        </div>
+                            ))}
+                          </div>
+                        )}
                       </div>
                     ))}
                   </div>

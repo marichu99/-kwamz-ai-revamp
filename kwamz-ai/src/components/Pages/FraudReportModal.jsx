@@ -32,28 +32,52 @@ const DATE_RANGES = [
 const FRAUD_TYPE_META = {
     split_transaction: {
         label: 'Split Transaction',
+        summaryKey: 'split_transactions',
+        tabLabel: 'Split',
         color: 'red',
         description: 'Multiple transactions of similar amounts within a short window to avoid detection thresholds.',
     },
     rollover_fraud: {
         label: 'Rollover Fraud',
+        summaryKey: 'rollover_fraud',
+        tabLabel: 'Rollover',
         color: 'orange',
         description: 'Rapid cluster of deposits or withdrawals on the same account in a short time window.',
     },
     rapid_back_forth: {
         label: 'Rapid Back & Forth',
+        summaryKey: 'rapid_back_forth',
+        tabLabel: 'Rapid B&F',
         color: 'yellow',
         description: '5+ alternating deposits and withdrawals by the same party within 3 minutes — commission farming or float manipulation.',
     },
     deposit_withdrawal_recovery: {
         label: 'Deposit-Withdrawal Recovery',
+        summaryKey: 'deposit_withdrawal_recovery',
+        tabLabel: 'Dep-Withdrawal',
         color: 'purple',
         description: 'Large deposit followed by a similar-amount withdrawal within 24 hrs — possible wash transaction or pre-existing balance exploitation.',
     },
     high_frequency_daily: {
         label: 'High Frequency Daily',
+        summaryKey: 'high_frequency_daily',
+        tabLabel: 'High Freq',
         color: 'slate',
         description: null,
+    },
+    structuring: {
+        label: 'Structuring',
+        summaryKey: 'structuring',
+        tabLabel: 'Structuring',
+        color: 'rose',
+        description: 'Same phone, same-direction burst — amounts clustered just below reporting thresholds, consistent with deliberate layering.',
+    },
+    float_cycling: {
+        label: 'Float Cycling',
+        summaryKey: 'float_cycling',
+        tabLabel: 'Float Cycling',
+        color: 'teal',
+        description: 'Large float top-up immediately drained via API/B2B transfers — till used as a pass-through channel.',
     },
 };
 
@@ -88,7 +112,7 @@ function FindingCard({ finding, index }) {
                         {meta.label}
                     </span>
                     <span className="text-sm text-slate-500 dark:text-slate-400">
-                        {finding.account_name || finding.account_phone}
+                        {finding.account_name || finding.account_phone || (finding.business_shortcode ? `Till ${finding.business_shortcode}` : '—')}
                     </span>
                     {finding.account_phone && finding.account_name && (
                         <span className="text-xs text-slate-400 dark:text-slate-500">{finding.account_phone}</span>
@@ -169,6 +193,52 @@ function FindingCard({ finding, index }) {
                         </div>
                     )}
 
+                    {/* Structuring stats */}
+                    {finding.fraud_type === 'structuring' && (
+                        <div className="grid grid-cols-3 gap-2">
+                            <div className={`rounded-lg p-2 text-center ${finding.direction === 'deposit' ? 'bg-green-50 dark:bg-green-900/20' : 'bg-red-50 dark:bg-red-900/20'}`}>
+                                <p className={`text-xs ${finding.direction === 'deposit' ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400'}`}>
+                                    Direction
+                                </p>
+                                <p className="text-sm font-bold text-slate-800 dark:text-white capitalize">{finding.direction}s</p>
+                            </div>
+                            <div className="bg-slate-50 dark:bg-slate-700 rounded-lg p-2 text-center">
+                                <p className="text-xs text-slate-500 dark:text-slate-400">{finding.transaction_count} transactions</p>
+                                <p className="text-sm font-bold text-slate-800 dark:text-white">within {finding.span_minutes} min</p>
+                            </div>
+                            <div className={`rounded-lg p-2 text-center ${finding.structuring_flag ? 'bg-red-100 dark:bg-red-900/30' : 'bg-slate-50 dark:bg-slate-700'}`}>
+                                <p className={`text-xs ${finding.structuring_flag ? 'text-red-600 dark:text-red-400' : 'text-slate-500 dark:text-slate-400'}`}>
+                                    Threshold clustering
+                                </p>
+                                <p className="text-sm font-bold text-slate-800 dark:text-white">{finding.structuring_flag ? '⚠ Detected' : 'Not detected'}</p>
+                            </div>
+                        </div>
+                    )}
+
+                    {/* Float cycling stats */}
+                    {finding.fraud_type === 'float_cycling' && (
+                        <div className="grid grid-cols-3 gap-2">
+                            <div className="bg-green-50 dark:bg-green-900/20 rounded-lg p-2 text-center">
+                                <p className="text-xs text-green-600 dark:text-green-400">Float Top-up</p>
+                                <p className="text-sm font-bold text-slate-800 dark:text-white">
+                                    KES {Number(finding.top_up_amount || 0).toLocaleString('en-KE', { minimumFractionDigits: 2 })}
+                                </p>
+                            </div>
+                            <div className="bg-red-50 dark:bg-red-900/20 rounded-lg p-2 text-center">
+                                <p className="text-xs text-red-600 dark:text-red-400">Drained</p>
+                                <p className="text-sm font-bold text-slate-800 dark:text-white">
+                                    KES {Number(finding.drain_total || 0).toLocaleString('en-KE', { minimumFractionDigits: 2 })}
+                                </p>
+                            </div>
+                            <div className={`rounded-lg p-2 text-center ${finding.overdrain ? 'bg-red-100 dark:bg-red-900/30' : 'bg-amber-50 dark:bg-amber-900/20'}`}>
+                                <p className={`text-xs ${finding.overdrain ? 'text-red-600 dark:text-red-400' : 'text-amber-600 dark:text-amber-400'}`}>
+                                    {finding.drain_pct}% drained{finding.overdrain ? ' ⚠ Overdrain' : ''}
+                                </p>
+                                <p className="text-sm font-bold text-slate-800 dark:text-white">within {finding.span_minutes} min</p>
+                            </div>
+                        </div>
+                    )}
+
                     {/* Transaction details */}
                     {finding.transaction_details?.length > 0 && (
                         <div>
@@ -181,7 +251,10 @@ function FindingCard({ finding, index }) {
                                             <th className="px-3 py-2 text-left font-semibold">Type</th>
                                             <th className="px-3 py-2 text-right font-semibold">Amount (KES)</th>
                                             <th className="px-3 py-2 text-left font-semibold">Time</th>
-                                            <th className="px-3 py-2 text-left font-semibold">Party</th>
+                                            {finding.fraud_type === 'float_cycling'
+                                                ? <th className="px-3 py-2 text-left font-semibold">Reason</th>
+                                                : <th className="px-3 py-2 text-left font-semibold">Party</th>
+                                            }
                                         </tr>
                                     </thead>
                                     <tbody>
@@ -189,9 +262,12 @@ function FindingCard({ finding, index }) {
                                             <tr key={i} className="border-t border-slate-100 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-700/50">
                                                 <td className="px-3 py-2 font-mono text-slate-600 dark:text-slate-300">{txn.receipt_no}</td>
                                                 <td className="px-3 py-2">
-                                                    <span className={`px-1.5 py-0.5 rounded text-xs font-medium ${txn.type === 'Deposit' || txn.type === 'DEPOSIT'
-                                                        ? 'bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-300'
-                                                        : 'bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-300'}`}>
+                                                    <span className={`px-1.5 py-0.5 rounded text-xs font-medium ${
+                                                        txn.type === 'Top-up'
+                                                            ? 'bg-teal-100 text-teal-700 dark:bg-teal-900/40 dark:text-teal-300'
+                                                            : txn.type === 'Deposit' || txn.type === 'DEPOSIT'
+                                                            ? 'bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-300'
+                                                            : 'bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-300'}`}>
                                                         {txn.type}
                                                     </span>
                                                 </td>
@@ -199,7 +275,10 @@ function FindingCard({ finding, index }) {
                                                     {Number(txn.amount || 0).toLocaleString('en-KE', { minimumFractionDigits: 2 })}
                                                 </td>
                                                 <td className="px-3 py-2 text-slate-500 dark:text-slate-400 whitespace-nowrap">{txn.time}</td>
-                                                <td className="px-3 py-2 text-slate-600 dark:text-slate-300">{txn.party_name || txn.party_phone || '—'}</td>
+                                                {finding.fraud_type === 'float_cycling'
+                                                    ? <td className="px-3 py-2 text-slate-500 dark:text-slate-400 text-xs">{txn.reason_type || '—'}</td>
+                                                    : <td className="px-3 py-2 text-slate-600 dark:text-slate-300">{txn.party_name || txn.party_phone || '—'}</td>
+                                                }
                                             </tr>
                                         ))}
                                     </tbody>
@@ -215,16 +294,38 @@ function FindingCard({ finding, index }) {
                                 <Building className="w-3 h-3" /> Agent Companies
                             </p>
                             {agentCompanies.length > 0 ? (
-                                <div className="space-y-1">
+                                <div className="space-y-2">
                                     {agentCompanies.map((ac, i) => (
-                                        <div key={i} className="flex items-center gap-3 text-sm text-slate-700 dark:text-slate-300 bg-slate-50 dark:bg-slate-700 px-3 py-2 rounded-lg">
-                                            <span className="font-medium">{ac.company_name}</span>
-                                            {ac.short_code && <span className="text-xs text-slate-400">SC: {ac.short_code}</span>}
-                                            {ac.location && <span className="text-xs text-slate-400">{ac.location}</span>}
-                                            {ac.fraud_risk_level && (
-                                                <span className={`ml-auto text-xs font-semibold px-2 py-0.5 rounded-full ${RISK_COLORS[ac.fraud_risk_level?.toUpperCase()] || RISK_COLORS.LOW}`}>
-                                                    {ac.fraud_risk_level}
-                                                </span>
+                                        <div key={i} className="bg-slate-50 dark:bg-slate-700 rounded-lg overflow-hidden">
+                                            <div className="flex items-center gap-3 text-sm text-slate-700 dark:text-slate-300 px-3 py-2">
+                                                <span className="font-semibold">{ac.company_name}</span>
+                                                {ac.short_code && <span className="text-xs text-slate-400">SC: {ac.short_code}</span>}
+                                                {ac.location && <span className="text-xs text-slate-400">{ac.location}</span>}
+                                                {ac.fraud_risk_level && (
+                                                    <span className={`ml-auto text-xs font-semibold px-2 py-0.5 rounded-full ${RISK_COLORS[ac.fraud_risk_level?.toUpperCase()] || RISK_COLORS.LOW}`}>
+                                                        {ac.fraud_risk_level}
+                                                    </span>
+                                                )}
+                                            </div>
+                                            {userAgents.length > 0 && (
+                                                <div className="border-t border-slate-200 dark:border-slate-600 px-3 py-2">
+                                                    <p className="text-xs font-medium text-slate-400 dark:text-slate-500 mb-1.5 flex items-center gap-1">
+                                                        <Users className="w-3 h-3" /> User Agents
+                                                    </p>
+                                                    <div className="flex flex-wrap gap-2">
+                                                        {userAgents.map((ua, j) => (
+                                                            <div key={j} className="text-xs bg-blue-50 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300 px-2.5 py-1.5 rounded-lg flex items-center gap-1.5">
+                                                                <span className="font-medium">{ua.name}</span>
+                                                                {ua.phone_number && (
+                                                                    <span className="opacity-70 font-mono">{ua.phone_number}</span>
+                                                                )}
+                                                                {ua.is_authentic === false && (
+                                                                    <span className="text-red-500 font-semibold">· Unverified</span>
+                                                                )}
+                                                            </div>
+                                                        ))}
+                                                    </div>
+                                                </div>
                                             )}
                                         </div>
                                     ))}
@@ -234,26 +335,6 @@ function FindingCard({ finding, index }) {
                                     Shortcodes: {shortcodes.join(', ')}
                                 </p>
                             )}
-                        </div>
-                    )}
-
-                    {/* User agents */}
-                    {userAgents.length > 0 && (
-                        <div>
-                            <p className="text-xs font-semibold text-slate-500 dark:text-slate-400 mb-2 uppercase tracking-wide flex items-center gap-1">
-                                <Users className="w-3 h-3" /> User Agents
-                            </p>
-                            <div className="flex flex-wrap gap-2">
-                                {userAgents.map((ua, i) => (
-                                    <div key={i} className="text-xs bg-blue-50 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300 px-3 py-1.5 rounded-lg">
-                                        <span className="font-medium">{ua.name}</span>
-                                        {ua.phone_number && <span className="ml-1 opacity-70">{ua.phone_number}</span>}
-                                        {ua.is_authentic === false && (
-                                            <span className="ml-1 text-red-500 font-semibold">· Unverified</span>
-                                        )}
-                                    </div>
-                                ))}
-                            </div>
                         </div>
                     )}
                 </div>
@@ -457,13 +538,9 @@ export default function FraudReportModal({ isOpen, onClose, companyId }) {
                             </div>
 
                             {/* Fraud type breakdown */}
-                            <div className="grid grid-cols-2 sm:grid-cols-5 gap-3 mb-6">
+                            <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-3 mb-6">
                                 {Object.entries(FRAUD_TYPE_META).map(([type, meta]) => {
-                                    const count = type === 'split_transaction' ? summary.split_transactions
-                                        : type === 'rollover_fraud' ? summary.rollover_fraud
-                                        : type === 'rapid_back_forth' ? summary.rapid_back_forth
-                                        : type === 'deposit_withdrawal_recovery' ? summary.deposit_withdrawal_recovery
-                                        : summary.high_frequency_daily;
+                                    const count = summary[meta.summaryKey] ?? 0;
                                     return (
                                         <div key={type} className="bg-slate-50 dark:bg-slate-700 rounded-xl p-3">
                                             <p className="text-xs font-semibold text-slate-500 dark:text-slate-400 mb-1">{meta.label}</p>
@@ -485,12 +562,12 @@ export default function FraudReportModal({ isOpen, onClose, companyId }) {
                                 <>
                                     {/* Filter tabs */}
                                     <div className="flex gap-2 mb-4 flex-wrap">
-                                        {[{ value: 'all', label: `All (${findings.length})` },
-                                        { value: 'split_transaction', label: `Split (${summary.split_transactions})` },
-                                        { value: 'rollover_fraud', label: `Rollover (${summary.rollover_fraud})` },
-                                        { value: 'rapid_back_forth', label: `Rapid B&F (${summary.rapid_back_forth})` },
-                                        { value: 'deposit_withdrawal_recovery', label: `Dep-Withdrawal (${summary.deposit_withdrawal_recovery})` },
-                                        { value: 'high_frequency_daily', label: `High Freq (${summary.high_frequency_daily})` },
+                                        {[
+                                        { value: 'all', label: `All (${findings.length})` },
+                                        ...Object.entries(FRAUD_TYPE_META).map(([type, meta]) => ({
+                                            value: type,
+                                            label: `${meta.tabLabel} (${summary[meta.summaryKey] ?? 0})`,
+                                        })),
                                         ].map(tab => (
                                             <button key={tab.value} onClick={() => setActiveType(tab.value)}
                                                 className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-colors ${activeType === tab.value

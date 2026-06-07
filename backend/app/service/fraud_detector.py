@@ -95,6 +95,14 @@ TRANSACTION DETAILS
 -------------------
 {transaction_details}
 
+AGENT COMPANY
+-------------
+{agent_company_details}
+
+USER AGENTS
+-----------
+{user_agent_details}
+
 REASON FOR FLAG
 ---------------
 {explanation}
@@ -135,6 +143,14 @@ TRANSACTION DETAILS
 -------------------
 {transaction_details}
 
+AGENT COMPANY
+-------------
+{agent_company_details}
+
+USER AGENTS
+-----------
+{user_agent_details}
+
 REASON FOR FLAG
 ---------------
 {explanation}
@@ -173,6 +189,14 @@ RECEIPT NUMBERS
 TRANSACTION DETAILS
 -------------------
 {transaction_details}
+
+AGENT COMPANY
+-------------
+{agent_company_details}
+
+USER AGENTS
+-----------
+{user_agent_details}
 
 REASON FOR FLAG
 ---------------
@@ -993,7 +1017,11 @@ ACTION REQUIRED: Please review these transactions immediately.
                 window_txns = [current]
 
                 for j in range(i + 1, len(valid_txns)):
-                    time_diff = (valid_txns[j]['completion_time'] - current['completion_time']).total_seconds() / 60
+                    t1 = valid_txns[j]['completion_time']
+                    t2 = current['completion_time']
+                    if t1 is None or t2 is None:
+                        continue
+                    time_diff = (t1 - t2).total_seconds() / 60
                     if time_diff <= time_window:
                         window_txns.append(valid_txns[j])
                     else:
@@ -1069,6 +1097,61 @@ ACTION REQUIRED: Please review these transactions immediately.
                 )
                 results.append(result)
 
+            # --- Strategy 4: Large anchor + many small opposite-direction transactions ---
+            # Detects: one large deposit followed by many small withdrawals (or vice versa)
+            # within the configured time window.
+            for i, anchor in enumerate(valid_txns):
+                anchor_paid_in = float(anchor.get('paid_in') or 0)
+                anchor_withdrawn = float(anchor.get('withdrawn') or 0)
+                anchor_amount = anchor_paid_in if anchor_paid_in > 0 else anchor_withdrawn
+                if anchor_amount <= 0:
+                    continue
+                anchor_is_deposit = anchor_paid_in > 0
+
+                # Collect opposite-direction transactions within the time window
+                small_txns = []
+                for j, other in enumerate(valid_txns):
+                    if j == i:
+                        continue
+                    other_paid_in = float(other.get('paid_in') or 0)
+                    other_is_deposit = other_paid_in > 0
+                    # Must be opposite direction
+                    if other_is_deposit == anchor_is_deposit:
+                        continue
+                    t1 = other['completion_time']
+                    t2 = anchor['completion_time']
+                    if t1 is None or t2 is None:
+                        continue
+                    if abs((t1 - t2).total_seconds() / 60) <= time_window:
+                        small_txns.append(other)
+
+                if len(small_txns) < split_threshold:
+                    continue
+
+                small_total = sum(abs(float(t.get('paid_in') or t.get('withdrawn') or 0)) for t in small_txns)
+                small_avg = small_total / len(small_txns)
+
+                # Anchor must be meaningfully larger than each individual small transaction
+                if anchor_amount < small_avg * 1.5:
+                    continue
+
+                if small_total < split_total_threshold:
+                    continue
+
+                group = [anchor] + small_txns
+                receipt_key = frozenset(t['receipt_no'] for t in group)
+                if receipt_key in seen_receipt_sets:
+                    continue
+                seen_receipt_sets.add(receipt_key)
+
+                direction = f"large {'deposit' if anchor_is_deposit else 'withdrawal'} + {len(small_txns)} small {'withdrawal' if anchor_is_deposit else 'deposit'}s"
+                result = self._build_split_result(
+                    phone, group, small_avg, anchor_amount + small_total, time_window,
+                    fraud_score=min(55 + len(small_txns) * 8, 100),
+                    label=direction
+                )
+                results.append(result)
+
         return results
 
     def _build_split_result(self, phone: str, group: List[Dict], avg_amount: float,
@@ -1094,7 +1177,9 @@ ACTION REQUIRED: Please review these transactions immediately.
                 'agent_id': txn.get('agent_id')
             })
 
-        time_span = (group[-1]['completion_time'] - group[0]['completion_time']).total_seconds() / 60 if len(group) > 1 else 0
+        t_end = group[-1]['completion_time']
+        t_start = group[0]['completion_time']
+        time_span = (t_end - t_start).total_seconds() / 60 if (len(group) > 1 and t_end and t_start) else 0
 
         explanation = (
             f"SPLIT TRANSACTION FRAUD DETECTED ({label}): {len(group)} transactions "
@@ -1235,13 +1320,16 @@ ACTION REQUIRED: Please review these transactions immediately.
         if not transactions:
             return []
         
-        sorted_txns = sorted(transactions, key=lambda x: x['completion_time'])
+        sorted_txns = sorted(transactions, key=lambda x: x['completion_time'] or datetime.min)
         clusters = []
         current_cluster = [sorted_txns[0]]
-        
+
         for i in range(1, len(sorted_txns)):
             prev_time = current_cluster[-1]['completion_time']
             curr_time = sorted_txns[i]['completion_time']
+            if prev_time is None or curr_time is None:
+                current_cluster.append(sorted_txns[i])
+                continue
             time_diff = (curr_time - prev_time).total_seconds() / 60
             
             if time_diff <= self.config['time_window_minutes'] * 2:
@@ -1288,7 +1376,9 @@ ACTION REQUIRED: Please review these transactions immediately.
 
         # Calculate time span
         if len(transactions) > 1:
-            time_span = (transactions[-1]['completion_time'] - transactions[0]['completion_time']).total_seconds() / 60
+            t_end = transactions[-1]['completion_time']
+            t_start = transactions[0]['completion_time']
+            time_span = (t_end - t_start).total_seconds() / 60 if (t_end and t_start) else 0
         else:
             time_span = 0
 
@@ -1480,8 +1570,9 @@ ACTION REQUIRED: Please review these transactions immediately.
         """Run all fraud detection algorithms."""
         logger.info(f"Starting fraud detection on {len(transactions)} transactions")
         
-        # Parse phone numbers and names
+        # Normalize completion_time to datetime objects and parse phone/names
         for txn in transactions:
+            txn['completion_time'] = self.parse_datetime(txn.get('completion_time'))
             phone, name = self._parse_other_party_info(txn.get('other_party_info', ''))
             txn['phone_number'] = phone
             txn['name'] = name
@@ -1549,6 +1640,42 @@ ACTION REQUIRED: Please review these transactions immediately.
             'culpable_agents': culpable_data
         }
     
+    def _format_agent_info_plain_text(self, agent_info: Dict) -> Tuple[str, str]:
+        """Return (agent_company_text, user_agent_text) from an agent_info dict."""
+        companies = agent_info.get('agent_companies', [])
+        users = agent_info.get('user_agents', [])
+
+        if companies:
+            co_lines = []
+            for ac in companies:
+                co_lines.append(
+                    f"  - {ac.get('company_name') or 'Unknown'} "
+                    f"| Short Code: {ac.get('short_code') or 'N/A'} "
+                    f"| Agent #: {ac.get('agent_number') or 'N/A'} "
+                    f"| Store #: {ac.get('store_number') or 'N/A'} "
+                    f"| Location: {ac.get('location') or 'N/A'} "
+                    f"| Risk: {ac.get('fraud_risk_level') or 'N/A'}"
+                )
+            agent_company_text = "\n".join(co_lines)
+        else:
+            agent_company_text = "No agent company identified."
+
+        if users:
+            ua_lines = []
+            for ua in users:
+                verified = "Verified" if ua.get('is_authentic') else "Unverified"
+                ua_lines.append(
+                    f"  - {ua.get('name') or 'Unknown'} "
+                    f"| ID: {ua.get('idnumber') or 'N/A'} "
+                    f"| Phone: {ua.get('phone_number') or 'N/A'} "
+                    f"| {verified}"
+                )
+            user_agent_text = "\n".join(ua_lines)
+        else:
+            user_agent_text = "No user agents identified."
+
+        return agent_company_text, user_agent_text
+
     def _format_transaction_details_plain_text(self, transaction_details: List[Dict]) -> str:
         """Format transaction details as plain text for notifications."""
         if not transaction_details:
@@ -1596,6 +1723,10 @@ ACTION REQUIRED: Please review these transactions immediately.
         transaction_details = detection_result.get('transaction_details', [])
         transaction_details_text = self._format_transaction_details_plain_text(transaction_details)
 
+        # Format agent company and user agent info
+        agent_info = detection_result.get('agent_info', {})
+        agent_company_details, user_agent_details = self._format_agent_info_plain_text(agent_info)
+
         # Get common fields
         detection_time = detection_result['detection_time'].strftime('%Y-%m-%d %H:%M:%S') if hasattr(detection_result.get('detection_time'), 'strftime') else str(detection_result.get('detection_time', 'Unknown'))
         account_phone = detection_result.get('account_phone', 'Unknown')
@@ -1620,6 +1751,8 @@ ACTION REQUIRED: Please review these transactions immediately.
                 avg_amount=avg_amount,
                 receipt_numbers=receipt_numbers_text,
                 transaction_details=transaction_details_text,
+                agent_company_details=agent_company_details,
+                user_agent_details=user_agent_details,
                 explanation=explanation
             )
         elif fraud_type == 'rollover_fraud':
@@ -1635,6 +1768,8 @@ ACTION REQUIRED: Please review these transactions immediately.
                 avg_amount=avg_amount,
                 receipt_numbers=receipt_numbers_text,
                 transaction_details=transaction_details_text,
+                agent_company_details=agent_company_details,
+                user_agent_details=user_agent_details,
                 explanation=explanation
             )
         elif fraud_type == 'rapid_back_forth':
@@ -1649,6 +1784,8 @@ ACTION REQUIRED: Please review these transactions immediately.
                 net_flow=detection_result.get('net_flow', 0),
                 receipt_numbers=receipt_numbers_text,
                 transaction_details=transaction_details_text,
+                agent_company_details=agent_company_details,
+                user_agent_details=user_agent_details,
                 explanation=explanation
             )
         else:

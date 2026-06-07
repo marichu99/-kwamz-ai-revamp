@@ -31,3 +31,4 @@ minio
 resend
 cryptography
 weasyprint
+anthropic

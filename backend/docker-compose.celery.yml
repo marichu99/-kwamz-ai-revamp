@@ -26,19 +26,16 @@ services:
     environment:
       - FLASK_ENV=production
       # Use host.docker.internal to connect to host's PostgreSQL (override .env values)
-      - DATABASE_URL=postgresql://postgres:postgres@host.docker.internal:5432/mpesaglobal
+      - DATABASE_URL=postgresql://postgres:postgres@host.docker.internal:5432/mpesaglobaldev
       # Individual DB vars for connection_pool.py (explicit values for Docker)
       - DB_HOST=host.docker.internal
       - DB_PORT=5432
-      - DB_NAME=mpesaglobal
+      - DB_NAME=mpesaglobaldev
       - DB_USER=postgres
       - DB_PASSWORD=postgres
       - DB_SSLMODE=prefer
       - CELERY_BROKER_URL=redis://redis:6379/0
       - CELERY_RESULT_BACKEND=redis://redis:6379/0
-      - GOOGLE_APPLICATION_CREDENTIALS=/app/credentials/service_account.json
-    volumes:
-      - ./service_account.json:/app/credentials/service_account.json:ro
     depends_on:
       redis:
         condition: service_healthy
@@ -57,19 +54,16 @@ services:
     environment:
       - FLASK_ENV=production
       # Use host.docker.internal to connect to host's PostgreSQL (override .env values)
-      - DATABASE_URL=postgresql://postgres:postgres@host.docker.internal:5432/mpesaglobal
+      - DATABASE_URL=postgresql://postgres:postgres@host.docker.internal:5432/mpesaglobaldev
       # Individual DB vars for connection_pool.py (explicit values for Docker)
       - DB_HOST=host.docker.internal
       - DB_PORT=5432
-      - DB_NAME=mpesaglobal
+      - DB_NAME=mpesaglobaldev
       - DB_USER=postgres
       - DB_PASSWORD=postgres
       - DB_SSLMODE=prefer
       - CELERY_BROKER_URL=redis://redis:6379/0
       - CELERY_RESULT_BACKEND=redis://redis:6379/0
-      - GOOGLE_APPLICATION_CREDENTIALS=/app/credentials/service_account.json
-    volumes:
-      - ./service_account.json:/app/credentials/service_account.json:ro
     depends_on:
       redis:
         condition: service_healthy

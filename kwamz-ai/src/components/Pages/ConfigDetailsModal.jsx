@@ -59,6 +59,7 @@ function ConfigDetailsModal({ isOpen, onClose, onSubmit, isLoading, config: conf
 
     // System Settings
     is_active: false,
+    periodic_check_interval_minutes: 60,
 
     // Per-fraud-type configs
     fraud_type_configs: null,
@@ -299,6 +300,7 @@ function ConfigDetailsModal({ isOpen, onClose, onSubmit, isLoading, config: conf
         notify_rapid_patterns: configData.notify_rapid_patterns !== undefined ? configData.notify_rapid_patterns : true,
         email_subject_prefix: configData.email_subject_prefix || '[Fraud Alert] ',
         is_active: configData.is_active || false,
+        periodic_check_interval_minutes: configData.periodic_check_interval_minutes || 60,
         fraud_type_configs: ftc,
       });
     } else {
@@ -483,6 +485,23 @@ function ConfigDetailsModal({ isOpen, onClose, onSubmit, isLoading, config: conf
                       className="w-full px-4 py-2.5 bg-slate-100 dark:bg-slate-700 border border-slate-200 dark:border-slate-600 rounded-xl text-slate-800 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all"
                       placeholder="Describe this configuration..."
                     />
+                  </div>
+
+                  <div>
+                    <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">
+                      Periodic Check Interval (minutes)
+                    </label>
+                    <input
+                      type="number"
+                      name="periodic_check_interval_minutes"
+                      value={formData.periodic_check_interval_minutes}
+                      onChange={handleChange}
+                      min="1"
+                      className="w-full px-4 py-2.5 bg-slate-100 dark:bg-slate-700 border border-slate-200 dark:border-slate-600 rounded-xl text-slate-800 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all"
+                    />
+                    <p className="mt-1.5 text-xs text-slate-500 dark:text-slate-400">
+                      How often the fraud detection worker runs. Celery Beat triggers every minute but respects this interval.
+                    </p>
                   </div>
 
                   {!configData && (

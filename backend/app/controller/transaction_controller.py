@@ -637,15 +637,18 @@ def get_dashboard_analytics():
         # Remove None values
         filters = {k: v for k, v in filters.items() if v is not None}
 
-        # Resolve commission shortcodes for the current user's companies
+        # Resolve company IDs for commission filtering (COMM-* records use company_id FK).
+        # Collect all companies the user is linked to as owner (user_id) or agent (agent_user_id).
         if role in ('admin', 'administrator'):
-            filters['commission_shortcodes'] = None  # all shortcodes
-        elif role == 'agent':
-            companies = Company.query.filter_by(agent_user_id=current_user_id).all()
-            filters['commission_shortcodes'] = [c.shortcode for c in companies if c.shortcode]
+            filters['commission_company_ids'] = None  # all companies
         else:
-            companies = Company.query.filter_by(user_id=current_user_id).all()
-            filters['commission_shortcodes'] = [c.shortcode for c in companies if c.shortcode]
+            owned = Company.query.filter_by(user_id=current_user_id).all()
+            agented = Company.query.filter_by(agent_user_id=current_user_id).all()
+            all_ids = list({c.id for c in owned + agented})
+            filters['commission_company_ids'] = all_ids
+        
+
+        print(f"Dashboard analytics filters: {filters}")
 
         result = transaction_service.get_dashboard_analytics(filters)
 
@@ -696,9 +699,10 @@ def get_commission_till_balances():
 
         page = request.args.get('page', 1, type=int)
         per_page = request.args.get('per_page', 10, type=int)
+        updated_after = request.args.get('updated_after', None)
 
         result = transaction_service.get_commission_till_balances(
-            company_ids=company_ids, page=page, per_page=per_page
+            company_ids=company_ids, page=page, per_page=per_page, updated_after=updated_after
         )
         return jsonify(result), 200 if result['success'] else 400
     except Exception as e:

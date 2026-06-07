@@ -84,6 +84,40 @@ def get_swaps_by_company():
     return jsonify(result), 200
 
 
+@swap_bp.route('/by-company-till', methods=['GET'])
+@jwt_required()
+def get_swaps_by_company_and_till():
+    current_user_id = get_jwt_identity()
+    filters = {k: v for k, v in {
+        'agent_company_id': request.args.get('agent_company_id'),
+        'start_date':       request.args.get('start_date'),
+        'end_date':         request.args.get('end_date'),
+    }.items() if v}
+    service = SwapService()
+    result, error = service.get_swaps_by_company_and_till(current_user_id, filters)
+    if error:
+        return jsonify({'error': error}), 500
+    return jsonify(result), 200
+
+
+@swap_bp.route('/by-agent', methods=['GET'])
+@jwt_required()
+def get_swaps_by_agent():
+    current_user_id = get_jwt_identity()
+    filters = {
+        'agent_company_id': request.args.get('agent_company_id'),
+        'start_date': request.args.get('start_date'),
+        'end_date': request.args.get('end_date'),
+    }
+    filters = {k: v for k, v in filters.items() if v}
+
+    service = SwapService()
+    result, error = service.get_swaps_grouped_by_agent(current_user_id, filters)
+    if error:
+        return jsonify({'error': error}), 500
+    return jsonify(result), 200
+
+
 @swap_bp.route('/report', methods=['GET'])
 @jwt_required()
 def get_swap_report():

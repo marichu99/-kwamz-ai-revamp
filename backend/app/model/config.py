@@ -41,7 +41,7 @@ class Config(db.Model):
                 'transactions from the same account within a short time window.'
             ),
             'parameters': {
-                'time_window_minutes': {'label': 'Time Window (minutes)', 'type': 'integer', 'min': 1, 'max': 60},
+                'time_window_minutes': {'label': 'Time Window (minutes)', 'type': 'integer', 'min': 1, 'max': 240},
                 'amount_variance': {'label': 'Amount Variance', 'type': 'float', 'min': 0.01, 'max': 1.0},
                 'split_threshold': {'label': 'Min Split Transactions', 'type': 'integer', 'min': 2, 'max': 50},
                 'split_min_amount': {'label': 'Min Amount (KES)', 'type': 'float', 'min': 0},

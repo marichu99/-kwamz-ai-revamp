@@ -684,9 +684,9 @@ class TransactionService:
             print(f'[COMM-BALANCE] Failed: {e}')
             return {'success': False, 'error': str(e)}
 
-    def get_commission_till_balances(self, company_ids: list = None, page: int = 1, per_page: int = 10) -> dict:
+    def get_commission_till_balances(self, company_ids: list = None, page: int = 1, per_page: int = 10, updated_after: str = None) -> dict:
         """
-        Return the latest COMM-{shortcode}-{YYYYMMDD} snapshot per till, paginated.
+        Return the latest COMM-{shortcode} snapshot per till, paginated.
         One row per business_shortcode, ordered by shortcode.
         """
         try:
@@ -719,6 +719,13 @@ class TransactionService:
                 )
                 .order_by(Transaction.business_shortcode)
             )
+
+            if updated_after:
+                try:
+                    cutoff = datetime.fromisoformat(updated_after)
+                    base_query = base_query.filter(Transaction.updated_at >= cutoff)
+                except ValueError:
+                    pass
 
             total = base_query.count()
             pages = max(1, (total + per_page - 1) // per_page)
@@ -1509,8 +1516,19 @@ class TransactionService:
             # Step 2: Recent transactions check
             recent_detections = self._check_recent_transactions_sync(user, fraud_service)
 
-            # Step 3: Send summary to user with transactions for agent info
-            self._send_detection_summary_sync(user, historical_report, recent_detections, transactions=all_transactions)
+            # Step 3: Filter to only fraud types the user has notifications enabled for
+            notify_map = {
+                'split_transaction': config_dict.get('notify_split_transactions', True),
+                'rollover_fraud': config_dict.get('notify_rollover_fraud', True),
+                'rapid_back_forth': config_dict.get('notify_rapid_patterns', True),
+            }
+            notifiable_detections = [
+                d for d in recent_detections
+                if notify_map.get(d.get('fraud_type'), True)
+            ]
+
+            # Step 4: Send summary to user with transactions for agent info
+            self._send_detection_summary_sync(user, historical_report, notifiable_detections, transactions=all_transactions)
 
             logger.info(f"Completed fraud detection for user: {user.email}")
             
@@ -1669,98 +1687,119 @@ class TransactionService:
             </table>
         '''        
 
-        # --- Detections Table ---
+        # --- Detections grouped by Agent Company ---
         if recent_detections:
-            html += '''
+            from collections import defaultdict
+            from app.model.agentcompany import AgentCompany
+            from app.model.useragent import UserAgent
+
+            # Build shortcode → user agents mapping
+            def get_user_agents_for_shortcode(sc):
+                ac = AgentCompany.query.filter_by(short_code=str(sc)).first()
+                if not ac:
+                    return []
+                return ac.user_agents or []
+
+            # Group detections by agent company (shortcode)
+            company_groups = defaultdict(list)
+            for detection in recent_detections:
+                sc = str(detection.get('business_shortcode') or 'Unknown')
+                company_groups[sc].append(detection)
+
+            html += f'''
             <h2 style="font-size:16px;color:#1e293b;margin:24px 0 12px;border-bottom:2px solid #e2e8f0;padding-bottom:8px;">
-            Fraudulent Transactions Detected
+              Fraudulent Transactions Detected &mdash; {len(recent_detections)} alert(s) across {len(company_groups)} agent compan{'y' if len(company_groups)==1 else 'ies'}
             </h2>
-            <div style="overflow-x:auto;width:100%;">
-            <table style="width:140%;border-collapse:collapse;font-size:12px;border:1px solid #e2e8f0;">
-                <thead>
-                <tr style="background:#f1f5f9;">
-                    <th style="padding:10px;border:1px solid #e2e8f0;text-align:left;width:3%;">#</th>
-                    <th style="padding:10px;border:1px solid #e2e8f0;text-align:left;width:7%;">Fraud Type</th>
-                    <th style="padding:10px;border:1px solid #e2e8f0;text-align:left;width:5%;">Risk</th>
-                    <th style="padding:10px;border:1px solid #e2e8f0;text-align:left;width:10%;">Account</th>
-                    <th style="padding:10px;border:1px solid #e2e8f0;text-align:right;width:8%;">Amount (KES)</th>
-                    <th style="padding:10px;border:1px solid #e2e8f0;text-align:left;width:7%;">Shortcode</th>
-                    <th style="padding:10px;border:1px solid #e2e8f0;text-align:left;width:15%;">Agent Company / Location</th>
-                    <th style="padding:10px;border:1px solid #e2e8f0;text-align:left;width:25%;">Transactions</th>
-                    <th style="padding:10px;border:1px solid #e2e8f0;text-align:left;width:20%;">Reason</th>
-                </tr>
-                </thead>
-                <tbody>
             '''
 
-            for idx, detection in enumerate(recent_detections[:20], 1):
-                fraud_type = detection.get('fraud_type', 'Unknown')
-                risk_level = detection.get('risk_level', 'UNKNOWN')
-                account_phone = detection.get('account_phone', 'Unknown')
-                account_name = detection.get('account_name', 'Unknown')
-                total_amount = detection.get('total_amount', 0)
-                business_shortcode = detection.get('business_shortcode', 'N/A')
-                explanation = detection.get('explanation', 'No explanation available.')
+            global_idx = 1
+            for sc, detections in sorted(company_groups.items()):
+                # Agent company header
+                ac = AgentCompany.query.filter_by(short_code=sc).first()
+                company_name = ac.company_name if ac else f'Shortcode {sc}'
+                location = (ac.location or 'Unknown') if ac else 'Unknown'
+                user_agents_list = get_user_agents_for_shortcode(sc)
+                ua_html = ''
+                for ua in user_agents_list:
+                    fullname = f"{ua.firstname or ''} {ua.lastname or ''}".strip() or 'Unknown'
+                    phone = ua.phone_number or 'N/A'
+                    ua_html += f'<span style="display:inline-block;background:#dbeafe;color:#1e40af;border-radius:4px;padding:2px 8px;margin:2px 4px 2px 0;font-size:11px;">👤 {fullname} &nbsp;|&nbsp; {phone}</span>'
 
-                # Agent company info
-                agent_info = detection.get('agent_info', {})
-                agent_companies = agent_info.get('agent_companies', [])
-                agent_col = ''
-                if agent_companies:
-                    for ac in agent_companies[:2]:
-                        agent_col += f"<div style='margin-bottom:6px;'><strong>{ac.get('company_name', 'N/A')}</strong><br/>"
-                        agent_col += f"<span style='color:#475569;'>SC: {ac.get('short_code', 'N/A')}</span><br/>"
-                        agent_col += f"<span style='color:#475569;'>Loc: {ac.get('location', 'N/A')}</span><br/>"
-                        agent_col += f"<span style='color:#475569;'>Agent/Store: {ac.get('agent_number', 'N/A')}/{ac.get('store_number', 'N/A')}</span></div>"
-                else:
-                    agent_col = '<span style="color:#64748b;">N/A</span>'
-
-                # Transaction details mini-list
-                txn_details = detection.get('transaction_details', [])
-                txn_col = ''
-                if txn_details:
-                    for txn in txn_details[:5]:
-                        party = ''
-                        if txn.get('party_name') or txn.get('party_phone'):
-                            party = f"<span style='color:#475569;'> → {txn.get('party_name', '')} ({txn.get('party_phone', '')})</span>"
-                        txn_col += (
-                            f"<div style='margin-bottom:6px;padding-bottom:4px;border-bottom:1px dashed #e2e8f0;'>"
-                            f"<span style='font-weight:600;'>{txn.get('receipt_no', 'N/A')}</span> "
-                            f"<span style='font-weight:600;color:#0f172a;'>KES {txn.get('amount', 0):,.2f}</span> "
-                            f"<span style='background:#f1f5f9;padding:2px 6px;border-radius:4px;'>{txn.get('type', '')}</span> "
-                            f"<span style='color:#64748b;display:block;margin-top:2px;'>{txn.get('time', '')}</span>"
-                            f"{party}</div>"
-                        )
-                    if len(txn_details) > 5:
-                        txn_col += f"<div style='color:#64748b;font-style:italic;background:#f8fafc;padding:4px;border-radius:4px;'>+{len(txn_details)-5} more transactions</div>"
-                else:
-                    receipt_nos = detection.get('receipt_nos', [])
-                    txn_col = f"<span style='color:#0f172a;'>{', '.join(receipt_nos[:5])}</span>"
-                    if len(receipt_nos) > 5:
-                        txn_col += f'<span style="color:#64748b;display:block;margin-top:4px;">+{len(receipt_nos)-5} more</span>'
-
-                row_bg = '#ffffff' if idx % 2 == 1 else '#f8fafc'
                 html += f'''
-                <tr style="background:{row_bg};">
-                <td style="padding:12px 10px;border:1px solid #e2e8f0;text-align:center;font-weight:600;">{idx}</td>
-                <td style="padding:12px 10px;border:1px solid #e2e8f0;">{fraud_badge(fraud_type)}</td>
-                <td style="padding:12px 10px;border:1px solid #e2e8f0;">{risk_badge(risk_level)}</td>
-                <td style="padding:12px 10px;border:1px solid #e2e8f0;">
-                    <span style="font-weight:600;">{account_phone}</span><br/>
-                    <span style="color:#475569;font-size:11px;">{account_name}</span>
-                </td>
-                <td style="padding:12px 10px;border:1px solid #e2e8f0;text-align:right;font-weight:700;font-size:13px;">KES {total_amount:,.2f}</td>
-                <td style="padding:12px 10px;border:1px solid #e2e8f0;font-family:monospace;">{business_shortcode}</td>
-                <td style="padding:12px 10px;border:1px solid #e2e8f0;font-size:11px;line-height:1.5;">{agent_col}</td>
-                <td style="padding:12px 10px;border:1px solid #e2e8f0;font-size:11px;line-height:1.5;">{txn_col}</td>
-                <td style="padding:12px 10px;border:1px solid #e2e8f0;font-size:11px;line-height:1.5;word-wrap:break-word;max-width:300px;">{explanation}</td>
-                </tr>
+                <div style="margin-bottom:28px;border:1px solid #e2e8f0;border-radius:8px;overflow:hidden;">
+                  <div style="background:#1e293b;padding:12px 16px;display:flex;align-items:center;justify-content:space-between;">
+                    <div>
+                      <span style="color:#fff;font-weight:700;font-size:14px;">{company_name}</span>
+                      <span style="color:#94a3b8;font-size:12px;margin-left:12px;">SC: {sc} &nbsp;|&nbsp; {location}</span>
+                    </div>
+                    <span style="background:#3b82f6;color:#fff;border-radius:12px;padding:2px 10px;font-size:12px;font-weight:600;">{len(detections)} alert{'s' if len(detections)!=1 else ''}</span>
+                  </div>
+                  {'<div style="background:#eff6ff;padding:8px 16px;font-size:12px;">' + ua_html + '</div>' if ua_html else ''}
+                  <table style="width:100%;border-collapse:collapse;font-size:12px;">
+                    <thead>
+                      <tr style="background:#f8fafc;border-bottom:2px solid #e2e8f0;">
+                        <th style="padding:8px 10px;text-align:left;width:3%;color:#64748b;">#</th>
+                        <th style="padding:8px 10px;text-align:left;width:10%;color:#64748b;">Type</th>
+                        <th style="padding:8px 10px;text-align:left;width:6%;color:#64748b;">Risk</th>
+                        <th style="padding:8px 10px;text-align:left;width:14%;color:#64748b;">Account</th>
+                        <th style="padding:8px 10px;text-align:right;width:10%;color:#64748b;">Amount (KES)</th>
+                        <th style="padding:8px 10px;text-align:left;color:#64748b;">Transactions (Receipt · Amount · Type · Time · Party)</th>
+                        <th style="padding:8px 10px;text-align:left;width:22%;color:#64748b;">Reason</th>
+                      </tr>
+                    </thead>
+                    <tbody>
                 '''
 
-            html += '</tbody></table></div>'
+                for detection in detections[:30]:
+                    fraud_type = detection.get('fraud_type', 'Unknown')
+                    risk_level = detection.get('risk_level', 'UNKNOWN')
+                    account_phone = detection.get('account_phone') or '—'
+                    account_name = detection.get('account_name') or '—'
+                    total_amount = detection.get('total_amount', 0)
+                    explanation = detection.get('explanation', '')
+                    txn_details = detection.get('transaction_details', [])
+                    receipt_nos = detection.get('receipt_nos', [])
 
-            if len(recent_detections) > 20:
-                html += f'<p style="color:#64748b;font-size:12px;margin-top:12px;">... and {len(recent_detections) - 20} more detections not shown</p>'
+                    txn_col = ''
+                    if txn_details:
+                        for txn in txn_details:
+                            receipt = txn.get('receipt_no', 'N/A')
+                            amount = txn.get('amount', 0)
+                            ttype = txn.get('type', '')
+                            ttime = txn.get('time', '')
+                            party_name = txn.get('party_name', '')
+                            party_phone = txn.get('party_phone', '')
+                            party = f"{party_name} ({party_phone})" if (party_name or party_phone) else '—'
+                            txn_col += (
+                                f"<div style='padding:4px 0;border-bottom:1px dashed #f1f5f9;font-size:11px;'>"
+                                f"<code style='background:#f1f5f9;padding:1px 5px;border-radius:3px;'>{receipt}</code> "
+                                f"<strong>KES {float(amount):,.2f}</strong> "
+                                f"<span style='color:#6b7280;'>{ttype}</span> "
+                                f"<span style='color:#94a3b8;'>{ttime}</span> "
+                                f"→ <span style='color:#475569;'>{party}</span>"
+                                f"</div>"
+                            )
+                    elif receipt_nos:
+                        txn_col = ', '.join(f"<code style='background:#f1f5f9;padding:1px 4px;border-radius:3px;'>{r}</code>" for r in receipt_nos)
+
+                    row_bg = '#ffffff' if global_idx % 2 == 1 else '#f8fafc'
+                    html += f'''
+                      <tr style="background:{row_bg};border-bottom:1px solid #f1f5f9;">
+                        <td style="padding:10px;color:#94a3b8;text-align:center;">{global_idx}</td>
+                        <td style="padding:10px;">{fraud_badge(fraud_type)}</td>
+                        <td style="padding:10px;">{risk_badge(risk_level)}</td>
+                        <td style="padding:10px;">
+                          <div style="font-weight:600;">{account_phone}</div>
+                          <div style="color:#64748b;font-size:11px;">{account_name}</div>
+                        </td>
+                        <td style="padding:10px;text-align:right;font-weight:700;">KES {float(total_amount):,.2f}</td>
+                        <td style="padding:10px;line-height:1.6;">{txn_col}</td>
+                        <td style="padding:10px;color:#475569;font-size:11px;line-height:1.5;">{explanation}</td>
+                      </tr>
+                    '''
+                    global_idx += 1
+
+                html += '</tbody></table></div>'
 
 
         # --- Culpable Agents Table ---
@@ -2536,7 +2575,13 @@ class TransactionService:
                 self._record_fraud_alert_sync(detection, fraud_type, user)
 
                 # Send immediate email notification only for HIGH-risk detections
-                if detection.get('risk_level') == 'HIGH':
+                # and only for fraud types the user has enabled notifications for
+                _notify_flags = {
+                    'split_transaction': fraud_service.config.get('notify_split_transactions', True),
+                    'rollover_fraud': fraud_service.config.get('notify_rollover_fraud', True),
+                    'rapid_back_forth': fraud_service.config.get('notify_rapid_patterns', True),
+                }
+                if detection.get('risk_level') == 'HIGH' and _notify_flags.get(fraud_type, True):
                     receipt_nos = detection.get('receipt_nos', [])
                     if not self._should_limit_alerts(receipt_nos):
                         try:
@@ -2937,16 +2982,35 @@ class TransactionService:
             receipt_nos = detection.get('receipt_nos', [])
             receipt_hash = hash(tuple(sorted(receipt_nos)))
 
-            # Guard: do not record the same alert twice
+            # Guard 1: exact hash match (same group of receipts)
             existing = FraudAlert.query.filter_by(
                 user_id=user.id,
                 receipt_hash=receipt_hash,
             ).first()
             if existing:
-                logger.debug(
-                    f"FraudAlert for receipt_hash={receipt_hash} already exists — skipping"
-                )
+                logger.debug(f"FraudAlert receipt_hash={receipt_hash} already exists — skipping")
                 return False
+
+            # Guard 2: any individual receipt number already flagged in a prior alert
+            if receipt_nos:
+                all_alerts = FraudAlert.query.filter_by(user_id=user.id).with_entities(FraudAlert.receipt_nos).all()
+                existing_receipts = set()
+                for (rn_str,) in all_alerts:
+                    if rn_str:
+                        existing_receipts.update(r.strip() for r in rn_str.split(','))
+                overlap = existing_receipts & set(receipt_nos)
+                if overlap:
+                    logger.debug(f"Receipt number overlap {overlap} — skipping duplicate alert")
+                    return False
+
+            def _default_serializer(o):
+                if isinstance(o, (datetime, )):
+                    return o.isoformat()
+                if isinstance(o, Decimal):
+                    return float(o)
+                return str(o)
+
+            safe_details = json.loads(json.dumps(detection, default=_default_serializer))
 
             alert = FraudAlert(
                 user_id=user.id,
@@ -2960,7 +3024,7 @@ class TransactionService:
                 receipt_nos=','.join(receipt_nos),
                 transaction_ids=','.join(str(tid) for tid in detection.get('transaction_ids', [])),
                 receipt_hash=receipt_hash,
-                detection_details=detection,
+                detection_details=safe_details,
             )
 
             db.session.add(alert)
@@ -3402,12 +3466,15 @@ class TransactionService:
             Dict with business_shortcode as key and [days_since_last_scrape, latest_receipt_no] as value
             If transaction_type is None, returns nested dict: {shortcode: {'float': [...], 'commission': [...]}}
         """
+        # Use MAX(completion_time) — the date of the newest transaction we hold.
+        # This reflects how many days of data we are actually missing, and is
+        # unaffected by unrelated record updates (commission imports, fraud
+        # detection writes, etc.) that bump updated_at without adding new data.
         if transaction_type:
-            # Get last scraped for specific transaction type
             query = """
                 SELECT business_shortcode,
-                       MAX(receipt_no) AS latest_receipt_no,
-                       MAX(updated_at) AS latest_updated_at
+                       MAX(receipt_no)        AS latest_receipt_no,
+                       MAX(completion_time)   AS latest_completion_time
                 FROM transactions
                 WHERE transaction_type = %s
                 GROUP BY business_shortcode;
@@ -3419,18 +3486,17 @@ class TransactionService:
 
             return {
                 row['business_shortcode']: [
-                    (now - row['latest_updated_at'].replace(tzinfo=self.kenya_tz)).days,
+                    (now - row['latest_completion_time'].replace(tzinfo=self.kenya_tz)).days,
                     row['latest_receipt_no']
                 ]
                 for row in results
             }
         else:
-            # Get last scraped for both transaction types separately
             query = """
                 SELECT business_shortcode,
                        transaction_type,
-                       MAX(receipt_no) AS latest_receipt_no,
-                       MAX(updated_at) AS latest_updated_at
+                       MAX(receipt_no)        AS latest_receipt_no,
+                       MAX(completion_time)   AS latest_completion_time
                 FROM transactions
                 GROUP BY business_shortcode, transaction_type;
             """
@@ -3439,7 +3505,6 @@ class TransactionService:
 
             now = datetime.now(self.kenya_tz)
 
-            # Build nested dictionary: {shortcode: {'float': [...], 'commission': [...]}}
             shortcode_data = {}
             for row in results:
                 shortcode = row['business_shortcode']
@@ -3448,7 +3513,7 @@ class TransactionService:
                 if shortcode not in shortcode_data:
                     shortcode_data[shortcode] = {}
 
-                days_diff = (now - row['latest_updated_at'].replace(tzinfo=self.kenya_tz)).days
+                days_diff = (now - row['latest_completion_time'].replace(tzinfo=self.kenya_tz)).days
                 shortcode_data[shortcode][txn_type] = [days_diff, row['latest_receipt_no']]
 
             return shortcode_data
@@ -4499,6 +4564,8 @@ class TransactionService:
             prev_end_date = (start_date - timedelta(seconds=1))  # end of the day before start
             prev_start_date = (start_date - timedelta(days=days)).replace(hour=0, minute=0, second=0, microsecond=0)
 
+            print(f"Calculated date ranges - Current: {start_date} to {end_date}, Previous: {prev_start_date} to {prev_end_date}")
+
             with db_pool.get_cursor() as cursor:
                 # Build WHERE conditions
                 conditions = ["1=1"]
@@ -4507,10 +4574,12 @@ class TransactionService:
                 if 'company_id' in filters and filters['company_id']:
                     conditions.append("company_id = %s")
                     params.append(filters['company_id'])
+                    print("Added company_id filter: %s", filters['company_id'])
 
                 if 'agent_id' in filters and filters['agent_id']:
                     conditions.append("agent_id = %s")
                     params.append(filters['agent_id'])
+                    print("Added agent_id filter: %s", filters['agent_id'])
 
                 where_clause = " AND ".join(conditions)
 
@@ -4525,42 +4594,110 @@ class TransactionService:
                         COALESCE(SUM(CASE WHEN transaction_type = 'float' OR transaction_type IS NULL
                             THEN ABS(COALESCE(withdrawn, 0)) ELSE 0 END), 0) as total_withdrawals,
                         COUNT(CASE WHEN transaction_type = 'float' OR transaction_type IS NULL THEN 1 END) as float_transactions,
-                        COUNT(DISTINCT agent_id) as active_agents,
                         COUNT(DISTINCT company_id) as active_companies
                     FROM transactions
                     WHERE {where_clause}
                     AND completion_time BETWEEN %s AND %s
                 """
+                print("[ANALYTICS KPI] period=%s → %s | params=%s", start_date.date(), end_date.date(), params + [start_date, end_date])
                 cursor.execute(kpi_query, params + [start_date, end_date])
                 current_stats = cursor.fetchone()
+                print("[ANALYTICS KPI] current → txns=%s deposits=%s withdrawals=%s",
+                            current_stats['total_transactions'], current_stats['total_deposits'], current_stats['total_withdrawals'])
 
                 cursor.execute(kpi_query, params + [prev_start_date, prev_end_date])
                 prev_stats = cursor.fetchone()
+                print("[ANALYTICS KPI] prev    → txns=%s deposits=%s withdrawals=%s",
+                            prev_stats['total_transactions'], prev_stats['total_deposits'], prev_stats['total_withdrawals'])
 
-                # Commission earned: sum ABS(withdrawn) for commission transactions
-                # scoped to the current user's company shortcodes when provided.
-                commission_shortcodes = filters.get('commission_shortcodes')
-                if commission_shortcodes is not None and len(commission_shortcodes) > 0:
-                    sc_placeholders = ','.join(['%s'] * len(commission_shortcodes))
-                    commission_where = f"{where_clause} AND transaction_type = 'commission' AND business_shortcode IN ({sc_placeholders})"
-                    commission_params = params + list(commission_shortcodes)
-                else:
-                    commission_where = f"{where_clause} AND transaction_type IN ('commission_held', 'commission')"
-                    commission_params = params
+                # Active agents: distinct tills that have at least one float transaction
+                # older than 1 month (proves the till has been operational for ≥ 1 month).
+                active_agents_query = f"""
+                    SELECT COUNT(DISTINCT business_shortcode) AS active_agents
+                    FROM transactions
+                    WHERE transaction_type = 'float'
+                      AND completion_time <= NOW() - INTERVAL '1 month'
+                      AND {where_clause}
+                """
+                print("[ANALYTICS AGENTS] query params=%s", params)
+                cursor.execute(active_agents_query, params)
+                active_agents_row = cursor.fetchone()
+                active_agents_count = int(active_agents_row['active_agents'] or 0)
+                print("[ANALYTICS AGENTS] current active_agents=%s", active_agents_count)
+
+                # Previous period: tills with a float transaction older than 2 months
+                prev_active_agents_query = f"""
+                    SELECT COUNT(DISTINCT business_shortcode) AS active_agents
+                    FROM transactions
+                    WHERE transaction_type = 'float'
+                      AND completion_time <= NOW() - INTERVAL '2 months'
+                      AND {where_clause}
+                """
+                cursor.execute(prev_active_agents_query, params)
+                prev_active_agents_row = cursor.fetchone()
+                prev_active_agents_count = int(prev_active_agents_row['active_agents'] or 0)
+                print("[ANALYTICS AGENTS] prev    active_agents=%s", prev_active_agents_count)
+
+                # Commission: sum the latest per-till COMM-* snapshot balance.
+                # Each COMM-{shortcode}-{YYYYMMDD} record stores paid_in = current_balance
+                # and commission_amount = available_balance as scraped from the head-office
+                # commission dashboard.  We use DISTINCT ON to get one row per till
+                # (the most recent snapshot) then sum paid_in for the KPI total.
+                # Filter COMM-* records by company_id (integer FK), not business_shortcode
+                commission_company_ids = filters.get('commission_company_ids')
+                sc_filter = ""
+                commission_params = []
+                if commission_company_ids:
+                    sc_placeholders = ','.join(['%s'] * len(commission_company_ids))
+                    sc_filter = f"AND company_id IN ({sc_placeholders})"
+                    commission_params = list(commission_company_ids)
+                company_filter_sql = ""
 
                 commission_query = f"""
                     SELECT
-                        COUNT(*) as commission_transactions,
-                        COALESCE(SUM(ABS(COALESCE(withdrawn, 0))), 0) as total_commissions
-                    FROM transactions
-                    WHERE {commission_where}
-                    AND completion_time BETWEEN %s AND %s
+                        COUNT(*)                                AS commission_transactions,
+                        COALESCE(SUM(latest_paid_in), 0)        AS total_commissions
+                    FROM (
+                        SELECT DISTINCT ON (business_shortcode)
+                            business_shortcode,
+                            paid_in AS latest_paid_in
+                        FROM transactions
+                        WHERE receipt_no LIKE %s
+                          AND transaction_type = 'commission'
+                          {sc_filter}
+                          {company_filter_sql}
+                        ORDER BY business_shortcode, completion_time DESC
+                    ) AS latest_per_till
                 """
-                cursor.execute(commission_query, commission_params + [start_date, end_date])
+                logger.info("[ANALYTICS COMMISSION] company_ids=%s sc_filter=%r params=%s", commission_company_ids, sc_filter, ['COMM-%'] + commission_params)
+                cursor.execute(commission_query, ['COMM-%'] + commission_params)
                 current_commissions = cursor.fetchone()
+                logger.info("[ANALYTICS COMMISSION] current → tills=%s total_commissions=%s",
+                            current_commissions['commission_transactions'], current_commissions['total_commissions'])
 
-                cursor.execute(commission_query, commission_params + [prev_start_date, prev_end_date])
+                # Previous-period commission: latest snapshot before prev_end_date
+                prev_commission_query = f"""
+                    SELECT
+                        COUNT(*)                                AS commission_transactions,
+                        COALESCE(SUM(latest_paid_in), 0)        AS total_commissions
+                    FROM (
+                        SELECT DISTINCT ON (business_shortcode)
+                            business_shortcode,
+                            paid_in AS latest_paid_in
+                        FROM transactions
+                        WHERE receipt_no LIKE %s
+                          AND transaction_type = 'commission'
+                          AND completion_time <= %s
+                          {sc_filter}
+                          {company_filter_sql}
+                        ORDER BY business_shortcode, completion_time DESC
+                    ) AS latest_per_till
+                """
+                logger.info("[ANALYTICS COMMISSION] prev params=%s prev_end_date=%s", ['COMM-%', prev_end_date] + commission_params, prev_end_date)
+                cursor.execute(prev_commission_query, ['COMM-%', prev_end_date] + commission_params)
                 prev_commissions = cursor.fetchone()
+                logger.info("[ANALYTICS COMMISSION] prev    → tills=%s total_commissions=%s",
+                            prev_commissions['commission_transactions'], prev_commissions['total_commissions'])
 
                 # Calculate growth percentages
                 def calc_growth(current, previous):
@@ -4588,9 +4725,9 @@ class TransactionService:
                         'trend': 'up' if (current_commissions['total_commissions'] or 0) >= (prev_commissions['total_commissions'] or 0) else 'down'
                     },
                     'active_agents': {
-                        'value': int(current_stats['active_agents'] or 0),
-                        'change': calc_growth(current_stats['active_agents'] or 0, prev_stats['active_agents'] or 0),
-                        'trend': 'up' if (current_stats['active_agents'] or 0) >= (prev_stats['active_agents'] or 0) else 'down'
+                        'value': active_agents_count,
+                        'change': calc_growth(active_agents_count, prev_active_agents_count),
+                        'trend': 'up' if active_agents_count >= prev_active_agents_count else 'down'
                     },
                     'average_transaction': {
                         'value': round(total_volume / max(current_stats['total_transactions'] or 1, 1), 2),
@@ -4844,7 +4981,8 @@ class TransactionService:
         """Return commission_clawback transactions, newest first."""
         try:
             from app.model.transaction import Transaction
-            query = Transaction.query.filter_by(transaction_type='commission_clawback')
+            from app.model.agentcompany import AgentCompany
+            query = Transaction.query.filter(Transaction.details.ilike('%clawback%'))
 
             if filters:
                 if filters.get('start_date'):
@@ -4853,6 +4991,15 @@ class TransactionService:
                     query = query.filter(Transaction.completion_time <= filters['end_date'])
 
             rows = query.order_by(Transaction.completion_time.desc()).all()
+
+            # Build a shortcode → agent company name lookup to avoid N+1 queries
+            shortcodes = {r.business_shortcode for r in rows if r.business_shortcode}
+            agent_name_map = {}
+            if shortcodes:
+                agents = AgentCompany.query.filter(AgentCompany.business_short_code.in_(shortcodes)).all()
+                for a in agents:
+                    agent_name_map[a.business_short_code] = a.company_name
+
             data = [
                 {
                     'id': r.id,
@@ -4863,6 +5010,10 @@ class TransactionService:
                     'reason_type': r.reason_type,
                     'currency': r.currency,
                     'transaction_status': r.transaction_status,
+                    'business_shortcode': r.business_shortcode,
+                    'agent_company_name': agent_name_map.get(r.business_shortcode),
+                    'company_name': r.company.company_name if r.company else None,
+                    'company_shortcode': r.company.shortcode if r.company else None,
                 }
                 for r in rows
             ]
