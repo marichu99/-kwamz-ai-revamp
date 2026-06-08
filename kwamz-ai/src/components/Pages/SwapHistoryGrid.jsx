@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
-import { Search, ChevronDown, ChevronRight, ChevronsUpDown, MoreVertical, FileText, Download, Calendar, ArrowRightLeft, Users, X, Loader2, Undo2, AlertTriangle, Eye, Banknote, CheckCircle2, Clock, XCircle } from 'lucide-react';
+import { Search, ChevronDown, ChevronRight, ChevronsUpDown, MoreVertical, FileText, Download, Calendar, ArrowRightLeft, Users, X, Loader2, Undo2, AlertTriangle, Eye, Banknote, CheckCircle2, Clock, XCircle, Trash2 } from 'lucide-react';
 import axios from 'axios';
 import config from '../../Config';
 import { useToast } from './ToastProvider';
@@ -26,6 +26,8 @@ function SwapHistoryGrid() {
   const [payoutAmounts, setPayoutAmounts] = useState({});
   const [isPayoutLoading, setIsPayoutLoading] = useState(false);
   const [swapPayouts, setSwapPayouts] = useState({});
+  const [deleteConfirm, setDeleteConfirm] = useState(null); // { shortcode, till_name, total_swaps }
+  const [isDeleting, setIsDeleting] = useState(false);
   const { showToast } = useToast();
   const dropdownRef = useRef(null);
 
@@ -234,6 +236,26 @@ function SwapHistoryGrid() {
 
   const handleApplyDateFilter = () => {
     fetchSwapHistory();
+  };
+
+  const handleConfirmDelete = async () => {
+    if (!deleteConfirm) return;
+    setIsDeleting(true);
+    try {
+      const token = localStorage.getItem('token');
+      const res = await axios.delete(
+        `${config.API_URL}/swaps/by-shortcode/${deleteConfirm.shortcode}`,
+        { headers: { Authorization: `Bearer ${token}` } }
+      );
+      showToast(res.data.message || 'Swaps deleted', 'success');
+      setDeleteConfirm(null);
+      fetchSwapHistory();
+    } catch (error) {
+      const msg = error.response?.data?.error || 'Failed to delete swaps';
+      showToast(msg, 'error');
+    } finally {
+      setIsDeleting(false);
+    }
   };
 
   // Payout helpers
@@ -508,26 +530,44 @@ function SwapHistoryGrid() {
                       <div key={till.agent_company_id}>
 
                         {/* Till sub-header */}
-                        <button
-                          onClick={() => toggleTill(till.agent_company_id)}
-                          className="w-full flex items-center justify-between px-6 py-2.5 bg-slate-100/60 dark:bg-slate-700/30 hover:bg-slate-100 dark:hover:bg-slate-700/50 transition-colors"
-                        >
-                          <div className="flex items-center gap-2">
+                        <div className="group flex items-center justify-between px-6 py-2.5 bg-slate-100/60 dark:bg-slate-700/30 hover:bg-slate-100 dark:hover:bg-slate-700/50 transition-colors">
+                          <button
+                            onClick={() => toggleTill(till.agent_company_id)}
+                            className="flex items-center gap-2 flex-1 min-w-0 text-left"
+                          >
                             {expandedTills[till.agent_company_id]
-                              ? <ChevronDown className="w-3.5 h-3.5 text-slate-400" />
-                              : <ChevronRight className="w-3.5 h-3.5 text-slate-400" />}
-                            <ArrowRightLeft className="w-3.5 h-3.5 text-orange-500" />
-                            <span className="text-sm font-medium text-slate-700 dark:text-slate-300">{till.till_name || '—'}</span>
+                              ? <ChevronDown className="w-3.5 h-3.5 text-slate-400 flex-shrink-0" />
+                              : <ChevronRight className="w-3.5 h-3.5 text-slate-400 flex-shrink-0" />}
+                            <ArrowRightLeft className="w-3.5 h-3.5 text-orange-500 flex-shrink-0" />
+                            <span className="text-sm font-medium text-slate-700 dark:text-slate-300 truncate">{till.till_name || '—'}</span>
                             {till.short_code && (
-                              <span className="text-xs font-mono text-slate-400 dark:text-slate-500 bg-slate-100 dark:bg-slate-700 px-1.5 py-0.5 rounded">
+                              <span className="text-xs font-mono text-slate-400 dark:text-slate-500 bg-slate-100 dark:bg-slate-700 px-1.5 py-0.5 rounded flex-shrink-0">
                                 {till.short_code}
                               </span>
                             )}
+                          </button>
+                          <div className="flex items-center gap-2 flex-shrink-0">
+                            <span className="px-2 py-0.5 rounded-full text-xs font-medium bg-slate-200 text-slate-600 dark:bg-slate-600 dark:text-slate-300">
+                              {till.total_swaps} swap{till.total_swaps !== 1 ? 's' : ''}
+                            </span>
+                            {till.short_code && (
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setDeleteConfirm({
+                                    shortcode: till.short_code,
+                                    till_name: till.till_name,
+                                    total_swaps: till.total_swaps,
+                                  });
+                                }}
+                                className="opacity-0 group-hover:opacity-100 p-1 rounded-lg text-red-400 hover:text-red-600 hover:bg-red-50 dark:hover:bg-red-900/20 transition-all"
+                                title={`Delete all swaps for ${till.short_code}`}
+                              >
+                                <Trash2 className="w-3.5 h-3.5" />
+                              </button>
+                            )}
                           </div>
-                          <span className="px-2 py-0.5 rounded-full text-xs font-medium bg-slate-200 text-slate-600 dark:bg-slate-600 dark:text-slate-300">
-                            {till.total_swaps} swap{till.total_swaps !== 1 ? 's' : ''}
-                          </span>
-                        </button>
+                        </div>
 
                         {/* Till rows */}
                         {expandedTills[till.agent_company_id] && (
@@ -578,11 +618,15 @@ function SwapHistoryGrid() {
                                 className="grid grid-cols-[140px_1fr_auto_1fr_110px_110px_auto] gap-3 px-6 py-3 hover:bg-slate-50 dark:hover:bg-slate-700/30 transition-colors"
                               >
                                 <div className="text-xs text-slate-500 dark:text-slate-400 self-start pt-0.5">
-                                  {formatDate(row.swap_date)}
+                                  {row.agent_registration_time
+                                    ? new Date(row.agent_registration_time).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' })
+                                    : formatDate(row.swap_date)}
                                 </div>
                                 <div className="text-xs self-start">
                                   <div className="font-medium text-slate-700 dark:text-slate-300">{row.agent_name}</div>
-                                  {row.agent_idnumber && <div className="text-slate-400">ID: {row.agent_idnumber}</div>}
+                                  {(row.agent_kyc_id_number || row.agent_idnumber) && (
+                                    <div className="text-slate-400">ID: {row.agent_kyc_id_number || row.agent_idnumber}</div>
+                                  )}
                                   {row.agent_phone && <div className="text-slate-400">{row.agent_phone}</div>}
                                 </div>
                                 <div className="flex items-start justify-center pt-0.5">
@@ -590,17 +634,7 @@ function SwapHistoryGrid() {
                                     Previous
                                   </span>
                                 </div>
-                                <div className="text-xs self-start space-y-0.5">
-                                  {(row.current_agents || []).map((a, ai) => {
-                                    const name = a.name || [a.firstname, a.middlename, a.lastname].filter(Boolean).join(' ') || 'Unknown';
-                                    return (
-                                      <div key={ai} className="flex items-center gap-1 text-green-700 dark:text-green-300">
-                                        <Users className="w-3 h-3 flex-shrink-0" />
-                                        <span>{name}</span>
-                                      </div>
-                                    );
-                                  })}
-                                </div>
+                                <div />
                                 <div className="text-right text-xs font-medium text-blue-700 dark:text-blue-400 self-start">
                                   {row.float_at_swap === '—'
                                     ? <span className="text-slate-400 font-normal">—</span>
@@ -994,6 +1028,46 @@ function SwapHistoryGrid() {
                 {isPayoutLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Banknote className="w-4 h-4" />}
                 {isPayoutLoading ? 'Processing...' : 'Confirm Payout'}
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Delete Swaps Confirmation Modal */}
+      {deleteConfirm && (
+        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+          <div className="bg-white dark:bg-slate-800 rounded-2xl shadow-2xl w-full max-w-md">
+            <div className="p-6">
+              <div className="flex items-center gap-3 mb-4">
+                <div className="w-10 h-10 rounded-xl bg-red-100 dark:bg-red-900/30 flex items-center justify-center">
+                  <Trash2 className="w-5 h-5 text-red-600 dark:text-red-400" />
+                </div>
+                <div>
+                  <h3 className="text-lg font-semibold text-slate-800 dark:text-white">Delete All Swaps</h3>
+                  <p className="text-sm text-slate-500 dark:text-slate-400">{deleteConfirm.till_name} · <span className="font-mono">{deleteConfirm.shortcode}</span></p>
+                </div>
+              </div>
+              <p className="text-sm text-slate-600 dark:text-slate-400 mb-2">
+                This will permanently delete <span className="font-semibold text-red-600">{deleteConfirm.total_swaps} swap record{deleteConfirm.total_swaps !== 1 ? 's' : ''}</span> for shortcode <span className="font-mono font-semibold">{deleteConfirm.shortcode}</span>.
+              </p>
+              <p className="text-xs text-slate-500 dark:text-slate-500 mb-6">This action cannot be undone.</p>
+              <div className="flex items-center justify-end gap-3">
+                <button
+                  onClick={() => setDeleteConfirm(null)}
+                  disabled={isDeleting}
+                  className="px-4 py-2 text-sm text-slate-700 dark:text-slate-300 bg-slate-100 dark:bg-slate-700 rounded-xl hover:bg-slate-200 dark:hover:bg-slate-600 transition-colors"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={handleConfirmDelete}
+                  disabled={isDeleting}
+                  className="px-4 py-2 text-sm text-white bg-red-500 rounded-xl hover:bg-red-600 transition-colors flex items-center gap-2 disabled:bg-red-300"
+                >
+                  {isDeleting ? <Loader2 className="w-4 h-4 animate-spin" /> : <Trash2 className="w-4 h-4" />}
+                  {isDeleting ? 'Deleting...' : `Delete ${deleteConfirm.total_swaps} Swap${deleteConfirm.total_swaps !== 1 ? 's' : ''}`}
+                </button>
+              </div>
             </div>
           </div>
         </div>

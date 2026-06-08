@@ -158,3 +158,13 @@ def export_swap_report():
         mimetype='text/csv',
         headers={'Content-Disposition': 'attachment; filename=swap_report.csv'}
     )
+
+
+@swap_bp.route('/by-shortcode/<string:shortcode>', methods=['DELETE'])
+@jwt_required()
+def delete_swaps_by_shortcode(shortcode):
+    service = SwapService()
+    deleted, error = service.delete_swaps_by_shortcode(shortcode)
+    if error:
+        return jsonify({'error': error}), 404 if 'No AgentCompany' in error else 500
+    return jsonify({'message': f'Deleted {deleted} swap(s) for shortcode {shortcode}', 'deleted': deleted}), 200

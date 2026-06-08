@@ -296,13 +296,17 @@ def _scrap_swaps_(page: Page, shortcodes: Set[str]) -> None:
 
             soup = BeautifulSoup(raw_html, "html.parser")
 
-            # ── Detect operator changes and record a swap if any ─────────────
-            _detect_and_record_swap_from_soup(soup, shortcode)
+            # Parse operator list from the table so we know each row's status
+            scraped_ops = _parse_swap_operators_from_soup(soup)
 
             # ── Drill into each row to capture basic-info + KYC detail ───────
+            # swap_date  → Active operator's Registration Time
+            # row_details → KYC id/phone/reg_time per row, keyed by table index
+            swap_date: Optional[datetime] = None
+            row_details: dict = {}
             rows = page.query_selector_all("//tr[@class='el-table__row']")
             print(f"[SWAPS] {shortcode}: drilling into {len(rows)} row(s) for detail capture")
-            
+
             for idx in range(len(rows)):
                 try:
                     # # Re-query rows each iteration so references stay live
@@ -319,6 +323,8 @@ def _scrap_swaps_(page: Page, shortcodes: Set[str]) -> None:
                     detail_btn.click()
                     page.wait_for_timeout(3000)
 
+                    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+
                     # Capture Basic Info section
                     basic_info_html = ""
                     try:
@@ -328,6 +334,21 @@ def _scrap_swaps_(page: Page, shortcodes: Set[str]) -> None:
                         )
                         basic_info_html = basic_info_el.inner_html()
                         print(f"[SWAPS] Row {idx + 1}: captured basic-info ({len(basic_info_html)} chars)")
+                        reg_time = _parse_registration_time_from_basic_info(basic_info_html)
+                        row_details.setdefault(idx, {})["reg_time"] = reg_time
+                        if reg_time:
+                            print(f"[SWAPS] Row {idx + 1}: Registration Time → {reg_time.date()}")
+                        # Use Active operator's Registration Time as the swap date
+                        if swap_date is None and idx < len(scraped_ops) and scraped_ops[idx]["is_active"] and reg_time:
+                            swap_date = reg_time
+                            print(f"[SWAPS] Row {idx + 1}: swap_date set → {swap_date.date()}")
+                        # Save debug file
+                        debug_path = os.path.join(debug_dir, f"swaps_{shortcode}_row{idx + 1}_{ts}.html")
+                        with open(debug_path, "w", encoding="utf-8") as f:
+                            f.write(f"<!-- shortcode={shortcode} row={idx + 1} captured={ts} -->\n")
+                            f.write("<section id='basic-info'>\n")
+                            f.write(basic_info_html)
+                            f.write("\n</section>\n")
                     except Exception as bi_err:
                         print(f"[SWAPS][WARN] Row {idx + 1}: basic-info not found — {bi_err}")
 
@@ -340,6 +361,15 @@ def _scrap_swaps_(page: Page, shortcodes: Set[str]) -> None:
                         )
                         kyc_html = kyc_panel.inner_html()
                         print(f"[SWAPS] Row {idx + 1}: captured KYC html ({len(kyc_html)} chars)")
+                        kyc_detail = _parse_kyc_details(kyc_html)
+                        row_details.setdefault(idx, {}).update(kyc_detail)
+                        print(f"[SWAPS] Row {idx + 1}: id={kyc_detail.get('id_number')} phone={kyc_detail.get('phone_number')}")
+                        # Append KYC section to same debug file
+                        debug_path = os.path.join(debug_dir, f"swaps_{shortcode}_row{idx + 1}_{ts}.html")
+                        with open(debug_path, "a", encoding="utf-8") as f:
+                            f.write("<section id='kyc-form'>\n")
+                            f.write(kyc_html)
+                            f.write("\n</section>\n")
                     except Exception as kyc_err:
                         print(f"[SWAPS][WARN] Row {idx + 1}: KYC panel not found — {kyc_err}")                        
 
@@ -363,14 +393,9 @@ def _scrap_swaps_(page: Page, shortcodes: Set[str]) -> None:
                         rows = page.query_selector_all("//tr[@class='el-table__row']")
                     except Exception:
                         pass
-            
-            # for _ in range(scraped_rows):
-            #     try:
-            #         close_detail_panel_idx(page)
-            #         page.wait_for_timeout(1000)
-            #     except Exception:
-            #         pass
-            # exit(0)
+
+            # ── Detect operator changes and record swap with the scraped data ─
+            _detect_and_record_swap_from_soup(soup, shortcode, swap_date=swap_date, row_details=row_details)
 
         except Exception as exc:
             print(f"[SWAPS][ERROR] Failed for shortcode {shortcode}: {exc}")
@@ -481,7 +506,66 @@ def _upsert_swap_user_agent(op: Dict, agent_company) -> "UserAgent | None":
     return ua
 
 
-def _detect_and_record_swap_from_soup(soup: BeautifulSoup, shortcode: str) -> None:
+def _parse_registration_time_from_basic_info(basic_info_html: str) -> Optional[datetime]:
+    """Return the 'Registration Time' datetime parsed from a basic-info section HTML, or None."""
+    from bs4 import NavigableString
+    soup = BeautifulSoup(basic_info_html, "html.parser")
+    for form_item in soup.find_all(class_="el-form-item"):
+        label_div = form_item.find(class_="el-form-item__label")
+        if not label_div or "Registration Time" not in label_div.get_text():
+            continue
+        content_div = form_item.find(class_="el-form-item__content")
+        if not content_div:
+            continue
+        date_str = next(
+            (t.strip() for t in content_div.children if isinstance(t, NavigableString) and t.strip()),
+            "",
+        )
+        for fmt in ("%d/%m/%Y", "%Y-%m-%d", "%d-%m-%Y", "%m/%d/%Y"):
+            try:
+                return datetime.strptime(date_str, fmt)
+            except ValueError:
+                continue
+    return None
+
+
+def _parse_kyc_details(kyc_html: str) -> dict:
+    """Extract ID number/type and preferred phone from a KYC form HTML section."""
+    soup = BeautifulSoup(kyc_html, "html.parser")
+    result: dict = {"id_number": None, "id_type": None, "phone_number": None}
+
+    # ID Number from the ID Details table — first non-empty row
+    for row in soup.find_all("tr", class_="el-table__row"):
+        cells = row.find_all("td")
+        if len(cells) >= 2:
+            id_type_text  = cells[0].get_text(strip=True)
+            id_number_text = cells[1].get_text(strip=True)
+            if id_number_text and id_number_text not in ("-", ""):
+                result["id_type"]   = id_type_text
+                result["id_number"] = id_number_text
+                break
+
+    # Phone from "Preferred Contact Phone Number"
+    for label_el in soup.find_all(class_="el-form-item__label"):
+        if "Preferred Contact Phone Number" not in label_el.get_text():
+            continue
+        content = label_el.find_next_sibling(class_="el-form-item__content")
+        if not content:
+            # label is inside el-form-item; content is a sibling of label's parent
+            parent = label_el.parent
+            if parent:
+                content = parent.find(class_="el-form-item__content")
+        if content:
+            span = content.find("span", class_="view_span")
+            phone = span.get_text(strip=True) if span else content.get_text(strip=True)
+            if phone and phone not in ("-", ""):
+                result["phone_number"] = phone
+        break
+
+    return result
+
+
+def _detect_and_record_swap_from_soup(soup: BeautifulSoup, shortcode: str, swap_date: Optional[datetime] = None, row_details: Optional[dict] = None) -> None:
     """
     The table already encodes the full swap story:
       - Status == 'Active'  → current operators (new_agents)
@@ -491,7 +575,6 @@ def _detect_and_record_swap_from_soup(soup: BeautifulSoup, shortcode: str) -> No
     Duplicate suppression: skip if the most recent AgentSwap for this company
     already has the same set of Closed identity_ids.
     """
-    from app.model.useragent import user_agent_companies
     from app.model.agent_swap import AgentSwap
 
     agent_company = agent_company_service.get_agent_company_by_shortcode_(str(shortcode))
@@ -500,6 +583,19 @@ def _detect_and_record_swap_from_soup(soup: BeautifulSoup, shortcode: str) -> No
         return
 
     scraped = _parse_swap_operators_from_soup(soup)
+
+    # Enrich each operator with KYC details captured during the detail drill-down
+    if row_details:
+        for i, op in enumerate(scraped):
+            detail = row_details.get(i, {})
+            if detail.get("phone_number"):
+                op["phone_number"] = detail["phone_number"]
+            if detail.get("id_number"):
+                op["kyc_id_number"] = detail["id_number"]
+                op["kyc_id_type"]   = detail.get("id_type")
+            if detail.get("reg_time"):
+                op["registration_time"] = detail["reg_time"].isoformat()
+
     active_ops = [op for op in scraped if op["is_active"]]
     closed_ops = [op for op in scraped if op["status"] == "Closed"]
 
@@ -511,6 +607,22 @@ def _detect_and_record_swap_from_soup(soup: BeautifulSoup, shortcode: str) -> No
     if not closed_ops:
         print(f"[SWAPS] {shortcode}: no closed operators, nothing to record.")
         return
+
+    # ── Build JSON payloads (no UserAgent upsert — KYC scraper owns that) ────
+    def _build_payload(ops):
+        payload = []
+        for op in ops:
+            payload.append({
+                "identity_id":       op["identity_id"],
+                "name":              f"{op['firstname']} {op['middlename']} {op['lastname']}".strip(),
+                "phone_number":      op.get("phone_number"),
+                "role":              op.get("role"),
+                "idnumber":          op.get("kyc_id_number") or f"MPESA-{op['identity_id']}",
+                "kyc_id_number":     op.get("kyc_id_number"),
+                "kyc_id_type":       op.get("kyc_id_type"),
+                "registration_time": op.get("registration_time"),
+            })
+        return payload
 
     # ── Duplicate check against the most recent swap for this company ─────────
     closed_identity_ids = {op["identity_id"] for op in closed_ops}
@@ -526,45 +638,37 @@ def _detect_and_record_swap_from_soup(soup: BeautifulSoup, shortcode: str) -> No
             for a in (latest_swap.previous_agents or [])
         }
         if stored_prev_ids == closed_identity_ids:
-            print(f"[SWAPS] {shortcode}: duplicate — same closed operators already recorded.")
+            # Duplicate detected — but if we have fresh KYC data, enrich the existing record
+            if row_details:
+                all_stored = (latest_swap.previous_agents or []) + (latest_swap.new_agents or [])
+                needs_enrichment = any(
+                    not a.get("kyc_id_number") and not a.get("registration_time")
+                    for a in all_stored
+                )
+                if needs_enrichment:
+                    try:
+                        latest_swap.previous_agents = _build_payload(closed_ops)
+                        latest_swap.new_agents = _build_payload(active_ops)
+                        db.session.commit()
+                        print(f"[SWAPS] {shortcode}: enriched existing AgentSwap #{latest_swap.id} with KYC/reg data.")
+                    except Exception as e:
+                        db.session.rollback()
+                        print(f"[SWAPS][ERROR] {shortcode}: Failed to enrich swap #{latest_swap.id}: {e}")
+                else:
+                    print(f"[SWAPS] {shortcode}: duplicate — already enriched, skipping.")
+            else:
+                print(f"[SWAPS] {shortcode}: duplicate — same closed operators already recorded.")
             return
-
-    # ── Upsert UserAgents and build payloads ──────────────────────────────────
-    def _build_payload(ops):
-        payload = []
-        for op in ops:
-            ua = _upsert_swap_user_agent(op, agent_company)
-            payload.append({
-                "identity_id":  op["identity_id"],
-                "id":           ua.id if ua else None,
-                "name":         f"{op['firstname']} {op['middlename']} {op['lastname']}".strip(),
-                "phone_number": op.get("phone_number"),
-                "role":         op.get("role"),
-                "idnumber":     ua.idnumber if ua else None,
-            })
-        return payload
 
     previous_agents_data = _build_payload(closed_ops)
     new_agents_data      = _build_payload(active_ops)
-
-    # ── Update M2M: link active operators, unlink closed ones ─────────────────
-    active_ua_ids = [p["id"] for p in new_agents_data if p["id"]]
-    closed_ua_ids = [p["id"] for p in previous_agents_data if p["id"]]
-
-    if closed_ua_ids:
-        db.session.execute(
-            user_agent_companies.delete().where(
-                (user_agent_companies.c.agent_company_id == agent_company.id) &
-                (user_agent_companies.c.user_agent_id.in_(closed_ua_ids))
-            )
-        )
 
     # ── Persist the AgentSwap record ─────────────────────────────────────────
     try:
         swap = AgentSwap(
             agent_company_id=agent_company.id,
             initiated_by=user_id,
-            swap_date=datetime.now(),
+            swap_date=swap_date or datetime.now(),
             previous_agents=previous_agents_data,
             new_agents=new_agents_data,
             notes=f"Auto-detected by scraper (shortcode {shortcode})",

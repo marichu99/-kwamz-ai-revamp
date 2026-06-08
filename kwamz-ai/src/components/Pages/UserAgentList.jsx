@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useMemo } from 'react';
-import { Search, Filter, MoreVertical, Binoculars, Edit, Plus, Download, Upload, RefreshCw, ChevronRight, ChevronDown, Database, Building2, Users, ChevronsUpDown } from 'lucide-react';
+import { Search, Filter, MoreVertical, Binoculars, Edit, Plus, Download, Upload, RefreshCw, ChevronRight, ChevronDown, Database, Building2, Users, ChevronsUpDown, Trash2, AlertTriangle, X, Loader2 } from 'lucide-react';
 import axios from 'axios';
 import * as XLSX from 'xlsx';
 import config from '../../Config';
@@ -28,6 +28,8 @@ function UserAgentList() {
   const [loadingDownload, setLoadingDownload] = useState(false);
   const [expandedCompanies, setExpandedCompanies] = useState(() => new Set());
   const [expandedTills, setExpandedTills] = useState(() => new Set());
+  const [deleteConfirm, setDeleteConfirm] = useState(false);
+  const [isDeleting, setIsDeleting] = useState(false);
   const { showToast } = useToast();
   const fileInputRef = useRef(null);
   const dropdownRef = useRef(null);
@@ -430,6 +432,28 @@ function UserAgentList() {
     }
   };
 
+  const handleConfirmDelete = async () => {
+    setIsDeleting(true);
+    try {
+      const token = localStorage.getItem('token');
+      await Promise.all(
+        selectedUserIds.map((id) =>
+          axios.delete(`${config.API_URL}/useragent/${id}`, {
+            headers: { Authorization: `Bearer ${token}` },
+          })
+        )
+      );
+      showToast(`Deleted ${selectedUserIds.length} agent${selectedUserIds.length !== 1 ? 's' : ''}`, 'success');
+      setDeleteConfirm(false);
+      setSelectedUserIds([]);
+      fetchUsers();
+    } catch (error) {
+      showToast(error.response?.data?.error || 'Failed to delete agent(s)', 'error');
+    } finally {
+      setIsDeleting(false);
+    }
+  };
+
   return (
     <div className="bg-white dark:bg-slate-800 rounded-xl shadow-lg p-3 sm:p-4 md:p-6">
       <div className="sticky top-0 z-20 bg-white dark:bg-slate-800">
@@ -503,6 +527,15 @@ function UserAgentList() {
                 >
                   <Download className="w-4 h-4 mr-3" />
                   Download Documents
+                </button>
+                <button
+                  onClick={() => { setDeleteConfirm(true); setIsDropdownOpen(false); }}
+                  disabled={selectedUserIds.length === 0}
+                  className="w-full flex items-center px-4 py-2 text-sm text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                  role="menuitem"
+                >
+                  <Trash2 className="w-4 h-4 mr-3" />
+                  Delete Selected
                 </button>
               </div>
 
@@ -837,6 +870,48 @@ function UserAgentList() {
           setSelectedUserIds([]);
         }}
       />
+
+      {/* Delete Confirmation Modal */}
+      {deleteConfirm && (
+        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+          <div className="bg-white dark:bg-slate-800 rounded-2xl shadow-2xl w-full max-w-md">
+            <div className="p-6">
+              <div className="flex items-center gap-3 mb-4">
+                <div className="w-10 h-10 rounded-xl bg-red-100 dark:bg-red-900/30 flex items-center justify-center">
+                  <AlertTriangle className="w-5 h-5 text-red-600 dark:text-red-400" />
+                </div>
+                <div>
+                  <h3 className="text-lg font-semibold text-slate-800 dark:text-white">Delete Agent{selectedUserIds.length !== 1 ? 's' : ''}</h3>
+                  <p className="text-sm text-slate-500 dark:text-slate-400">{selectedUserIds.length} agent{selectedUserIds.length !== 1 ? 's' : ''} selected</p>
+                </div>
+                <button onClick={() => setDeleteConfirm(false)} className="ml-auto p-1 hover:bg-slate-100 dark:hover:bg-slate-700 rounded-lg">
+                  <X className="w-4 h-4 text-slate-400" />
+                </button>
+              </div>
+              <p className="text-sm text-slate-600 dark:text-slate-400 mb-6">
+                This will permanently delete <span className="font-semibold text-red-600">{selectedUserIds.length} agent{selectedUserIds.length !== 1 ? 's' : ''}</span> and all associated data. This action cannot be undone.
+              </p>
+              <div className="flex items-center justify-end gap-3">
+                <button
+                  onClick={() => setDeleteConfirm(false)}
+                  disabled={isDeleting}
+                  className="px-4 py-2 text-sm text-slate-700 dark:text-slate-300 bg-slate-100 dark:bg-slate-700 rounded-xl hover:bg-slate-200 dark:hover:bg-slate-600 transition-colors"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={handleConfirmDelete}
+                  disabled={isDeleting}
+                  className="px-4 py-2 text-sm text-white bg-red-500 rounded-xl hover:bg-red-600 transition-colors flex items-center gap-2 disabled:bg-red-300"
+                >
+                  {isDeleting ? <Loader2 className="w-4 h-4 animate-spin" /> : <Trash2 className="w-4 h-4" />}
+                  {isDeleting ? 'Deleting...' : `Delete ${selectedUserIds.length} Agent${selectedUserIds.length !== 1 ? 's' : ''}`}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

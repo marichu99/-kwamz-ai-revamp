@@ -420,16 +420,18 @@ class SwapService:
 
                 for prev in (swap.previous_agents or []):
                     till["previous_rows"].append({
-                        "swap_id":            swap.id,
-                        "swap_date":          _to_eat(swap.swap_date),
-                        "agent_name":         _prev_name(prev),
-                        "agent_idnumber":     prev.get("idnumber"),
-                        "agent_phone":        prev.get("phone_number"),
-                        "current_agents":     swap.new_agents or [],
-                        "float_at_swap":      fv,
-                        "commission_at_swap": cv,
-                        "notes":              swap.notes,
-                        "initiated_by":       swap.initiator.username if swap.initiator else None,
+                        "swap_id":                 swap.id,
+                        "swap_date":               _to_eat(swap.swap_date),
+                        "agent_name":              _prev_name(prev),
+                        "agent_idnumber":          prev.get("idnumber"),
+                        "agent_phone":             prev.get("phone_number"),
+                        "agent_registration_time": prev.get("registration_time"),
+                        "agent_kyc_id_number":     prev.get("kyc_id_number"),
+                        "agent_kyc_id_type":       prev.get("kyc_id_type"),
+                        "float_at_swap":           fv,
+                        "commission_at_swap":       cv,
+                        "notes":                   swap.notes,
+                        "initiated_by":            swap.initiator.username if swap.initiator else None,
                     })
                     till["total_swaps"] += 1
 
@@ -596,3 +598,21 @@ class SwapService:
             return output.getvalue(), None
 
         return None, f"Unsupported format: {format}"
+
+    def delete_swaps_by_shortcode(self, shortcode: str):
+        """Delete all AgentSwap records for the given shortcode. Returns (deleted_count, error)."""
+        try:
+            company = AgentCompany.query.filter_by(short_code=shortcode).first()
+            if not company:
+                return 0, f"No AgentCompany found for shortcode {shortcode}"
+
+            deleted = (
+                AgentSwap.query
+                .filter_by(agent_company_id=company.id)
+                .delete(synchronize_session=False)
+            )
+            db.session.commit()
+            return deleted, None
+        except Exception as e:
+            db.session.rollback()
+            return 0, str(e)
