@@ -1,28 +1,23 @@
-import { Users, DollarSign, TrendingUp, ArrowUpDown, Building2 } from 'lucide-react'
+import { Users, DollarSign, ArrowUpDown, Building2 } from 'lucide-react'
 import React from 'react'
 import StatsCard from './StatsCard'
+import CommissionsCard from './CommissionsCard'
 
 const formatCurrency = (value) => {
-  if (value >= 1000000) {
-    return `KES ${(value / 1000000).toFixed(2)}M`
-  } else if (value >= 1000) {
-    return `KES ${(value / 1000).toFixed(1)}K`
-  }
+  if (value >= 1000000) return `KES ${(value / 1000000).toFixed(2)}M`
+  if (value >= 1000)    return `KES ${(value / 1000).toFixed(1)}K`
   return `KES ${value.toFixed(2)}`
 }
 
 const formatNumber = (value) => {
-  if (value >= 1000000) {
-    return `${(value / 1000000).toFixed(2)}M`
-  } else if (value >= 1000) {
-    return `${(value / 1000).toFixed(1)}K`
-  }
+  if (value >= 1000000) return `${(value / 1000000).toFixed(2)}M`
+  if (value >= 1000)    return `${(value / 1000).toFixed(1)}K`
   return value.toLocaleString()
 }
 
-function StatsGrid({ kpis, isLoading, isOnboarding = false }) {
-  // Build stats data from KPIs
-  const statsData = kpis ? [
+function StatsGrid({ kpis, isLoading, isOnboarding = false, commissionBalance = null, selectedCompany = null }) {
+
+  const nonCommissionStats = kpis ? [
     {
       title: 'Total Volume',
       value: formatCurrency(kpis.total_volume?.value || 0),
@@ -40,15 +35,6 @@ function StatsGrid({ kpis, isLoading, isOnboarding = false }) {
       icon: ArrowUpDown,
       color: 'blue',
       bgGradient: 'from-blue-500/20 to-cyan-500/20'
-    },
-    {
-      title: 'Commissions',
-      value: formatCurrency(kpis.total_commissions?.value || 0),
-      change: `${kpis.total_commissions?.change >= 0 ? '+' : ''}${kpis.total_commissions?.change || 0}%`,
-      trend: kpis.total_commissions?.trend || 'up',
-      icon: TrendingUp,
-      color: 'purple',
-      bgGradient: 'from-purple-500/20 to-pink-500/20'
     },
     {
       title: 'Active Agents',
@@ -94,9 +80,18 @@ function StatsGrid({ kpis, isLoading, isOnboarding = false }) {
 
   return (
     <div className='grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-6 relative overflow-visible'>
-      {statsData.map((stat, index) => (
-        <StatsCard key={stat.title} stat={stat} index={index} isLast={index === statsData.length - 1} />
-      ))}
+      {/* Total Volume */}
+      <StatsCard stat={nonCommissionStats[0]} index={0} />
+      {/* Transactions */}
+      <StatsCard stat={nonCommissionStats[1]} index={1} />
+      {/* Commissions — split current / previous */}
+      <CommissionsCard
+        commissionBalance={commissionBalance}
+        selectedCompany={selectedCompany}
+        index={2}
+      />
+      {/* Active Agents */}
+      <StatsCard stat={nonCommissionStats[2]} index={3} />
     </div>
   )
 }

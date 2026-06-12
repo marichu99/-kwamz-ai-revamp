@@ -1,7 +1,7 @@
 from playwright.sync_api import sync_playwright,Page,Locator,Download, TimeoutError as PlaywrightTimeoutError
 from flask import current_app
 from app.utils.script import fill_login_form, capture_and_solve_captcha
-from app.utils.email_utils import generate_scraping_report_email, send_scraping_report_email,send_session_timeout_email,send_not_active_short_code_
+from app.utils.email_utils import generate_scraping_report_email, send_scraping_report_email,send_session_timeout_email,send_not_active_short_code_,send_swaps_scraped_email
 from app.tasks.fraud_detection_tasks import run_fraud_detection_for_user
 from app.service.transaction_service import TransactionService
 from app.service.agentcompany_service import AgentCompanyService
@@ -233,9 +233,24 @@ def _scrap_swaps_(page: Page, shortcodes: Set[str]) -> None:
     """
     For each scraped agent-company shortcode, opens the Search → Organization Operator
     panel, queries the shortcode, and dumps the result table HTML to a debug file.
+
+    Each shortcode is scraped at most once per calendar day. Shortcodes already
+    logged in SwapScrapeLog for today are silently skipped. After all eligible
+    shortcodes are processed the logged-in user receives an email notification.
     """
+    from app.model.swap_scrape_log import SwapScrapeLog
+
     debug_dir = os.path.join(os.path.dirname(__file__), "..", "..", "debug_exports", "swaps")
     os.makedirs(debug_dir, exist_ok=True)
+
+    # ── Daily dedup: skip shortcodes already scraped today ───────────────────
+    pending_shortcodes = {sc for sc in shortcodes if not SwapScrapeLog.already_scraped_today(sc)}
+    skipped_count = len(shortcodes) - len(pending_shortcodes)
+    if skipped_count:
+        print(f"[SWAPS] {skipped_count} shortcode(s) already scraped today — skipping.")
+    if not pending_shortcodes:
+        print("[SWAPS] All shortcodes have been scraped today. Nothing to do.")
+        return
 
     # ── Step 1: hover over the active sub-menu to reveal the search panel ───
     print("[SWAPS] Hovering over active sub-menu...")
@@ -263,30 +278,34 @@ def _scrap_swaps_(page: Page, shortcodes: Set[str]) -> None:
     sc_input = page.wait_for_selector(_INPUT_SEL, timeout=15000)
 
     scraped_rows = int(0)
-    for num,shortcode in enumerate(sorted(shortcodes)):
+    preselected_pagination = False
+    successfully_scraped: list[str] = []
+    for num,shortcode in enumerate(sorted(pending_shortcodes)):
         print(f"[SWAPS] Querying shortcode: {shortcode}")
         try:
             sc_input.fill('')
             sc_input.fill(shortcode)
             page.wait_for_timeout(500)
             
-            if(num > 0):
-                print(f"We have scraped {scraped_rows} rows for the previous shortcode, attempting to close detail panels before next search...")
-                for _ in range(scraped_rows):
-                    try:
-                        close_detail_panel_idx(page)
-                        print("[SWAPS] Closed a detail panel")
-                        page.wait_for_timeout(1000)
-                    except Exception:
-                        pass
+            # if(num > 0):
+            #     print(f"We have scraped {scraped_rows} rows for the previous shortcode, attempting to close detail panels before next search...")
+            #     for _ in range(scraped_rows):
+            #         try:
+            #             close_detail_panel_idx(page)
+            #             print("[SWAPS] Closed a detail panel")
+            #             page.wait_for_timeout(1000)
+            #         except Exception:
+            #             pass
                 
-                scraped_rows = 0
+            #     scraped_rows = 0
 
             # Click Search / Submit
             page.click("//button[@class='el-button el-button--primary']")
             page.wait_for_timeout(2000)
             
-            select_pagination_size(page)
+            if(not preselected_pagination):
+                select_pagination_size(page)
+                preselected_pagination = True
 
             # Grab the result table HTML
             table_el = page.wait_for_selector(
@@ -379,6 +398,7 @@ def _scrap_swaps_(page: Page, shortcodes: Set[str]) -> None:
                         timeout=15000,
                     )
                     page.wait_for_timeout(1500)
+                    close_detail_panel_idx(page)
                     rows = page.query_selector_all("//tr[@class='el-table__row']")
                     
                     scraped_rows += 1
@@ -397,9 +417,26 @@ def _scrap_swaps_(page: Page, shortcodes: Set[str]) -> None:
             # ── Detect operator changes and record swap with the scraped data ─
             _detect_and_record_swap_from_soup(soup, shortcode, swap_date=swap_date, row_details=row_details)
 
+            # ── Mark shortcode as scraped today ──────────────────────────────
+            SwapScrapeLog.log(shortcode, user_id=user_id)
+            successfully_scraped.append(shortcode)
+
         except Exception as exc:
             print(f"[SWAPS][ERROR] Failed for shortcode {shortcode}: {exc}")
             traceback.print_exc()
+
+    # ── Notify the logged-in user by email ───────────────────────────────────
+    if user and getattr(user, 'email', None):
+        try:
+            send_swaps_scraped_email(
+                recipient_email=user.email,
+                username=getattr(user, 'username', user.email),
+                total_shortcodes=len(successfully_scraped),
+                skipped_shortcodes=skipped_count,
+            )
+            print(f"[SWAPS] Completion email sent to {user.email}.")
+        except Exception as mail_exc:
+            print(f"[SWAPS][WARN] Could not send completion email: {mail_exc}")
 
 
 def _parse_swap_operators_from_soup(soup: BeautifulSoup) -> List[Dict]:
@@ -1265,21 +1302,62 @@ def save_table_to_dataframe_download_head_office(
 
         page.mouse.move(coords['x'], coords['y'])
         print("[EXPORT] Hovered via mouse coordinates")
-        time.sleep(3)
+        time.sleep(2)
 
-        page.wait_for_function(
-            """() => {
-                const menus = document.querySelectorAll('ul.el-dropdown-menu');
-                for (const menu of menus) {
-                    const rect = menu.getBoundingClientRect();
-                    if (rect.width > 0 && rect.height > 0 && rect.top >= 0) {
-                        return true;
+        # Also dispatch mouseenter/mouseover in case the pointer-events model
+        # doesn't fire the El-UI trigger purely from mouse.move().
+        page.evaluate("""(xy) => {
+            const el = document.querySelector('div.el-dropdown.padding-export:not(.is-disabled) button');
+            if (el) {
+                el.dispatchEvent(new MouseEvent('mouseenter', { bubbles: true, cancelable: true, clientX: xy.x, clientY: xy.y }));
+                el.dispatchEvent(new MouseEvent('mouseover',  { bubbles: true, cancelable: true, clientX: xy.x, clientY: xy.y }));
+            }
+        }""", coords)
+        time.sleep(1.5)
+
+        menu_open = False
+        for _attempt in range(3):
+            try:
+                page.wait_for_function(
+                    """() => {
+                        const menus = document.querySelectorAll('ul.el-dropdown-menu');
+                        for (const menu of menus) {
+                            const rect = menu.getBoundingClientRect();
+                            if (rect.width > 0 && rect.height > 0) {
+                                return true;
+                            }
+                        }
+                        return false;
+                    }""",
+                    timeout=8000
+                )
+                menu_open = True
+                break
+            except Exception:
+                print(f"[EXPORT] Dropdown not open yet (attempt {_attempt + 1}/3), re-hovering...")
+                page.mouse.move(0, 0)
+                time.sleep(0.3)
+                page.mouse.move(coords['x'], coords['y'])
+                page.evaluate("""(xy) => {
+                    const el = document.querySelector('div.el-dropdown.padding-export:not(.is-disabled) button');
+                    if (el) {
+                        el.dispatchEvent(new MouseEvent('mouseenter', { bubbles: true, cancelable: true, clientX: xy.x, clientY: xy.y }));
+                        el.dispatchEvent(new MouseEvent('mouseover',  { bubbles: true, cancelable: true, clientX: xy.x, clientY: xy.y }));
                     }
-                }
-                return false;
-            }""",
-            timeout=40000
-        )
+                }""", coords)
+                time.sleep(1.5)
+
+        if not menu_open:
+            # Last resort: debug what menus exist and their rects
+            menu_debug = page.evaluate("""() => {
+                return Array.from(document.querySelectorAll('ul.el-dropdown-menu')).map(m => {
+                    const r = m.getBoundingClientRect();
+                    return { w: r.width, h: r.height, top: r.top, display: getComputedStyle(m).display };
+                });
+            }""")
+            print(f"[EXPORT] Menu debug state: {menu_debug}")
+            raise Exception("Export dropdown did not open after 3 hover attempts")
+
         print("[EXPORT] Export dropdown menu is visually open")
 
         all_items = page.locator("ul.el-dropdown-menu li.el-dropdown-menu__item")
@@ -1799,8 +1877,8 @@ def go_forth_on_organization(page: Page, row_count: int):
         if user:
             # send_session_timeout_email(user.email, user.first_name)
             send_session_timeout_email(user.email)
-            context.close()
-            browser.close()
+            # context.close()
+            # browser.close()
         page.screenshot(path="pagination_error.png")
         return False
         
@@ -2457,15 +2535,16 @@ def scrape_head_office_commission(page: Page) -> bool:
         )
         review_btn.click()
         time.sleep(2)
+        
 
-        # Step 2: Click Transactions tab
+        # # Step 2: Click Transactions tab
         print("[STEP 2] Clicking Transactions tab...")
         transactions_tab = page.wait_for_selector(
             "//div[@id='tab-transactions']",
             timeout=30000
         )
         transactions_tab.click()
-        time.sleep(1)
+        time.sleep(1)        
 
         # Step 3: Open the 7th account dropdown caret and arrow-down 6 times
         print("[STEP 3] Selecting Head Office Commission account from dropdown...")
@@ -2521,27 +2600,87 @@ def scrape_head_office_commission(page: Page) -> bool:
         click_search_button_head_office(page)
         time.sleep(2)
 
-        all_data = []
-        if not does_transaction_exist_for_period_(page):
-            print("[INFO] No Head Office Commission transactions found for this period")
-        else:
-            df, success_value = save_table_to_dataframe_download_head_office(
-                page,
-                business_shortcode=company_shortcode,
-                additional_category="commission"
-            )
-            if df is not None and len(df) > 0:
-                df['scrape_timestamp'] = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-                all_data.append(df)
-                print(f"[SUCCESS] Head Office Commission: {len(df)} rows")
-            else:
-                print("[INFO] No Head Office Commission data returned")
+        # all_data = []
+        # if not does_transaction_exist_for_period_(page):
+        #     print("[INFO] No Head Office Commission transactions found for this period")
+        # else:
+        #     df, success_value = save_table_to_dataframe_download_head_office(
+        #         page,
+        #         business_shortcode=company_shortcode,
+        #         additional_category="commission"
+        #     )
+        #     if df is not None and len(df) > 0:
+        #         df['scrape_timestamp'] = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        #         all_data.append(df)
+        #         print(f"[SUCCESS] Head Office Commission: {len(df)} rows")
+        #     else:
+        #         print("[INFO] No Head Office Commission data returned")
 
-        if all_data:
-            combined_df = pd.concat(all_data, ignore_index=True)
-            print(f"HEAD OFFICE COMMISSION TOTAL: {len(combined_df)} rows")
-        else:
-            print("[INFO] No Head Office Commission data scraped")
+        # if all_data:
+        #     combined_df = pd.concat(all_data, ignore_index=True)
+        #     print(f"HEAD OFFICE COMMISSION TOTAL: {len(combined_df)} rows")
+        # else:
+        #     print("[INFO] No Head Office Commission data scraped")
+        
+        # Hover the visible export trigger (there are 2 in the DOM; :visible picks the right one)
+        t = time.time()
+        export_trigger = page.locator("div.el-dropdown.padding-export:visible >> span").first
+        export_trigger.wait_for(state="visible", timeout=30000)
+        export_trigger.scroll_into_view_if_needed()
+        export_trigger.hover(force=True, timeout=10_000)
+        print(f"[TIMING] Export trigger hovered: {_elapsed(t)}")
+        time.sleep(3)
+
+        page.wait_for_function(
+            """() => {
+                const menus = document.querySelectorAll('ul.el-dropdown-menu');
+                for (const menu of menus) {
+                    const rect = menu.getBoundingClientRect();
+                    if (rect.width > 0 && rect.height > 0 && rect.top >= 0) return true;
+                }
+                return false;
+            }""",
+            timeout=40000,
+        )
+        print(f"[TIMING] Export dropdown open: {_elapsed(t)}")
+
+        all_items = page.locator("ul.el-dropdown-menu li.el-dropdown-menu__item")
+        excel_items = all_items.filter(has_text="Excel")
+        excel_count = excel_items.count()
+        print(f"[EXPORT] Found {excel_count} Excel option(s)")
+
+        if excel_count < 1:
+            raise Exception(f"No Excel export options found (count={excel_count})")
+
+        target_excel = excel_items.last
+
+        t = time.time()
+        with page.expect_download(timeout=60_000) as dl_info:
+            try:
+                target_excel.click(force=True, timeout=15_000)
+                print("[EXPORT] Clicked Excel option")
+            except Exception:
+                print("[EXPORT] Normal click failed — falling back to JS click")
+                target_excel.evaluate("el => el.click()")
+
+        download = dl_info.value
+        temp_path = download.path()
+        ext = os.path.splitext(download.suggested_filename)[1] or ".xlsx"
+        debug_path = f"transaction_export_debug_{company_shortcode}{ext}"
+        import shutil as _shutil
+        _shutil.copy2(temp_path, debug_path)
+        print(f"[TIMING] Excel downloaded → {debug_path}: {_elapsed(t)}")
+
+        # Parse and persist directly from the Playwright temp file
+        t = time.time()
+        df, success = update_transactions_from_file(
+            file_path=temp_path,
+            business_shortcode=str(company_shortcode),
+            transaction_type="commission",
+            company_shortcode=company_shortcode,
+            agent_id=None,
+        )
+        print(f"[TIMING] DB upsert: {_elapsed(t)} | success={success} | rows={len(df) if df is not None else 0}")
 
         print("[INFO] ===== Head Office Commission Scraping Complete =====")
 
@@ -2580,8 +2719,8 @@ def select_dates_and_submit_monthly(page: Page, month_offset: int = 0) -> bool:
         user = User.query.filter_by(id=user_id).first()
         if user:
             send_session_timeout_email("martinmaati31@gmail.com")
-            context.close()
-            browser.close()
+            # context.close()
+            # browser.close()
         return False
     
     try:
@@ -2790,8 +2929,13 @@ def scrape_180_days_monthly(page:Page, business_short_code:int=0, pass_value:str
 
     # Determine scraping strategy based on days since last scrape
     if days < 1 and pass_value == "first":
-        print(f"[INFO] Float transactions scraped less than 1 day ago ({days} days). Skipping.")
-        return pd.DataFrame(), True
+        force, reason = transaction_service.should_force_float_scrape(business_short_code)
+        if force:
+            print(f"[INFO] Float transactions appear current (days={days}) but {reason} — forcing 1-month scrape.")
+            total_months = max(1, total_months)
+        else:
+            print(f"[INFO] {reason} — skipping float scrape.")
+            return pd.DataFrame(), True
     elif days < 1 and pass_value == "second":
         # Commission was recently scraped - just get latest
         print(f"[INFO] Commission transactions recently scraped ({days} days ago). Getting latest only.")
@@ -2901,8 +3045,8 @@ def select_dates_and_submit_(page: Page) -> bool:
             if user:
                 # send_session_timeout_email(user.email)
                 send_session_timeout_email("martinmaati31@gmail.com")
-                context.close()
-                browser.close()
+                # context.close()
+                # browser.close()
                 
 
         except Exception as e:
@@ -3099,7 +3243,7 @@ def extract_user_agent_kyc(short_code: str, page: Page) -> bool:
 
                 # Navigate back to the operator list for the next row
                 page.go_back()
-                close_detail_panel(page)
+                close_detail_panel_idx(page)
                 time.sleep(1)
 
                 # Re-query rows after navigation
@@ -3468,24 +3612,18 @@ def close_detail_panel_idx(page:Page , idx: int = 4) -> bool:
             org_detail.click()
             page.wait_for_timeout(1000)
             return True
+        else:
+            print(f"[WARN] Detail panel icon at index {idx} not visible.")
+            return False
     except:
         print("[WARN] 'Organization Detail' tab not found.")
-        pass
-    
-    # Try ESC key
-    try:
-        page.keyboard.press("Escape")
-        page.wait_for_timeout(500)
-        return True
-    except:
-        pass
-    
-    return False
+        return False
 
 def return_to_organization_list(page) -> bool:
     """Return to organization list view."""
     print("[INFO] Returning to organization list...")
-    close_detail_panel(page)
+    for _ in range(3):
+        close_detail_panel(page)
     try:
         org_detail = page.wait_for_selector(
             "//div[@title='Organization Detail']",
@@ -3568,13 +3706,13 @@ def process_organization_rows(page: Page) -> None:
         _navigate_to_child_org_list(page)
         wait_for_table_load(page)
         total_processed = _run_float_pass(page, all_shortcodes, to_be_rerun)
+        _scrap_swaps_(page, all_shortcodes)
         print(f"[SUCCESS] Float pass complete — {total_processed} organizations processed.")
     else:
         # ── Case 2: priority shortcodes exist ───────────────────────────────
         
         # Scrape head office + children commission after the priority float pass.
         print("[INFO] Priority float pass complete. Scraping Head Office Commission and Children Commission...")
-        _scrap_swaps_(page, all_shortcodes)
         _scrape_head_office(page)
         
         # Pass 1: float transactions for priority children only.
@@ -3597,7 +3735,7 @@ def process_organization_rows(page: Page) -> None:
 
         # Scrape head office + children commission again after the all-children float pass.
         print("[INFO] All-children float pass complete. Scraping Head Office Commission and Children Commission...")
-        _scrape_head_office(page)
+        _scrap_swaps_(page, all_shortcodes)
 
     if to_be_rerun:
         print(f"[WARN] {len(to_be_rerun)} organizations failed and need reprocessing: {to_be_rerun}")
@@ -3681,8 +3819,77 @@ def extract_all_business_short_codes(
 
     return short_codes
 
+def _get_stale_scrape_shortcodes_(all_shortcodes: Set[str], stale_days: int = 30) -> Set[str]:
+    """
+    Return shortcodes from all_shortcodes that have never been scraped OR whose
+    AgentCompany.last_scraped_at is older than stale_days.  This catches agents
+    who have been inactive (no new transactions) for a long period but have never
+    been confirmed as inactive by a recent scrape run.
+    """
+    from app.model.agentcompany import AgentCompany
+    from app import db
+
+    stale: Set[str] = set()
+    cutoff = datetime.now() - timedelta(days=stale_days)
+
+    # Single query: find all AgentCompany rows matching any of the shortcodes
+    # where last_scraped_at is NULL or older than the cutoff.
+    matching = db.session.query(
+        AgentCompany.short_code,
+        AgentCompany.business_short_code,
+        AgentCompany.agentcompany_code,
+        AgentCompany.last_scraped_at,
+    ).filter(
+        db.or_(
+            AgentCompany.short_code.in_(all_shortcodes),
+            AgentCompany.business_short_code.in_(all_shortcodes),
+            AgentCompany.agentcompany_code.in_(all_shortcodes),
+        ),
+        db.or_(
+            AgentCompany.last_scraped_at == None,
+            AgentCompany.last_scraped_at < cutoff,
+        )
+    ).all()
+
+    for row in matching:
+        for code in (row.short_code, row.business_short_code, row.agentcompany_code):
+            if code and code in all_shortcodes:
+                stale.add(code)
+
+    # Shortcodes not in AgentCompany at all (brand-new, never registered) are also stale.
+    known_codes: Set[str] = set()
+    all_known = db.session.query(
+        AgentCompany.short_code,
+        AgentCompany.business_short_code,
+        AgentCompany.agentcompany_code,
+    ).filter(
+        db.or_(
+            AgentCompany.short_code.in_(all_shortcodes),
+            AgentCompany.business_short_code.in_(all_shortcodes),
+            AgentCompany.agentcompany_code.in_(all_shortcodes),
+        )
+    ).all()
+    for row in all_known:
+        for code in (row.short_code, row.business_short_code, row.agentcompany_code):
+            if code:
+                known_codes.add(code)
+
+    unregistered = all_shortcodes - known_codes
+    stale.update(unregistered)
+
+    if stale:
+        print(f"[PRIORITY] {len(stale)} shortcode(s) stale by scrape-age (>{stale_days}d or never scraped): {sorted(stale)}")
+
+    return stale
+
+
 def _get_priority_shortcodes_(all_shortcodes: Set[str]) -> Set[str]:
-    """Return shortcodes whose float data is stale (>= 1 day since newest float transaction)."""
+    """
+    Return shortcodes that need a priority float scrape.  A shortcode qualifies if:
+      1. Its newest float transaction is >= 1 day old  (data-staleness), OR
+      2. It has never been scraped / not scraped in the last 30 days
+         (scrape-coverage gap — catches inactive agents we haven't confirmed recently).
+    """
     priority_shortcode_indexes: Set[str] = set()
 
     print(f"All shortcodes are of length {len(all_shortcodes)}")
@@ -3701,6 +3908,10 @@ def _get_priority_shortcodes_(all_shortcodes: Set[str]) -> Set[str]:
 
         if days >= 1:
             priority_shortcode_indexes.add(business_shortcode)
+
+    # Criterion 2: scrape-coverage gap
+    stale_by_scrape_age = _get_stale_scrape_shortcodes_(all_shortcodes, stale_days=30)
+    priority_shortcode_indexes.update(stale_by_scrape_age)
 
     return priority_shortcode_indexes
 
@@ -3946,30 +4157,57 @@ def scrape_transaction_tab(page: Page, business_short_code: int) -> bool:
         time.sleep(0.5)
         end_input.type(end_date_str)
         end_input.press("Enter")
-        time.sleep(0.5)
+        time.sleep(1.5)
 
-        # Open transaction-type dropdown and navigate to the Commission option
-        page.click(_TRANSACTION_TYPE_DROPDOWN_XPATH)
-        time.sleep(0.5)
 
-        commission_found = False
-        for _ in range(30):  # safety cap
-            active_text = page.evaluate("""() => {
-                const el = document.querySelector(
-                    '.el-select-dropdown__item.hover, .el-select-dropdown__item.is-hovering'
-                );
-                return el ? el.textContent.trim() : '';
-            }""")
-            if re.search(r'commission', active_text, re.IGNORECASE):
-                page.keyboard.press("Enter")
-                commission_found = True
-                print(f"[INFO] Selected dropdown option: '{active_text}'")
-                break
-            page.keyboard.press("ArrowDown")
-            time.sleep(0.3)
+        try:
+            # Open transaction-type dropdown and navigate to the Commission option
+            page.click(_TRANSACTION_TYPE_DROPDOWN_XPATH)
+            time.sleep(0.5)
 
-        if not commission_found:
-            print("[WARN] Commission option not found in dropdown after 30 steps — proceeding anyway")
+            commission_found = False
+            for _ in range(30):  # safety cap
+                active_text = page.evaluate("""() => {
+                    const el = document.querySelector(
+                        '.el-select-dropdown__item.hover, .el-select-dropdown__item.is-hovering'
+                    );
+                    return el ? el.textContent.trim() : '';
+                }""")
+                if re.search(r'commission', active_text, re.IGNORECASE):
+                    page.keyboard.press("Enter")
+                    commission_found = True
+                    print(f"[INFO] Selected dropdown option: '{active_text}'")
+                    break
+                page.keyboard.press("ArrowDown")
+                time.sleep(0.3)
+
+            if not commission_found:
+                print("[WARN] Commission option not found in dropdown after 30 steps — proceeding anyway")
+        except Exception as e:
+            print(f"[ERROR] Failed to select Commission from dropdown: {e}")
+            print("[INFO] Attempting fallback method to select Commission option...")
+            # Open transaction-type dropdown and navigate to the Commission option
+            page.click(_TRANSACTION_TYPE_DROPDOWN_XPATH)
+            time.sleep(0.5)
+
+            commission_found = False
+            for _ in range(30):  # safety cap
+                active_text = page.evaluate("""() => {
+                    const el = document.querySelector(
+                        '.el-select-dropdown__item.hover, .el-select-dropdown__item.is-hovering'
+                    );
+                    return el ? el.textContent.trim() : '';
+                }""")
+                if re.search(r'commission', active_text, re.IGNORECASE):
+                    page.keyboard.press("Enter")
+                    commission_found = True
+                    print(f"[INFO] Selected dropdown option: '{active_text}'")
+                    break
+                page.keyboard.press("ArrowDown")
+                time.sleep(0.3)
+
+            if not commission_found:
+                print("[WARN] Commission option not found in dropdown after 30 steps — proceeding anyway")
 
         click_search_button_head_office(page)
         time.sleep(2)

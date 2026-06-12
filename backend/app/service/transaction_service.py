@@ -333,8 +333,120 @@ class TransactionService:
                 mapped_data[standardized_key] = value
 
         return mapped_data
-     
-    def _update_transactions_batch(self, transactions_data: List[Dict], 
+
+    def should_force_float_scrape(self, business_shortcode: str, recent_minutes: int = 30) -> tuple[bool, str]:
+        """
+        When the transaction table shows days < 1 for a shortcode, decide whether
+        to still force a float scrape based on when the scraper itself last ran.
+
+        Priority order:
+          1. No AgentCompany record / never scraped → force (first-time)
+          2. last_scraped_at >= 1 day ago           → force (stale scrape coverage)
+          3. last_scraped_at >= recent_minutes ago  → force (routine refresh)
+          4. last_scraped_at < recent_minutes ago   → skip  (just ran, nothing to do)
+
+        Returns (force: bool, reason: str).
+        """
+        ac = AgentCompany.query.filter(
+            db.or_(
+                AgentCompany.short_code          == str(business_shortcode),
+                AgentCompany.business_short_code == str(business_shortcode),
+                AgentCompany.agentcompany_code   == str(business_shortcode),
+            )
+        ).first()
+
+        if ac is None:
+            return True, "no AgentCompany record — treating as first-time scrape"
+
+        if ac.last_scraped_at is None:
+            return True, "never scraped before"
+
+        elapsed = datetime.now() - ac.last_scraped_at
+        elapsed_minutes = elapsed.total_seconds() / 60
+
+        if elapsed_minutes >= 24 * 60:
+            return True, f"scraper last ran {int(elapsed_minutes // 60)}h ago (stale coverage)"
+
+        if elapsed_minutes >= recent_minutes:
+            return True, f"scraper last ran {int(elapsed_minutes)}m ago — routine {recent_minutes}m refresh"
+
+        return False, f"scraper ran {int(elapsed_minutes)}m ago (< {recent_minutes}m threshold) — skipping"
+
+    def _sync_commission_account_balance(self, business_shortcode: str) -> None:
+        """
+        After commission transactions are scraped, push the latest balance into
+        AgentAccountBalance so the Agent Companies grid stays in sync without
+        waiting for the next head-office CSV export.
+        """
+        latest_txn = (
+            Transaction.query
+            .filter(
+                Transaction.business_shortcode == business_shortcode,
+                Transaction.transaction_type == 'commission',
+            )
+            .order_by(Transaction.completion_time.desc(), Transaction.id.desc())
+            .first()
+        )
+        if not latest_txn or latest_txn.balance is None:
+            return
+
+        agent_company = AgentCompany.query.filter(
+            db.or_(
+                AgentCompany.short_code == business_shortcode,
+                AgentCompany.business_short_code == business_shortcode,
+                AgentCompany.agentcompany_code == business_shortcode,
+            )
+        ).first()
+        if not agent_company:
+            return
+
+        commission_account = AgentAccount.query.filter_by(
+            agent_company_id=agent_company.id,
+            account_type='COMMISSION',
+        ).first()
+        if not commission_account:
+            commission_account = AgentAccount(
+                agent_company_id=agent_company.id,
+                account_number=f'COMM-{business_shortcode}',
+                account_type='COMMISSION',
+                account_alias='Commission Account',
+                currency='KES',
+                relationship='Owned',
+                status='ACTIVE',
+            )
+            db.session.add(commission_account)
+            db.session.flush()
+
+        commission_account.last_scraped_at = datetime.now()
+
+        now = datetime.now()
+        day_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        day_end   = now.replace(hour=23, minute=59, second=59, microsecond=999999)
+        existing = AgentAccountBalance.query.filter(
+            AgentAccountBalance.agent_account_id == commission_account.id,
+            AgentAccountBalance.snapshot_at >= day_start,
+            AgentAccountBalance.snapshot_at <= day_end,
+        ).first()
+
+        current_bal   = latest_txn.balance
+        available_bal = latest_txn.commission_amount if latest_txn.commission_amount is not None else latest_txn.balance
+
+        if existing:
+            existing.current_balance   = current_bal
+            existing.available_balance = available_bal
+            existing.snapshot_at       = now
+        else:
+            db.session.add(AgentAccountBalance(
+                agent_account_id=commission_account.id,
+                current_balance=current_bal,
+                available_balance=available_bal,
+                snapshot_at=now,
+            ))
+
+        db.session.commit()
+        print(f"  ✅ AgentAccountBalance synced for {business_shortcode}: balance={current_bal}")
+
+    def _update_transactions_batch(self, transactions_data: List[Dict],
                                   transaction_type: str, company_shortcode: str, 
                                   agent_id: int, business_shortcode: str = None) -> Dict:
         """
@@ -474,7 +586,15 @@ class TransactionService:
         # Final commit
         try:
             db.session.commit()
-            
+
+            # After committing commission transactions, sync the latest balance into
+            # AgentAccountBalance so the Agent Companies grid stays current.
+            if transaction_type == 'commission' and business_shortcode:
+                try:
+                    self._sync_commission_account_balance(business_shortcode)
+                except Exception as _sync_err:
+                    print(f"  ⚠️  AgentAccountBalance sync skipped for {business_shortcode}: {_sync_err}")
+
             # Log summary
             print(f"\n📊 Batch Update Summary:")
             print(f"   Total processed: {len(transactions_data)}")

@@ -29,12 +29,37 @@ function Dashboard({ currentPage, setCurrentPage }) {
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState(null);
   const [selectedDays, setSelectedDays] = useState(30);
+  const [companies, setCompanies] = useState([]);
+  const [selectedCompany, setSelectedCompany] = useState(null);
+  const [commissionBalance, setCommissionBalance] = useState(null);
+
+  useEffect(() => {
+    analyticsApi.getUserCompanies()
+      .then(res => {
+        if (res.success) setCompanies(res.data);
+      })
+      .catch(() => {});
+  }, []);
+
+  useEffect(() => {
+    if (selectedCompany?.shortcode) {
+      analyticsApi.getCommissionClosingBalance(selectedCompany.shortcode)
+        .then(res => { if (res.success) setCommissionBalance(res.data.balance); })
+        .catch(() => setCommissionBalance(null));
+    } else {
+      analyticsApi.getCommissionClosingBalanceTotal()
+        .then(res => { if (res.success) setCommissionBalance(res.data.balance); })
+        .catch(() => setCommissionBalance(null));
+    }
+  }, [selectedCompany]);
 
   const fetchAnalytics = useCallback(async () => {
     setIsLoading(true);
     setError(null);
     try {
-      const response = await analyticsApi.getDashboardAnalytics({ days: selectedDays });
+      const params = { days: selectedDays };
+      if (selectedCompany?.id) params.company_id = selectedCompany.id;
+      const response = await analyticsApi.getDashboardAnalytics(params);
       if (response.success) {
         setAnalyticsData(response.data);
       } else {
@@ -46,7 +71,7 @@ function Dashboard({ currentPage, setCurrentPage }) {
     } finally {
       setIsLoading(false);
     }
-  }, [selectedDays]);
+  }, [selectedDays, selectedCompany]);
 
   useEffect(() => {
     if (currentPage === 'dashboard') {
@@ -60,6 +85,10 @@ function Dashboard({ currentPage, setCurrentPage }) {
 
   const handleDaysChange = (days) => {
     setSelectedDays(days);
+  };
+
+  const handleCompanyChange = (company) => {
+    setSelectedCompany(company);
   };
 
   const renderDashboardContent = () => {
@@ -102,6 +131,9 @@ function Dashboard({ currentPage, setCurrentPage }) {
           selectedDays={selectedDays}
           onDaysChange={handleDaysChange}
           healthMetrics={analyticsData?.health_metrics}
+          companies={companies}
+          selectedCompany={selectedCompany}
+          onCompanyChange={handleCompanyChange}
         />
 
         {(() => {
@@ -112,7 +144,7 @@ function Dashboard({ currentPage, setCurrentPage }) {
 
           return (
             <>
-              <StatsGrid kpis={analyticsData?.kpis} isLoading={isLoading} isOnboarding={isOnboarding} />
+              <StatsGrid kpis={analyticsData?.kpis} isLoading={isLoading} isOnboarding={isOnboarding} commissionBalance={commissionBalance} selectedCompany={selectedCompany} />
 
               <div className="grid grid-cols-1 xl:grid-cols-3 gap-6">
                 <RevenueChart

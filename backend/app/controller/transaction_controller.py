@@ -678,6 +678,63 @@ def get_clawbacks():
         return jsonify({'error': str(e)}), 500
 
 
+@transaction_bp.route('/export-commission-tills', methods=['GET'])
+@jwt_required()
+def export_commission_tills():
+    """Export all commission till balances to an Excel file."""
+    try:
+        import pandas as pd
+        import io as _io
+
+        current_user_id = get_jwt_identity()
+        current_user = UserService.get_user_by_id(user_id=current_user_id)
+        if not current_user:
+            return jsonify({'error': 'User not found'}), 404
+
+        role = (current_user.role or 'user').lower()
+        if role in ('admin', 'administrator'):
+            company_ids = None
+        elif role == 'agent':
+            company_ids = [c.id for c in Company.query.filter_by(agent_user_id=current_user_id).all()]
+        else:
+            company_ids = [c.id for c in Company.query.filter_by(user_id=current_user_id).all()]
+
+        updated_after = request.args.get('updated_after')
+
+        result = transaction_service.get_commission_till_balances(
+            company_ids=company_ids, page=1, per_page=10000, updated_after=updated_after
+        )
+        if not result['success']:
+            return jsonify(result), 400
+
+        rows = result['data']
+        df = pd.DataFrame([{
+            'Till Name': r['till_name'],
+            'Shortcode': r['shortcode'],
+            'Current Balance (KES)': float(r['current_balance'] or 0),
+            'Available Balance (KES)': float(r['available_balance'] or 0),
+            'Last Updated': r['last_updated'],
+        } for r in rows])
+
+        output = _io.BytesIO()
+        with pd.ExcelWriter(output, engine='openpyxl') as writer:
+            df.to_excel(writer, sheet_name='Commission Till Balances', index=False)
+        output.seek(0)
+
+        from flask import Response
+        filename = f"commission_till_balances_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
+        return Response(
+            output.read(),
+            mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+            headers={'Content-Disposition': f'attachment; filename="{filename}"'},
+        )
+
+    except Exception as e:
+        current_app.logger.error(f"Error exporting commission tills: {e}")
+        import traceback; traceback.print_exc()
+        return jsonify({'error': str(e)}), 500
+
+
 @transaction_bp.route('/commission-till-balances', methods=['GET'])
 @jwt_required()
 def get_commission_till_balances():
@@ -707,6 +764,280 @@ def get_commission_till_balances():
         return jsonify(result), 200 if result['success'] else 400
     except Exception as e:
         current_app.logger.error(f"Error fetching commission till balances: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
+@transaction_bp.route('/user-companies', methods=['GET'])
+@jwt_required()
+def get_user_companies():
+    """Return all companies linked to the current user."""
+    try:
+        current_user_id = get_jwt_identity()
+        current_user = UserService.get_user_by_id(user_id=current_user_id)
+        if not current_user:
+            return jsonify({'error': 'User not found'}), 404
+
+        role = (current_user.role or 'user').lower()
+
+        if role in ('admin', 'administrator'):
+            companies = Company.query.filter(Company.shortcode.isnot(None)).all()
+        elif role == 'agent':
+            companies = Company.query.filter_by(agent_user_id=current_user_id).all()
+        else:
+            companies = Company.query.filter_by(user_id=current_user_id).all()
+
+        return jsonify({
+            'success': True,
+            'data': [
+                {'id': c.id, 'company_name': c.company_name, 'shortcode': c.shortcode}
+                for c in companies
+            ]
+        }), 200
+    except Exception as e:
+        current_app.logger.error(f"Error fetching user companies: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
+@transaction_bp.route('/commission-closing-balance', methods=['GET'])
+@jwt_required()
+def get_commission_closing_balance():
+    """Return the latest commission balance for a given shortcode."""
+    try:
+        from app import db
+        from sqlalchemy import text
+
+        shortcode = request.args.get('shortcode')
+        if not shortcode:
+            return jsonify({'error': 'shortcode is required'}), 400
+
+        row = db.session.execute(
+            text("""
+                SELECT t.balance, t.completion_time
+                FROM transactions t
+                JOIN companies c ON t.company_id = c.id
+                WHERE c.shortcode = :shortcode
+                  AND t.transaction_type = 'commission'
+                  AND t.business_shortcode = :shortcode
+                  AND t.receipt_no NOT LIKE 'COMM-%'
+                ORDER BY t.completion_time DESC, t.id DESC
+                LIMIT 1
+            """),
+            {'shortcode': shortcode}
+        ).fetchone()
+
+        if row is None:
+            return jsonify({'success': True, 'data': {'balance': None, 'as_of': None}}), 200
+
+        return jsonify({
+            'success': True,
+            'data': {
+                'balance': float(row.balance),
+                'as_of': row.completion_time.strftime('%Y-%m-%d %H:%M:%S')
+            }
+        }), 200
+    except Exception as e:
+        current_app.logger.error(f"Error fetching commission closing balance: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
+@transaction_bp.route('/commission-closing-balance-total', methods=['GET'])
+@jwt_required()
+def get_commission_closing_balance_total():
+    """Sum the latest commission balance across all companies linked to the current user."""
+    try:
+        from app import db
+        from sqlalchemy import text
+
+        current_user_id = get_jwt_identity()
+        current_user = UserService.get_user_by_id(user_id=current_user_id)
+        if not current_user:
+            return jsonify({'error': 'User not found'}), 404
+
+        role = (current_user.role or 'user').lower()
+
+        base_type_filter = (
+            "t.transaction_type = 'commission' "
+            "AND t.business_shortcode = c.shortcode "
+            "AND t.receipt_no NOT LIKE 'COMM-%'"
+        )
+
+        if role in ('admin', 'administrator'):
+            company_filter = f"WHERE {base_type_filter}"
+            params = {}
+        elif role == 'agent':
+            companies = Company.query.filter_by(agent_user_id=current_user_id).all()
+            ids = [c.id for c in companies]
+            if not ids:
+                return jsonify({'success': True, 'data': {'balance': 0.0, 'company_count': 0}}), 200
+            company_filter = f"WHERE c.id = ANY(:ids) AND {base_type_filter}"
+            params = {'ids': ids}
+        else:
+            companies = Company.query.filter_by(user_id=current_user_id).all()
+            ids = [c.id for c in companies]
+            if not ids:
+                return jsonify({'success': True, 'data': {'balance': 0.0, 'company_count': 0}}), 200
+            company_filter = f"WHERE c.id = ANY(:ids) AND {base_type_filter}"
+            params = {'ids': ids}
+
+        row = db.session.execute(
+            text(f"""
+                SELECT
+                    COALESCE(SUM(latest.balance), 0) AS total_balance,
+                    COUNT(*) AS company_count
+                FROM (
+                    SELECT DISTINCT ON (c.id)
+                        t.balance
+                    FROM transactions t
+                    JOIN companies c ON t.company_id = c.id
+                    {company_filter}
+                    ORDER BY c.id, t.completion_time DESC, t.id DESC
+                ) latest
+            """),
+            params
+        ).fetchone()
+
+        return jsonify({
+            'success': True,
+            'data': {
+                'balance': float(row.total_balance),
+                'company_count': int(row.company_count)
+            }
+        }), 200
+    except Exception as e:
+        current_app.logger.error(f"Error fetching total commission balance: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
+@transaction_bp.route('/commission-monthly-transfer-total', methods=['GET'])
+@jwt_required()
+def get_commission_monthly_transfer_total():
+    """
+    Sum all MMF commission transfers across every company the current user can see,
+    for the given commission month (transfer lands in month+1).
+    Query params: month (1-12), year
+    """
+    try:
+        from app import db
+        from sqlalchemy import text
+
+        month = request.args.get('month', type=int)
+        year  = request.args.get('year',  type=int)
+        if not month or not year:
+            return jsonify({'error': 'month and year are required'}), 400
+
+        transfer_month = month + 1
+        transfer_year  = year
+        if transfer_month > 12:
+            transfer_month = 1
+            transfer_year += 1
+
+        current_user_id = get_jwt_identity()
+        current_user = UserService.get_user_by_id(user_id=current_user_id)
+        if not current_user:
+            return jsonify({'error': 'User not found'}), 404
+
+        role = (current_user.role or 'user').lower()
+
+        if role in ('admin', 'administrator'):
+            company_filter = ""
+            params = {'yr': transfer_year, 'mo': transfer_month}
+        else:
+            companies = Company.query.filter(
+                db.or_(
+                    Company.user_id == current_user_id,
+                    Company.agent_user_id == current_user_id,
+                )
+            ).all()
+            ids = [c.id for c in companies]
+            if not ids:
+                return jsonify({'success': True, 'data': {'amount': 0.0, 'company_count': 0}}), 200
+            company_filter = "AND t.company_id = ANY(:ids)"
+            params = {'yr': transfer_year, 'mo': transfer_month, 'ids': ids}
+
+        row = db.session.execute(
+            text(f"""
+                SELECT
+                    COALESCE(SUM(ABS(t.withdrawn)), 0) AS total_amount,
+                    COUNT(*) AS company_count
+                FROM transactions t
+                JOIN companies c ON t.company_id = c.id
+                WHERE t.transaction_type = 'commission'
+                  AND t.reason_type LIKE '%Transfer of Commission to MMF%'
+                  AND EXTRACT(YEAR  FROM t.completion_time) = :yr
+                  AND EXTRACT(MONTH FROM t.completion_time) = :mo
+                  {company_filter}
+            """),
+            params
+        ).fetchone()
+
+        return jsonify({
+            'success': True,
+            'data': {
+                'amount': float(row.total_amount),
+                'company_count': int(row.company_count),
+            }
+        }), 200
+    except Exception as e:
+        current_app.logger.error(f"Error fetching total monthly commission transfer: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
+@transaction_bp.route('/commission-monthly-transfer', methods=['GET'])
+@jwt_required()
+def get_commission_monthly_transfer():
+    """
+    Return the head-office MMF transfer amount for a given commission month.
+    The transfer always lands on the 1st of the FOLLOWING month, so we look
+    in month+1 for the 'Agency H/O Transfer of Commission to MMF Account' row.
+    Query params: shortcode, month (1-12), year
+    """
+    try:
+        from app import db
+        from sqlalchemy import text
+
+        shortcode = request.args.get('shortcode')
+        month = request.args.get('month', type=int)
+        year  = request.args.get('year',  type=int)
+
+        if not shortcode or not month or not year:
+            return jsonify({'error': 'shortcode, month and year are required'}), 400
+
+        # Transfer month = commission month + 1
+        transfer_month = month + 1
+        transfer_year  = year
+        if transfer_month > 12:
+            transfer_month = 1
+            transfer_year += 1
+
+        row = db.session.execute(
+            text("""
+                SELECT ABS(t.withdrawn) AS amount, t.completion_time, t.receipt_no
+                FROM transactions t
+                JOIN companies c ON t.company_id = c.id
+                WHERE c.shortcode = :shortcode
+                  AND t.transaction_type = 'commission'
+                  AND t.reason_type LIKE '%Transfer of Commission to MMF%'
+                  AND EXTRACT(YEAR  FROM t.completion_time) = :yr
+                  AND EXTRACT(MONTH FROM t.completion_time) = :mo
+                ORDER BY t.completion_time DESC
+                LIMIT 1
+            """),
+            {'shortcode': shortcode, 'yr': transfer_year, 'mo': transfer_month}
+        ).fetchone()
+
+        if row is None:
+            return jsonify({'success': True, 'data': {'amount': None, 'receipt_no': None, 'as_of': None}}), 200
+
+        return jsonify({
+            'success': True,
+            'data': {
+                'amount': float(row.amount),
+                'receipt_no': row.receipt_no,
+                'as_of': row.completion_time.strftime('%Y-%m-%d %H:%M:%S'),
+            }
+        }), 200
+    except Exception as e:
+        current_app.logger.error(f"Error fetching monthly commission transfer: {e}")
         return jsonify({'error': str(e)}), 500
 
 

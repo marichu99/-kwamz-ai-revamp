@@ -63,4 +63,25 @@ export const analyticsApi = {
 
     return analyticsApi.request(endpoint, { method: 'GET' });
   },
+
+  getUserCompanies: () =>
+    analyticsApi.request('/transactions/user-companies', { method: 'GET' }),
+
+  getCommissionClosingBalance: (shortcode) =>
+    analyticsApi.request(`/transactions/commission-closing-balance?shortcode=${encodeURIComponent(shortcode)}`, { method: 'GET' }),
+
+  getCommissionClosingBalanceTotal: () =>
+    analyticsApi.request('/transactions/commission-closing-balance-total', { method: 'GET' }),
+
+  getCommissionMonthlyTransfer: (shortcode, month, year) =>
+    analyticsApi.request(
+      `/transactions/commission-monthly-transfer?shortcode=${encodeURIComponent(shortcode)}&month=${month}&year=${year}`,
+      { method: 'GET' }
+    ),
+
+  getCommissionMonthlyTransferTotal: (month, year) =>
+    analyticsApi.request(
+      `/transactions/commission-monthly-transfer-total?month=${month}&year=${year}`,
+      { method: 'GET' }
+    ),
 };
