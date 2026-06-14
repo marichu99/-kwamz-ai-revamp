@@ -7,7 +7,7 @@ from app.service.agentcompany_service import AgentCompanyService
 
 logger = logging.getLogger(__name__)
 
-fraud_alert_bp = Bluelogger.info('fraud_alert', __name__, url_prefix='/alerts')
+fraud_alert_bp = Blueprint('fraud_alert', __name__, url_prefix='/alerts')
 
 agent_company_service = AgentCompanyService()
 

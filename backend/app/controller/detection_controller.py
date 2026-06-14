@@ -9,7 +9,7 @@ import pandas as pd
 
 logger = logging.getLogger(__name__)
 
-detection_bp = Bluelogger.info('detection', __name__, url_prefix='/api/detection')
+detection_bp = Blueprint('detection', __name__, url_prefix='/api/detection')
 
 @detection_bp.route('/run', methods=['POST'])
 @jwt_required()

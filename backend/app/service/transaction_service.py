@@ -552,8 +552,6 @@ class TransactionService:
                     updated_transactions.append(existing)
                     updated_count += 1
                     
-                    if updated_count % 50 == 0:
-                        
                 else:
                     # Create new transaction
                     transaction = Transaction(**transaction_data)
@@ -562,8 +560,7 @@ class TransactionService:
                     created_count += 1
                     
                     self.update_transaction_stats(transaction)
-                    if created_count % 50 == 0:
-                
+
                 # Commit in batches of 100 to avoid memory issues
                 if (updated_count + created_count) % 100 == 0:
                     db.session.commit()

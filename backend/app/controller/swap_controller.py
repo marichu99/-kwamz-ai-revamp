@@ -5,7 +5,7 @@ from app.service.swap_service import SwapService
 
 logger = logging.getLogger(__name__)
 
-swap_bp = Bluelogger.info('swap', __name__, url_prefix='/swaps')
+swap_bp = Blueprint('swap', __name__, url_prefix='/swaps')
 
 
 @swap_bp.route('', methods=['OPTIONS'])

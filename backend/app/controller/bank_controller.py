@@ -7,7 +7,7 @@ from app.utils.response_utils import success_response, error_response
 
 logger = logging.getLogger(__name__)
 
-bank_bp = Bluelogger.info('banks', __name__, url_prefix='/')
+bank_bp = Blueprint('banks', __name__, url_prefix='/')
 
 bank_service = BankService()
 

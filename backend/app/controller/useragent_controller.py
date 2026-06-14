@@ -6,7 +6,7 @@ from app.service.user_agent_service import UserAgentService
 
 logger = logging.getLogger(__name__)
 
-user_agent_bp = Bluelogger.info('user_agent', __name__, url_prefix='/useragent')
+user_agent_bp = Blueprint('user_agent', __name__, url_prefix='/useragent')
 
 @user_agent_bp.route('', methods=['POST', 'OPTIONS'])
 @user_agent_bp.route('/', methods=['POST', 'OPTIONS'])

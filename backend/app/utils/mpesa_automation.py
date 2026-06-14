@@ -3339,9 +3339,6 @@ def _parse_and_save_kyc(kyc_html: str, short_code: str, agent_company, operator_
             )
             .first()
         )
-        if existing:
-        else:
-
     if existing:
         existing.firstname         = first_name or existing.firstname
         existing.lastname          = lastname   or existing.lastname

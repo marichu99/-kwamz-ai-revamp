@@ -25,7 +25,7 @@ FRAUD_TYPE_LABELS = {
 
 
 
-transaction_bp = Bluelogger.info('transaction', __name__, url_prefix='/transactions')
+transaction_bp = Blueprint('transaction', __name__, url_prefix='/transactions')
 
 transaction_service = TransactionService()
 

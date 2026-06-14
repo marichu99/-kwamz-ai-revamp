@@ -5,7 +5,7 @@ from app.service.agentcompany_service import AgentCompanyService
 
 logger = logging.getLogger(__name__)
 
-agent_company_bp = Bluelogger.info('agent_company', __name__, url_prefix='/agentcompany')
+agent_company_bp = Blueprint('agent_company', __name__, url_prefix='/agentcompany')
 
 # Handle OPTIONS requests separately
 @agent_company_bp.route('', methods=['OPTIONS'])

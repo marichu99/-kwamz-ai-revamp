@@ -18,7 +18,7 @@ import json
 logger = logging.getLogger(__name__)
 
 
-company_bp = Bluelogger.info('company', __name__, url_prefix='/company')
+company_bp = Blueprint('company', __name__, url_prefix='/company')
 
 company_service = CompanyService(db)
 

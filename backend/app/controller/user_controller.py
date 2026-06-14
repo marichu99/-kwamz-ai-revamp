@@ -16,7 +16,7 @@ import re
 logger = logging.getLogger(__name__)
 
 
-user_bp = Bluelogger.info('users', __name__, url_prefix='/users')
+user_bp = Blueprint('users', __name__, url_prefix='/users')
 
 @user_bp.route('', methods=['OPTIONS'])
 @user_bp.route('/', methods=['OPTIONS'])
