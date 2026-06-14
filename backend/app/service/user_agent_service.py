@@ -1,3 +1,4 @@
+import logging
 from app import db
 from app.model.useragent import UserAgent, user_agent_companies
 from app.model.agentcompany import AgentCompany
@@ -11,6 +12,8 @@ import os
 import re
 from flask import current_app
 from sqlalchemy.exc import IntegrityError
+
+logger = logging.getLogger(__name__)
 
 class UserAgentService:
     def __init__(self):
@@ -209,7 +212,7 @@ class UserAgentService:
         are always shown.
         """
         try:
-            print(f"The user id is {user_id}")
+            logger.info(f"The user id is {user_id}")
             is_scraped   = UserAgent.idnumber.like('MPESA-%')
             still_linked = exists().where(
                 user_agent_companies.c.user_agent_id == UserAgent.id
@@ -227,7 +230,7 @@ class UserAgentService:
             )
             return [self.serialize_user_agent(user) for user in users], None
         except Exception as e:
-            print(f"Error fetching users: {str(e)}")
+            logger.error(f"Error fetching users: {str(e)}")
             current_app.logger.error(f"Error fetching users: {str(e)}")
             return [], 'Internal server error'
 

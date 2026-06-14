@@ -1,4 +1,5 @@
 from playwright.sync_api import sync_playwright
+import logging
 from PIL import Image
 from app import db
 from app.model.document import Document
@@ -6,6 +7,8 @@ from app.model.useragent import UserAgent
 import pytesseract
 import anthropic
 import re
+
+logger = logging.getLogger(__name__)
 import sys
 import time
 import base64
@@ -17,21 +20,16 @@ def solve_arithmetic_captcha(captcha_image_path):
     """
     captcha_image = Image.open(captcha_image_path)
     captcha_text = pytesseract.image_to_string(captcha_image, config="--psm 7")
-    print(f"Extracted CAPTCHA text: {captcha_text}")
-
+    
     # Solve the arithmetic question
     match = re.match(r"(\d+)\s*([\+\-\*/])\s*(\d+)", captcha_text.strip())
     if not match:
-        print("An error occurred while solving the captcha")
-        solve_arithmetic_captcha(captcha_image_path)
+                solve_arithmetic_captcha(captcha_image_path)
         # raise ValueError("Invalid CAPTCHA format")
     num1, operator, num2 = match.groups()
     num1, num2 = int(num1), int(num2)
 
-    print(f"The operator is {operator}")
-    print(f"The num 1 {num1}")
-    print(f"The num2 is {num2}")
-
+            
     if operator == "+":
         return num1 + num2
     elif operator == "-":
@@ -58,15 +56,12 @@ def authenticate_dci(page, police_clearance, id_number):
     
     try:
         valid_keyword = page.locator("table h1").inner_text(timeout=5000)
-        print(f"Police Clearance Status: {valid_keyword}")
-        return valid_keyword
+                return valid_keyword
     except Exception:
-        print("Police Clearance is invalid.")
-        return "Invalid"
+                return "Invalid"
 
 def authenticate_kra_from_app (kra_pin,police_number,id_number,tax_payer_name):
-    print(f"Received inputs - KRA PIN: {kra_pin}, Police Clearance: {police_number}, ID Number: {id_number}")
-
+    
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=False, slow_mo=2000)  # 2000ms (1 second) delay per action
         context = browser.new_context(
@@ -89,35 +84,29 @@ def authenticate_kra_from_app (kra_pin,police_number,id_number,tax_payer_name):
         # Final output based on statuses
         if "Active" in kra_status and "VALID" in police_status:
             status = rf"Both KRA PIN and Police Clearance are valid for {tax_payer_name}."
-            user = UserAgent.query.filter(id_number==id_number).first()
+            user = UserAgent.query.filter(UserAgent.idnumber == id_number).first()
             
             # update user authenticated status
             if user:
                 user.is_authentic = True
                 db.session.add(user)
                 db.session.commit()
-                print(f"User {user.firstname} {user.lastname} authenticated status updated to True.")
-            else:
-                print(f"No user found with ID number {id_number}.")
-                
+                            else:
+                                
             authenticated=True
-            print(status)
-            return status
+                        return status
         elif "Active" not in kra_status and "VALID" not in police_status:
             status = "Both KRA PIN and Police Clearance are invalid."
             authenticated=False
-            print(status)
-            return status
+                        return status
         elif "Active" in kra_status:
             status = "KRA PIN is valid, but Police Clearance is invalid."
             authenticated=False
-            print(status)
-            return status
+                        return status
         elif "VALID" in police_status:
             status = "Police Clearance is valid, but KRA PIN is invalid."
             authenticated=False
-            print(status)
-            return status
+                        return status
         
         document = Document(
         kra_pin=kra_pin,
@@ -141,11 +130,9 @@ def authenticate_kra(page, kra_pin):
     captcha_image_path = "captcha.png"
     captcha_element = page.query_selector("#captcha_img")
     captcha_element.screenshot(path=captcha_image_path)
-    print(f"CAPTCHA image saved as {captcha_image_path}")
-
+    
     captcha_solution = solve_arithmetic_captcha(captcha_image_path)
-    print(f"CAPTCHA solution: {captcha_solution}")
-
+    
     page.fill("#captcahText", str(captcha_solution))
     page.click("#consult")
 
@@ -156,11 +143,9 @@ def authenticate_kra(page, kra_pin):
             cells = rows.nth(i).locator("td")
             row_data = [cells.nth(j).inner_text() for j in range(cells.count())]
             if row_data[0] == "PIN Status":
-                print(f"KRA PIN Status: {row_data[1]}")
-                return row_data[1]
+                                return row_data[1]
     except Exception:
-        print("KRA PIN is invalid.")
-        return "Invalid"
+                return "Invalid"
     
 def solve_arithmetic_captcha(captcha_image_path: str) -> int:
     """
@@ -168,8 +153,7 @@ def solve_arithmetic_captcha(captcha_image_path: str) -> int:
     """
     captcha_image = Image.open(captcha_image_path)
     captcha_text = pytesseract.image_to_string(captcha_image, config="--psm 7").strip()
-    print(f"[INFO] Extracted CAPTCHA text: {captcha_text}")
-
+    
     match = re.match(r"(\d+)\s*([\+\-\*/xX])\s*(\d+)", captcha_text)
     if not match:
         raise ValueError(f"Invalid CAPTCHA format: {captcha_text}")
@@ -211,8 +195,7 @@ def wait_for_login_page_ready(page, timeout: float = 30000):
             timeout=timeout
         )
 
-        print("[INFO] Login page is fully loaded and form fields are ready.")
-    except Exception as e:
+            except Exception as e:
         raise Exception("[ERROR] Timeout waiting for login page to load or form fields to become ready.")
 
 def fill_login_form(page, short_code: str, username: str, password: str):
@@ -225,13 +208,11 @@ def fill_login_form(page, short_code: str, username: str, password: str):
     page.fill("//input[@id='userAccount']", username)
     page.fill("//input[@id='password']", password)
 
-    print("[INFO] Login form fields filled successfully.")
-    
+        
         
 def solveCaptchaXai(image_path):
     anthropic_key = os.getenv("ANTHROPIC_API_KEY")
-    print(f"[INFO] Solving CAPTCHA with Anthropic Claude...")
-
+    
     with open(image_path, "rb") as f:
         image_b64 = base64.b64encode(f.read()).decode()
 
@@ -259,8 +240,7 @@ def solveCaptchaXai(image_path):
     )
 
     captcha_text = response.content[0].text.strip()
-    print(f"Extracted CAPTCHA: {captcha_text}")
-    return captcha_text
+        return captcha_text
 
 
 
@@ -283,14 +263,11 @@ def capture_and_solve_captcha(page) -> str:
             captcha_locator = page.locator(captcha_selector).first
             captcha_locator.wait_for(state="visible", timeout=5000)
             captcha_locator.screenshot(path=captcha_path)
-            print(f"[INFO] CAPTCHA image saved at {captcha_path}")
-
+            
             captcha_solution = solveCaptchaXai(captcha_path)
-            print(f"[INFO] CAPTCHA solved: {captcha_solution}")
-            return str(captcha_solution)
+                        return str(captcha_solution)
         except Exception as e:
-            print(f"[WARN] CAPTCHA screenshot attempt {attempt + 1}/{max_retries} failed: {e}")
-            if attempt < max_retries - 1:
+                        if attempt < max_retries - 1:
                 import time
                 time.sleep(2)
             else:

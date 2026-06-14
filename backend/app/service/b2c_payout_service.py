@@ -1,3 +1,4 @@
+import logging
 import os
 import uuid
 import requests
@@ -13,6 +14,8 @@ from app import db
 from app.model.swap_payout import SwapPayout
 from app.model.agent_swap import AgentSwap
 from app.service.mpesa_service import MpesaService
+
+logger = logging.getLogger(__name__)
 
 load_dotenv()
 
@@ -74,7 +77,7 @@ class B2CPayoutService:
         response = requests.post(url, json=payload, headers=headers, verify=False)
         response_data = response.json()
 
-        print(f"B2C response for {phone_number}: {response_data}")
+        logger.info(f"B2C response for {phone_number}: {response_data}")
 
         return {
             'originator_conversation_id': originator_conversation_id,
@@ -187,7 +190,7 @@ class B2CPayoutService:
             ).first()
 
         if not payout:
-            print(f"B2C result: No payout found for ConversationID={conversation_id}")
+            logger.info(f"B2C result: No payout found for ConversationID={conversation_id}")
             return False
 
         payout.result_code = result_code
@@ -207,7 +210,7 @@ class B2CPayoutService:
             payout.status = 'failed'
 
         db.session.commit()
-        print(f"B2C result processed: payout #{payout.id} -> {payout.status}")
+        logger.info(f"B2C result processed: payout #{payout.id} -> {payout.status}")
         return True
 
     def process_b2c_timeout(self, data):
@@ -226,7 +229,7 @@ class B2CPayoutService:
             ).first()
 
         if not payout:
-            print(f"B2C timeout: No payout found for ConversationID={conversation_id}")
+            logger.info(f"B2C timeout: No payout found for ConversationID={conversation_id}")
             return False
 
         payout.status = 'failed'
@@ -234,7 +237,7 @@ class B2CPayoutService:
         payout.completed_at = datetime.utcnow()
         db.session.commit()
 
-        print(f"B2C timeout processed: payout #{payout.id} -> failed")
+        logger.error(f"B2C timeout processed: payout #{payout.id} -> failed")
         return True
 
     def get_payouts_by_swap(self, swap_id):

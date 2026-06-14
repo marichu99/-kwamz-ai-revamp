@@ -1,0 +1,229 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Monthly Commission Rollup — {{ report.label }}</title>
+<style>
+  @page {
+    size: A4;
+    margin: 18mm 15mm 18mm 15mm;
+    @bottom-center {
+      content: "Page " counter(page) " of " counter(pages);
+      font-size: 9px;
+      color: #888;
+    }
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    font-family: "DejaVu Sans", Arial, sans-serif;
+    font-size: 10.5px;
+    color: #1e293b;
+    line-height: 1.5;
+  }
+
+  /* ── COVER ── */
+  .cover {
+    background: #0f172a;
+    color: #fff;
+    padding: 28px 24px 22px;
+    border-radius: 6px;
+    margin-bottom: 20px;
+  }
+  .cover h1 { font-size: 20px; font-weight: 700; }
+  .cover .subtitle { font-size: 11px; color: #94a3b8; margin-top: 4px; }
+  .cover .meta { margin-top: 14px; display: flex; gap: 28px; flex-wrap: wrap; }
+  .cover .meta-item .label { font-size: 9px; text-transform: uppercase; color: #64748b; letter-spacing: 0.5px; }
+  .cover .meta-item .value { font-size: 13px; font-weight: 600; color: #e2e8f0; }
+
+  /* ── SUMMARY GRID ── */
+  .summary-grid {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 8px;
+    margin-bottom: 20px;
+  }
+  .summary-card {
+    border: 1px solid #e2e8f0;
+    border-radius: 6px;
+    padding: 10px 12px;
+  }
+  .summary-card .label {
+    font-size: 8.5px;
+    text-transform: uppercase;
+    color: #64748b;
+    letter-spacing: 0.4px;
+    margin-bottom: 3px;
+  }
+  .summary-card .value {
+    font-size: 13px;
+    font-weight: 700;
+    color: #0f172a;
+  }
+  .summary-card .sub {
+    font-size: 8.5px;
+    color: #94a3b8;
+    margin-top: 2px;
+  }
+  .summary-card.highlight { border-color: #7c3aed; background: #f5f3ff; }
+  .summary-card.highlight .value { color: #5b21b6; }
+  .up   { color: #059669; }
+  .down { color: #dc2626; }
+
+  /* ── SECTION TITLE ── */
+  .section-title {
+    font-size: 11px;
+    font-weight: 700;
+    color: #0f172a;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    border-bottom: 2px solid #7c3aed;
+    padding-bottom: 4px;
+    margin-bottom: 10px;
+  }
+
+  /* ── TABLE ── */
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 9.5px;
+  }
+  thead tr { background: #0f172a; color: #fff; }
+  thead th {
+    padding: 7px 8px;
+    text-align: left;
+    font-weight: 600;
+    font-size: 8.5px;
+    text-transform: uppercase;
+    letter-spacing: 0.3px;
+  }
+  thead th.right { text-align: right; }
+  tbody tr:nth-child(even) { background: #f8fafc; }
+  tbody tr { border-bottom: 1px solid #f1f5f9; }
+  tbody td { padding: 6px 8px; vertical-align: middle; }
+  tbody td.right { text-align: right; font-variant-numeric: tabular-nums; }
+  tbody td.mono { font-family: monospace; font-size: 8.5px; color: #64748b; }
+
+  .badge {
+    display: inline-block;
+    padding: 1px 6px;
+    border-radius: 10px;
+    font-size: 8px;
+    font-weight: 600;
+  }
+  .badge-up   { background: #d1fae5; color: #065f46; }
+  .badge-down { background: #fee2e2; color: #991b1b; }
+  .badge-flat { background: #f1f5f9; color: #475569; }
+
+  .footer {
+    margin-top: 24px;
+    font-size: 8.5px;
+    color: #94a3b8;
+    text-align: center;
+  }
+</style>
+</head>
+<body>
+
+<!-- Cover -->
+<div class="cover">
+  <h1>Monthly Commission Rollup Report</h1>
+  <div class="subtitle">Aggregator roll-up per till · Commission earned in {{ report.label }}</div>
+  <div class="meta">
+    <div class="meta-item">
+      <div class="label">Commission Month</div>
+      <div class="value">{{ report.label }}</div>
+    </div>
+    <div class="meta-item">
+      <div class="label">Rollup Posted On</div>
+      <div class="value">1 {{ report.tills[0].completion_time[:7] if report.tills else '—' }}</div>
+    </div>
+    <div class="meta-item">
+      <div class="label">Tills</div>
+      <div class="value">{{ report.summary.till_count }}</div>
+    </div>
+    <div class="meta-item">
+      <div class="label">Generated</div>
+      <div class="value">{{ generated_at }}</div>
+    </div>
+  </div>
+</div>
+
+<!-- Summary -->
+{% set s = report.summary %}
+{% set mom_pct = s.mom_pct | round(1) if s.mom_pct is not none else none %}
+<div class="summary-grid">
+  <div class="summary-card highlight">
+    <div class="label">Total Rolled Up</div>
+    <div class="value">KES {{ '{:,.2f}'.format(s.total_amount) }}</div>
+    <div class="sub">{{ report.label }}</div>
+  </div>
+  <div class="summary-card">
+    <div class="label">Prev Month</div>
+    <div class="value">KES {{ '{:,.2f}'.format(s.prev_total_amount) }}</div>
+    <div class="sub">{{ report.prev_label }}</div>
+  </div>
+  <div class="summary-card">
+    <div class="label">MoM Change</div>
+    <div class="value {% if s.mom_change >= 0 %}up{% else %}down{% endif %}">
+      {{ '+' if s.mom_change >= 0 else '' }}KES {{ '{:,.2f}'.format(s.mom_change | abs) }}
+    </div>
+    <div class="sub">{{ ('+' if s.mom_change >= 0 else '') + mom_pct|string + '%' if mom_pct is not none else '—' }}</div>
+  </div>
+  <div class="summary-card">
+    <div class="label">Number of Tills</div>
+    <div class="value">{{ s.till_count }}</div>
+    <div class="sub">with rollup data</div>
+  </div>
+</div>
+
+<!-- Rollup Table -->
+<div class="section-title">Rollup by Till</div>
+<table>
+  <thead>
+    <tr>
+      <th>#</th>
+      <th>Company / Till</th>
+      <th>Shortcode</th>
+      <th class="right">Rolled Up (KES)</th>
+      <th class="right">Prev Month (KES)</th>
+      <th class="right">MoM Change</th>
+      <th>Receipt No</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for t in report.tills %}
+    {% set pct_val = (t.mom_pct | round(1)) if t.mom_pct is not none else none %}
+    <tr>
+      <td>{{ loop.index }}</td>
+      <td>
+        <strong>{{ t.company_name or '—' }}</strong>
+        {% if t.location and t.location != '—' %}<br><span style="color:#64748b;">{{ t.location }}</span>{% endif %}
+      </td>
+      <td class="mono">{{ t.shortcode }}</td>
+      <td class="right"><strong>{{ '{:,.2f}'.format(t.amount) }}</strong></td>
+      <td class="right" style="color:#64748b;">{{ '{:,.2f}'.format(t.prev_amount) }}</td>
+      <td class="right">
+        {% if t.mom_change | abs < 0.01 %}
+          <span class="badge badge-flat">—</span>
+        {% elif t.mom_change > 0 %}
+          <span class="badge badge-up">+{{ pct_val }}%</span>
+        {% else %}
+          <span class="badge badge-down">{{ pct_val }}%</span>
+        {% endif %}
+      </td>
+      <td class="mono">{{ t.receipt_no }}</td>
+    </tr>
+    {% else %}
+    <tr><td colspan="7" style="text-align:center;color:#94a3b8;padding:16px;">No rollup data for this period</td></tr>
+    {% endfor %}
+  </tbody>
+</table>
+
+<div class="footer">
+  Generated by Kwamz AI · {{ generated_at }} · Confidential
+</div>
+
+</body>
+</html>

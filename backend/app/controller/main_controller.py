@@ -1,3 +1,4 @@
+import logging
 from flask import Flask, render_template, request, jsonify
 from utils.kra_pin_details import extract_taxpayer_details
 import app.service.mpesa_service as mpesa_service
@@ -10,6 +11,8 @@ import subprocess
 from dotenv import load_dotenv
 import os
 import sys
+
+logger = logging.getLogger(__name__)
 
 load_dotenv()
 
@@ -31,7 +34,7 @@ def submit():
 
     res = authenticate_kra_from_app(kra_pin=kra_pin,police_number=police_clearance,id_number=id_number)
 
-    print(f"the res is {res}")
+    logger.info(f"the res is {res}")
     return jsonify({
         "success":res
     })
@@ -50,7 +53,7 @@ def extract_pin():
         if "error" in extracted_details:
             return jsonify({"error": extracted_details["error"]})
 
-        print(f"the extracted kra pin is {extracted_details['PIN']}")
+        logger.info(f"the extracted kra pin is {extracted_details['PIN']}")
 
         return jsonify({
             "kraPin": extracted_details["PIN"],
@@ -79,7 +82,7 @@ def extract_police_clearance():
     extract_police_clearance = extract_clearance_details(file_path)["Reference Number"]
     extract_id_number = extract_clearance_details(file_path)["ID Number"]
 
-    print(f"the extracted police clearance is {extract_police_clearance} ")
+    logger.info(f"the extracted police clearance is {extract_police_clearance} ")
 
     return jsonify({"refNo": extract_police_clearance, "idNo":extract_id_number})
 

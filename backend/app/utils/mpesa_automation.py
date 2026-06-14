@@ -1,3 +1,4 @@
+import logging
 from playwright.sync_api import sync_playwright,Page,Locator,Download, TimeoutError as PlaywrightTimeoutError
 from flask import current_app
 from app.utils.script import fill_login_form, capture_and_solve_captcha
@@ -26,6 +27,8 @@ import time
 import random
 import traceback
 import numpy as np
+
+logger = logging.getLogger(__name__)
 
 
 transaction_service = TransactionService()
@@ -75,13 +78,13 @@ def login_to_mpesa(password: str = None, username: str = None, short_code: str =
         # Solve captcha initially — ensure solution looks valid (<= 4 chars)
         captcha_solution = capture_and_solve_captcha(page)
         fill_login_form(page, short_code, username, password)
-        print("[INFO] Login form filled")
-        print(f"[DEBUG] Initial captcha solution: {captcha_solution}")
+        logger.info("[INFO] Login form filled")
+        logger.info(f"[DEBUG] Initial captcha solution: {captcha_solution}")
 
         while not _is_valid_captcha(captcha_solution):
             captcha_solution = retry_captcha_login(page)
             fill_login_form(page, short_code, username, password)
-            print(f"[DEBUG] Retried captcha solution (validity fix): {captcha_solution}")
+            logger.info(f"[DEBUG] Retried captcha solution (validity fix): {captcha_solution}")
 
         # Submit loop: retry captcha if the server says it's wrong
         MAX_CAPTCHA_RETRIES = 5
@@ -90,24 +93,24 @@ def login_to_mpesa(password: str = None, username: str = None, short_code: str =
         for attempt in range(1, MAX_CAPTCHA_RETRIES + 1):
             # Guard: ensure exactly 4 digits before every login click
             while not _is_valid_captcha(captcha_solution):
-                print(f"[DEBUG] Invalid captcha '{captcha_solution}' on attempt {attempt}, re-solving...")
+                logger.warning(f"[DEBUG] Invalid captcha '{captcha_solution}' on attempt {attempt}, re-solving...")
                 captcha_solution = retry_captcha_login(page)
 
-            print(f"[INFO] Login attempt {attempt}/{MAX_CAPTCHA_RETRIES} with captcha: {captcha_solution}")
+            logger.info(f"[INFO] Login attempt {attempt}/{MAX_CAPTCHA_RETRIES} with captcha: {captcha_solution}")
 
             page.fill("//input[@id='verifyCode']", captcha_solution)
             page.click("//button[@id='loginBtn']")
-            print("[INFO] Login button clicked; waiting for response...")
+            logger.info("[INFO] Login button clicked; waiting for response...")
 
             # Brief pause to let error message appear before checking
             time.sleep(3)
 
             if has_verification_error_regex(page):
-                print(f"[WARN] Captcha wrong on attempt {attempt}, re-solving...")
+                logger.warning(f"[WARN] Captcha wrong on attempt {attempt}, re-solving...")
                 captcha_solution = retry_captcha_login(page)
                 while not _is_valid_captcha(captcha_solution):
                     captcha_solution = retry_captcha_login(page)
-                    print(f"[DEBUG] Captcha re-solve (validity fix): {captcha_solution}")
+                    logger.info(f"[DEBUG] Captcha re-solve (validity fix): {captcha_solution}")
                 continue
 
             # No error shown — wait for the post-login dashboard element
@@ -117,13 +120,13 @@ def login_to_mpesa(password: str = None, username: str = None, short_code: str =
                     timeout=60000
                 )
                 search.click()
-                print("[SUCCESS] Logged in successfully!")
+                logger.info("[SUCCESS] Logged in successfully!")
                 logged_in = True
                 break
             except PlaywrightTimeoutError:
                 # Dashboard didn't appear — check if error crept in after the sleep
                 if has_verification_error_regex(page):
-                    print(f"[WARN] Captcha error detected after waiting (attempt {attempt}), retrying...")
+                    logger.error(f"[WARN] Captcha error detected after waiting (attempt {attempt}), retrying...")
                     captcha_solution = retry_captcha_login(page)
                     while not _is_valid_captcha(captcha_solution):
                         captcha_solution = retry_captcha_login(page)
@@ -133,10 +136,10 @@ def login_to_mpesa(password: str = None, username: str = None, short_code: str =
         if not logged_in:
             raise Exception(f"[ERROR] Failed to log in after {MAX_CAPTCHA_RETRIES} captcha attempts.")
 
-        print("[INFO] Navigating to child organization page...")
+        logger.info("[INFO] Navigating to child organization page...")
         navigate_to_child_organization(page)
 
-        print("[INFO] Browser will remain open for inspection. Press ENTER to close.")
+        logger.info("[INFO] Browser will remain open for inspection. Press ENTER to close.")
         # input()
 
 
@@ -160,7 +163,7 @@ def retry_captcha_login(page:Page) -> str:
     """
     # Predict the captcha that is currently displayed before refreshing
     captcha_solution = capture_and_solve_captcha(page)
-    print(f"[DEBUG] Captcha predicted (pre-refresh): {captcha_solution}")
+    logger.info(f"[DEBUG] Captcha predicted (pre-refresh): {captcha_solution}")
 
     if _is_valid_captcha(captcha_solution):
         return captcha_solution
@@ -169,12 +172,12 @@ def retry_captcha_login(page:Page) -> str:
     svg_element = page.query_selector("//div[@class='img-part']//*[name()='svg']")
     if svg_element:
         svg_element.click()
-        print("[INFO] Clicked SVG element to refresh captcha")
+        logger.info("[INFO] Clicked SVG element to refresh captcha")
         time.sleep(1)  # wait for new image to render
         captcha_solution = capture_and_solve_captcha(page)
-        print(f"[DEBUG] Captcha predicted (post-refresh): {captcha_solution}")
+        logger.info(f"[DEBUG] Captcha predicted (post-refresh): {captcha_solution}")
     else:
-        print("[ERROR] SVG element not found")
+        logger.error("[ERROR] SVG element not found")
         raise Exception("Failed to locate SVG element for captcha refresh")
 
     return captcha_solution
@@ -189,27 +192,27 @@ def maximize_page(page: Page) -> None:
     try:
         # Set viewport to a large size (can adjust based on your needs)
         page.set_viewport_size({"width": 1920, "height": 1080})
-        print("[SUCCESS] Page maximized to 1920x1080")
+        logger.info("[SUCCESS] Page maximized to 1920x1080")
     except Exception as e:
-        print(f"[ERROR] Failed to maximize page: {e}")
+        logger.error(f"[ERROR] Failed to maximize page: {e}")
         
 def _navigate_to_child_org_list(page) -> None:
     """Navigate to the Child Organisation list without starting row processing."""
     close_portal_tabs(page)
-    print("[INFO] Hovering on the index icon...")
+    logger.info("[INFO] Hovering on the index icon...")
     svg_icon = page.wait_for_selector(
         "(//*[name()='svg'][@class='svg-icon'])[2]",
         timeout=60000
     )
     svg_icon.hover()
-    print("[INFO] Hover successful, waiting for 'My Organization'...")
+    logger.info("[INFO] Hover successful, waiting for 'My Organization'...")
 
     my_org_button = page.wait_for_selector(
         "//span[normalize-space()='My Organization']",
         timeout=60000
     )
     my_org_button.click()
-    print("[INFO] 'My Organization' clicked.")
+    logger.info("[INFO] 'My Organization' clicked.")
     page.wait_for_timeout(2000)
     page.mouse.click(10, 10)
 
@@ -218,7 +221,7 @@ def _navigate_to_child_org_list(page) -> None:
         timeout=60000
     )
     child_org_btn.click()
-    print("[INFO] 'Child Organization' clicked. Waiting for page to load...")
+    logger.info("[INFO] 'Child Organization' clicked. Waiting for page to load...")
     page.wait_for_timeout(2000)
 
 def navigate_to_child_organization(page):
@@ -247,13 +250,13 @@ def _scrap_swaps_(page: Page, shortcodes: Set[str]) -> None:
     pending_shortcodes = {sc for sc in shortcodes if not SwapScrapeLog.already_scraped_today(sc)}
     skipped_count = len(shortcodes) - len(pending_shortcodes)
     if skipped_count:
-        print(f"[SWAPS] {skipped_count} shortcode(s) already scraped today — skipping.")
+        logger.warning(f"[SWAPS] {skipped_count} shortcode(s) already scraped today — skipping.")
     if not pending_shortcodes:
-        print("[SWAPS] All shortcodes have been scraped today. Nothing to do.")
+        logger.info("[SWAPS] All shortcodes have been scraped today. Nothing to do.")
         return
 
     # ── Step 1: hover over the active sub-menu to reveal the search panel ───
-    print("[SWAPS] Hovering over active sub-menu...")
+    logger.info("[SWAPS] Hovering over active sub-menu...")
     sub_menu = page.wait_for_selector(
         "//li[@class='el-sub-menu is-active']//div[@class='el-sub-menu__title el-tooltip__trigger el-tooltip__trigger']",
         timeout=30000,
@@ -262,7 +265,7 @@ def _scrap_swaps_(page: Page, shortcodes: Set[str]) -> None:
     page.wait_for_timeout(1000)
 
     # ── Step 2: click the 'Organization Operator' tab ────────────────────────
-    print("[SWAPS] Clicking 'Organization Operator'...")
+    logger.info("[SWAPS] Clicking 'Organization Operator'...")
     org_op_tab = page.wait_for_selector(
         "//span[@class='number-title el-tooltip__trigger el-tooltip__trigger'][normalize-space()='Organization Operator']",
         timeout=30000,
@@ -281,18 +284,18 @@ def _scrap_swaps_(page: Page, shortcodes: Set[str]) -> None:
     preselected_pagination = False
     successfully_scraped: list[str] = []
     for num,shortcode in enumerate(sorted(pending_shortcodes)):
-        print(f"[SWAPS] Querying shortcode: {shortcode}")
+        logger.info(f"[SWAPS] Querying shortcode: {shortcode}")
         try:
             sc_input.fill('')
             sc_input.fill(shortcode)
             page.wait_for_timeout(500)
             
             # if(num > 0):
-            #     print(f"We have scraped {scraped_rows} rows for the previous shortcode, attempting to close detail panels before next search...")
+            #     logger.info(f"We have scraped {scraped_rows} rows for the previous shortcode, attempting to close detail panels before next search...")
             #     for _ in range(scraped_rows):
             #         try:
             #             close_detail_panel_idx(page)
-            #             print("[SWAPS] Closed a detail panel")
+            #             logger.info("[SWAPS] Closed a detail panel")
             #             page.wait_for_timeout(1000)
             #         except Exception:
             #             pass
@@ -324,7 +327,7 @@ def _scrap_swaps_(page: Page, shortcodes: Set[str]) -> None:
             swap_date: Optional[datetime] = None
             row_details: dict = {}
             rows = page.query_selector_all("//tr[@class='el-table__row']")
-            print(f"[SWAPS] {shortcode}: drilling into {len(rows)} row(s) for detail capture")
+            logger.info(f"[SWAPS] {shortcode}: drilling into {len(rows)} row(s) for detail capture")
 
             for idx in range(len(rows)):
                 try:
@@ -336,7 +339,7 @@ def _scrap_swaps_(page: Page, shortcodes: Set[str]) -> None:
 
                     detail_btn = row.query_selector("button[type='button']")
                     if not detail_btn:
-                        print(f"[SWAPS][WARN] No detail button on row {idx + 1}, skipping.")
+                        logger.warning(f"[SWAPS][WARN] No detail button on row {idx + 1}, skipping.")
                         continue
 
                     detail_btn.click()
@@ -352,15 +355,15 @@ def _scrap_swaps_(page: Page, shortcodes: Set[str]) -> None:
                             timeout=10000
                         )
                         basic_info_html = basic_info_el.inner_html()
-                        print(f"[SWAPS] Row {idx + 1}: captured basic-info ({len(basic_info_html)} chars)")
+                        logger.info(f"[SWAPS] Row {idx + 1}: captured basic-info ({len(basic_info_html)} chars)")
                         reg_time = _parse_registration_time_from_basic_info(basic_info_html)
                         row_details.setdefault(idx, {})["reg_time"] = reg_time
                         if reg_time:
-                            print(f"[SWAPS] Row {idx + 1}: Registration Time → {reg_time.date()}")
+                            logger.info(f"[SWAPS] Row {idx + 1}: Registration Time → {reg_time.date()}")
                         # Use Active operator's Registration Time as the swap date
                         if swap_date is None and idx < len(scraped_ops) and scraped_ops[idx]["is_active"] and reg_time:
                             swap_date = reg_time
-                            print(f"[SWAPS] Row {idx + 1}: swap_date set → {swap_date.date()}")
+                            logger.info(f"[SWAPS] Row {idx + 1}: swap_date set → {swap_date.date()}")
                         # Save debug file
                         debug_path = os.path.join(debug_dir, f"swaps_{shortcode}_row{idx + 1}_{ts}.html")
                         with open(debug_path, "w", encoding="utf-8") as f:
@@ -369,7 +372,7 @@ def _scrap_swaps_(page: Page, shortcodes: Set[str]) -> None:
                             f.write(basic_info_html)
                             f.write("\n</section>\n")
                     except Exception as bi_err:
-                        print(f"[SWAPS][WARN] Row {idx + 1}: basic-info not found — {bi_err}")
+                        logger.warning(f"[SWAPS][WARN] Row {idx + 1}: basic-info not found — {bi_err}")
 
                     # Capture KYC form section
                     kyc_html = ""
@@ -379,10 +382,10 @@ def _scrap_swaps_(page: Page, shortcodes: Set[str]) -> None:
                             timeout=10000
                         )
                         kyc_html = kyc_panel.inner_html()
-                        print(f"[SWAPS] Row {idx + 1}: captured KYC html ({len(kyc_html)} chars)")
+                        logger.info(f"[SWAPS] Row {idx + 1}: captured KYC html ({len(kyc_html)} chars)")
                         kyc_detail = _parse_kyc_details(kyc_html)
                         row_details.setdefault(idx, {}).update(kyc_detail)
-                        print(f"[SWAPS] Row {idx + 1}: id={kyc_detail.get('id_number')} phone={kyc_detail.get('phone_number')}")
+                        logger.info(f"[SWAPS] Row {idx + 1}: id={kyc_detail.get('id_number')} phone={kyc_detail.get('phone_number')}")
                         # Append KYC section to same debug file
                         debug_path = os.path.join(debug_dir, f"swaps_{shortcode}_row{idx + 1}_{ts}.html")
                         with open(debug_path, "a", encoding="utf-8") as f:
@@ -390,7 +393,7 @@ def _scrap_swaps_(page: Page, shortcodes: Set[str]) -> None:
                             f.write(kyc_html)
                             f.write("\n</section>\n")
                     except Exception as kyc_err:
-                        print(f"[SWAPS][WARN] Row {idx + 1}: KYC panel not found — {kyc_err}")                        
+                        logger.warning(f"[SWAPS][WARN] Row {idx + 1}: KYC panel not found — {kyc_err}")                        
 
                     page.go_back()
                     page.wait_for_selector(
@@ -405,7 +408,7 @@ def _scrap_swaps_(page: Page, shortcodes: Set[str]) -> None:
                     
 
                 except Exception as row_exc:
-                    print(f"[SWAPS][ERROR] Row {idx + 1} detail failed: {row_exc}")
+                    logger.error(f"[SWAPS][ERROR] Row {idx + 1} detail failed: {row_exc}")
                     traceback.print_exc()
                     try:
                         close_detail_panel(page)
@@ -422,7 +425,7 @@ def _scrap_swaps_(page: Page, shortcodes: Set[str]) -> None:
             successfully_scraped.append(shortcode)
 
         except Exception as exc:
-            print(f"[SWAPS][ERROR] Failed for shortcode {shortcode}: {exc}")
+            logger.error(f"[SWAPS][ERROR] Failed for shortcode {shortcode}: {exc}")
             traceback.print_exc()
 
     # ── Notify the logged-in user by email ───────────────────────────────────
@@ -434,9 +437,9 @@ def _scrap_swaps_(page: Page, shortcodes: Set[str]) -> None:
                 total_shortcodes=len(successfully_scraped),
                 skipped_shortcodes=skipped_count,
             )
-            print(f"[SWAPS] Completion email sent to {user.email}.")
+            logger.info(f"[SWAPS] Completion email sent to {user.email}.")
         except Exception as mail_exc:
-            print(f"[SWAPS][WARN] Could not send completion email: {mail_exc}")
+            logger.warning(f"[SWAPS][WARN] Could not send completion email: {mail_exc}")
 
 
 def _parse_swap_operators_from_soup(soup: BeautifulSoup) -> List[Dict]:
@@ -514,7 +517,7 @@ def _upsert_swap_user_agent(op: Dict, agent_company) -> "UserAgent | None":
             db.session.add(ua)
             db.session.flush()
         except Exception as e:
-            print(f"[SWAPS] Could not create UserAgent for {op}: {e}")
+            logger.warning(f"[SWAPS] Could not create UserAgent for {op}: {e}")
             db.session.rollback()
             return None
     else:
@@ -616,7 +619,7 @@ def _detect_and_record_swap_from_soup(soup: BeautifulSoup, shortcode: str, swap_
 
     agent_company = agent_company_service.get_agent_company_by_shortcode_(str(shortcode))
     if not agent_company:
-        print(f"[SWAPS] No AgentCompany for shortcode {shortcode} — skipping.")
+        logger.info(f"[SWAPS] No AgentCompany for shortcode {shortcode} — skipping.")
         return
 
     scraped = _parse_swap_operators_from_soup(soup)
@@ -636,13 +639,9 @@ def _detect_and_record_swap_from_soup(soup: BeautifulSoup, shortcode: str, swap_
     active_ops = [op for op in scraped if op["is_active"]]
     closed_ops = [op for op in scraped if op["status"] == "Closed"]
 
-    print(
-        f"[SWAPS] {shortcode}: {len(scraped)} rows — "
-        f"{len(active_ops)} active, {len(closed_ops)} closed"
-    )
 
     if not closed_ops:
-        print(f"[SWAPS] {shortcode}: no closed operators, nothing to record.")
+        logger.info(f"[SWAPS] {shortcode}: no closed operators, nothing to record.")
         return
 
     # ── Build JSON payloads (no UserAgent upsert — KYC scraper owns that) ────
@@ -687,14 +686,14 @@ def _detect_and_record_swap_from_soup(soup: BeautifulSoup, shortcode: str, swap_
                         latest_swap.previous_agents = _build_payload(closed_ops)
                         latest_swap.new_agents = _build_payload(active_ops)
                         db.session.commit()
-                        print(f"[SWAPS] {shortcode}: enriched existing AgentSwap #{latest_swap.id} with KYC/reg data.")
+                        logger.info(f"[SWAPS] {shortcode}: enriched existing AgentSwap #{latest_swap.id} with KYC/reg data.")
                     except Exception as e:
                         db.session.rollback()
-                        print(f"[SWAPS][ERROR] {shortcode}: Failed to enrich swap #{latest_swap.id}: {e}")
+                        logger.error(f"[SWAPS][ERROR] {shortcode}: Failed to enrich swap #{latest_swap.id}: {e}")
                 else:
-                    print(f"[SWAPS] {shortcode}: duplicate — already enriched, skipping.")
+                    logger.info(f"[SWAPS] {shortcode}: duplicate — already enriched, skipping.")
             else:
-                print(f"[SWAPS] {shortcode}: duplicate — same closed operators already recorded.")
+                logger.info(f"[SWAPS] {shortcode}: duplicate — same closed operators already recorded.")
             return
 
     previous_agents_data = _build_payload(closed_ops)
@@ -713,18 +712,16 @@ def _detect_and_record_swap_from_soup(soup: BeautifulSoup, shortcode: str, swap_
         )
         db.session.add(swap)
         db.session.commit()
-        print(f"[SWAPS] {shortcode}: AgentSwap #{swap.id} saved — "
-              f"{len(closed_ops)} previous, {len(active_ops)} new agents.")
     except Exception as e:
         db.session.rollback()
-        print(f"[SWAPS][ERROR] {shortcode}: Failed to save AgentSwap: {e}")
+        logger.error(f"[SWAPS][ERROR] {shortcode}: Failed to save AgentSwap: {e}")
         traceback.print_exc()
 
 
 def select_first_float_option_by_index(page) -> bool:
     """Selects the first 'Float Account/XXXXX' option from dropdown."""
     try:
-        print("[INFO] Looking for Float Account option...")
+        logger.info("[INFO] Looking for Float Account option...")
         page.wait_for_timeout(1000)
         
         float_pattern = re.compile(r'Float Account/\d+', re.IGNORECASE)
@@ -733,7 +730,7 @@ def select_first_float_option_by_index(page) -> bool:
         options = page.locator("//ul[contains(@class, 'el-select-dropdown__list')]//li")
         option_count = options.count()
         
-        print(f"[DEBUG] Found {option_count} dropdown options")
+        logger.info(f"[DEBUG] Found {option_count} dropdown options")
         
         for i in range(option_count):
             try:
@@ -741,20 +738,20 @@ def select_first_float_option_by_index(page) -> bool:
                 opt_text = opt.inner_text().strip()
                 
                 if float_pattern.search(opt_text):
-                    print(f"[INFO] Found Float Account: {opt_text}")
+                    logger.info(f"[INFO] Found Float Account: {opt_text}")
                     opt.click()
                     page.wait_for_timeout(1000)
                     return True
                     
             except Exception as e:
-                print(f"[WARN] Error reading option {i + 1}: {e}")
+                logger.error(f"[WARN] Error reading option {i + 1}: {e}")
                 continue
         
-        print("[ERROR] No Float Account option found")
+        logger.error("[ERROR] No Float Account option found")
         return False
         
     except Exception as exc:
-        print(f"[ERROR] Float option selection failed: {exc}")
+        logger.error(f"[ERROR] Float option selection failed: {exc}")
         return False
 
 def scroll_to_top(page: Page) -> None:
@@ -766,10 +763,10 @@ def scroll_to_top(page: Page) -> None:
     """
     try:
         page.evaluate("window.scrollTo(0, 0);")
-        print("[SUCCESS] Scrolled to top of page")
+        logger.info("[SUCCESS] Scrolled to top of page")
         time.sleep(0.5)  
     except Exception as e:
-        print(f"[ERROR] Failed to scroll to top: {e}")
+        logger.error(f"[ERROR] Failed to scroll to top: {e}")
 
 def scroll_to_bottom(page: Page) -> None:
     """
@@ -780,10 +777,10 @@ def scroll_to_bottom(page: Page) -> None:
     """
     try:
         page.evaluate("window.scrollTo(0, document.body.scrollHeight);")
-        print("[SUCCESS] Scrolled to bottom of page")
+        logger.info("[SUCCESS] Scrolled to bottom of page")
         time.sleep(1.5)  
     except Exception as e:
-        print(f"[ERROR] Failed to scroll to bottom: {e}")
+        logger.error(f"[ERROR] Failed to scroll to bottom: {e}")
 
 def extract_extra_till_info(page: Page, extra_info: dict) -> Dict[str, Any]:
     """Extracts additional till information from the account details section."""
@@ -828,12 +825,12 @@ def extract_extra_till_info(page: Page, extra_info: dict) -> Dict[str, Any]:
                     
                     extracted_data[label_key] = value
             except Exception as card_error:
-                print(f"[WARNING] Error processing card: {card_error}")
+                logger.error(f"[WARNING] Error processing card: {card_error}")
                 continue
         
         # Now merge with the existing extra_info
         if extracted_data:
-            print(f"[INFO] Extracted {len(extracted_data)} account details:")
+            logger.info(f"[INFO] Extracted {len(extracted_data)} account details:")
             
             for key, value in extracted_data.items():
                 if(key == "status" and value !="Active"):
@@ -842,7 +839,7 @@ def extract_extra_till_info(page: Page, extra_info: dict) -> Dict[str, Any]:
                                               business_short_code=extra_info.get("short_code"),
                                               status=value)
                     
-                print(f"  {key}: {value}")
+                logger.info(f"  {key}: {value}")
             
             # Add the extracted data to extra_info
             extra_info.update({
@@ -861,11 +858,11 @@ def extract_extra_till_info(page: Page, extra_info: dict) -> Dict[str, Any]:
             
         save_results = agent_company_service.save_or_update_scraped_agent_company(mapped_data=extra_info,user_id=user_id)
         
-        print(f"[DEBUG] Saved results: {save_results}")
+        logger.info(f"[DEBUG] Saved results: {save_results}")
         return save_results
         
     except Exception as e:
-        print(f"[ERROR] Failed to extract extra till info: {e}")
+        logger.error(f"[ERROR] Failed to extract extra till info: {e}")
         # Return the original extra_info dict without modifications
         return extra_info
 
@@ -917,17 +914,17 @@ def send_alert_on_non_active_(
             )
 
     except Exception as e:
-        print(f"[ERROR] An error occurred: {str(e)}")
+        logger.error(f"[ERROR] An error occurred: {str(e)}")
      
        
 def save_table_to_dataframe_(page: Page, business_shortcode: int,category:str) -> tuple:
     """Extract all rows from paginated table and save to CSV."""
     try:
-        print("[INFO] Starting table extraction...")
+        logger.info("[INFO] Starting table extraction...")
 
         # get the latest receipt number for this shortcode
         latest_receipt_number = till_scraping_shortfall[business_shortcode][1]
-        print(f"The latest receipt number for {business_shortcode} is {latest_receipt_number}")
+        logger.info(f"The latest receipt number for {business_shortcode} is {latest_receipt_number}")
         
         try:                
             page.wait_for_load_state("networkidle", timeout=10000)
@@ -939,7 +936,7 @@ def save_table_to_dataframe_(page: Page, business_shortcode: int,category:str) -
             if not body_tbl.is_visible():
                 return None, None
         except Exception as e:
-            print("[WARN] Table body not visible, ending extraction.")
+            logger.warning("[WARN] Table body not visible, ending extraction.")
             return None, None        
         soup = BeautifulSoup(body_tbl.inner_html(), "html.parser")
         tbody = soup.find("tbody")
@@ -950,30 +947,29 @@ def save_table_to_dataframe_(page: Page, business_shortcode: int,category:str) -
         span = soup.find("span", class_="receipt-link")
         if span:
             transaction_id = span.get_text(strip=True)
-            print("Found transaction ID:", transaction_id)
             click_receipt_link(page,transaction_id)
             time.sleep(15)
         else:
-            print("Not found")
+            logger.warning("Not found")
         
     except Exception as exc:
-        print(f"[ERROR] Table extraction failed: {exc}")
+        logger.error(f"[ERROR] Table extraction failed: {exc}")
         traceback.print_exc()
         return None, None
 
 def get_latest_receipt_no(page: Page, business_shortcode: int, pass_value: str) -> str:
     """Extract all rows from paginated table and process receipt links from match point to latest."""
-    print("[INFO] Starting table extraction...")
+    logger.info("[INFO] Starting table extraction...")
 
     # Add thread safety if needed (uncomment if multi-threaded)
     # with till_scraping_lock:
     
     # Check dictionary existence and structure
     if not isinstance(till_scraping_shortfall, dict):
-        print(f"[ERROR] till_scraping_shortfall is not a dictionary")
+        logger.error(f"[ERROR] till_scraping_shortfall is not a dictionary")
         return None
         
-    print(f"The till scraping shortfall has {len(till_scraping_shortfall)} entries")
+    logger.info(f"The till scraping shortfall has {len(till_scraping_shortfall)} entries")
     
     # Check if key exists
     if business_shortcode not in till_scraping_shortfall:
@@ -981,35 +977,35 @@ def get_latest_receipt_no(page: Page, business_shortcode: int, pass_value: str) 
         if str(business_shortcode) in till_scraping_shortfall:
             business_shortcode = str(business_shortcode)
         else:
-            print(f"[ERROR] Business shortcode {business_shortcode} not found")
-            print(f"Available keys (first 10): {list(till_scraping_shortfall.keys())[:10]}")
+            logger.error(f"[ERROR] Business shortcode {business_shortcode} not found")
+            logger.info(f"Available keys (first 10): {list(till_scraping_shortfall.keys())[:10]}")
             return None
     
     # Check value structure
     value = till_scraping_shortfall[business_shortcode]
     if not isinstance(value, (list, tuple)) or len(value) < 2:
-        print(f"[ERROR] Invalid structure for {business_shortcode}: {value}")
+        logger.error(f"[ERROR] Invalid structure for {business_shortcode}: {value}")
         return None
         
     latest_receipt_number = str(value[1])
-    print(f"The latest receipt number for {business_shortcode} is {latest_receipt_number}")
+    logger.info(f"The latest receipt number for {business_shortcode} is {latest_receipt_number}")
     return latest_receipt_number
 
 def save_table_to_dataframe_latest_(page: Page, business_shortcode: int, pass_value: str, additional_category: str) -> tuple:
     """Extract all rows from paginated table and process receipt links from match point to latest."""
     # try:
-    print("[INFO] Starting table extraction...")
+    logger.info("[INFO] Starting table extraction...")
     headers = []
     all_data_rows = []
     
     success = click_search_button(page=page)        
     
     if not success:
-        print(f"[ERROR] Can not select the search button")
+        logger.error(f"[ERROR] Can not select the search button")
     
     select_pagination_size(page=page)
     # Get the latest receipt number for this shortcode
-    # print(f"The till scraping shortfall {till_scraping_shortfall}")
+    # logger.info(f"The till scraping shortfall {till_scraping_shortfall}")
         
         # Extract headers
     header_tbl = page.wait_for_selector(
@@ -1020,7 +1016,7 @@ def save_table_to_dataframe_latest_(page: Page, business_shortcode: int, pass_va
     soup = BeautifulSoup(header_tbl.inner_html(), "html.parser")
     tr = soup.find("thead").find("tr")
     headers = [th.get_text(strip=True) for th in tr.find_all("th")]
-    print(f"[SUCCESS] Headers: {headers}")
+    logger.info(f"[SUCCESS] Headers: {headers}")
     
     #
     scroll_to_bottom(page)
@@ -1028,7 +1024,7 @@ def save_table_to_dataframe_latest_(page: Page, business_shortcode: int, pass_va
     # Paginate through all data
     page_no = 1
     time.sleep(1)  
-    print(f"\n[INFO] Extracting page {page_no}...")
+    logger.info(f"\n[INFO] Extracting page {page_no}...")
     
     try:                
         page.wait_for_load_state("networkidle", timeout=10000)
@@ -1040,7 +1036,7 @@ def save_table_to_dataframe_latest_(page: Page, business_shortcode: int, pass_va
         if not body_tbl.is_visible():
             return None, None
     except Exception as e:
-        print("[WARN] Table body not visible, ending extraction.")
+        logger.warning("[WARN] Table body not visible, ending extraction.")
         return None, None
         
     soup = BeautifulSoup(body_tbl.inner_html(), "html.parser")
@@ -1055,12 +1051,11 @@ def save_table_to_dataframe_latest_(page: Page, business_shortcode: int, pass_va
 
     # Create DataFrame
     if not all_data_rows:
-        print("[WARN] No data rows extracted")
+        logger.warning("[WARN] No data rows extracted")
         df = pd.DataFrame(columns=["OrganizationRowIndex"] + headers)
     else:
         df = pd.DataFrame(all_data_rows, columns=["OrganizationRowIndex"] + headers)
-        print(f"[SUCCESS] Extracted {len(df)} total rows")
-        print(df.tail())
+        logger.info(f"[SUCCESS] Extracted {len(df)} total rows")
     
         # Update transactions
     results = transaction_service.update_transactions_from_dataframe(
@@ -1073,13 +1068,13 @@ def save_table_to_dataframe_latest_(page: Page, business_shortcode: int, pass_va
     success_value = results.get('success', False)
     if success_value:
         summary = results.get('summary', {})
-        print(f"\n Success!")
-        print(f"   Updated: {summary.get('updated_count', 0)}")
-        print(f"   Created: {summary.get('created_count', 0)}")
-        print(f"   Total: {summary.get('total_processed', 0)}")
-        print(f"   Success rate: {summary.get('success_rate', 0):.1f}%")
+        logger.info(f"\n Success!")
+        logger.info(f"   Updated: {summary.get('updated_count', 0)}")
+        logger.info(f"   Created: {summary.get('created_count', 0)}")
+        logger.info(f"   Total: {summary.get('total_processed', 0)}")
+        logger.info(f"   Success rate: {summary.get('success_rate', 0):.1f}%")
     else:
-        print(f"\n Failed: {results.get('error', 'Unknown error')}")
+        logger.error(f"\n Failed: {results.get('error', 'Unknown error')}")
         
     return df, success_value
     
@@ -1166,13 +1161,13 @@ def parse_element_plus_transactions(html_content: str, transaction_type: str, bu
     success_value = results.get('success', False)
     if success_value:
         summary = results.get('summary', {})
-        print(f"\n Success!")
-        print(f"   Updated: {summary.get('updated_count', 0)}")
-        print(f"   Created: {summary.get('created_count', 0)}")
-        print(f"   Total: {summary.get('total_processed', 0)}")
-        print(f"   Success rate: {summary.get('success_rate', 0):.1f}%")
+        logger.info(f"\n Success!")
+        logger.info(f"   Updated: {summary.get('updated_count', 0)}")
+        logger.info(f"   Created: {summary.get('created_count', 0)}")
+        logger.info(f"   Total: {summary.get('total_processed', 0)}")
+        logger.info(f"   Success rate: {summary.get('success_rate', 0):.1f}%")
     else:
-        print(f"\n Failed: {results.get('error', 'Unknown error')}")
+        logger.error(f"\n Failed: {results.get('error', 'Unknown error')}")
     
     return df,df.columns
 
@@ -1180,14 +1175,14 @@ def save_table_to_dataframe_download(page: Page, business_shortcode: int, additi
     max_retries = 3
     try:
         close_irritative_dialog_box(page)
-        print(f"[EXPORT] Starting Excel export... (attempt {_retry_count + 1}/{max_retries})")
+        logger.info(f"[EXPORT] Starting Excel export... (attempt {_retry_count + 1}/{max_retries})")
 
         export_trigger = page.locator("div.el-dropdown.padding-export >> span").first
         export_trigger.wait_for(state="visible", timeout=30000)
         export_trigger.scroll_into_view_if_needed()
 
         export_trigger.hover(force=True, timeout=10_000)
-        print("[EXPORT] Hovered successfully")
+        logger.info("[EXPORT] Hovered successfully")
         time.sleep(3)  
 
         # 2. Wait for ANY dropdown menu to actually appear in the viewport (not just DOM)
@@ -1204,7 +1199,7 @@ def save_table_to_dataframe_download(page: Page, business_shortcode: int, additi
             }""",
             timeout=40000
         )
-        print("[EXPORT] Export dropdown menu is visually open")
+        logger.info("[EXPORT] Export dropdown menu is visually open")
 
         # 3. Get ALL menu items from ALL dropdown menus
         all_items = page.locator("ul.el-dropdown-menu li.el-dropdown-menu__item")
@@ -1213,29 +1208,29 @@ def save_table_to_dataframe_download(page: Page, business_shortcode: int, additi
         excel_items = all_items.filter(has_text="Excel")
 
         excel_count = excel_items.count()
-        print(f"[EXPORT] Found {excel_count} visible 'Excel' options across all dropdowns")
+        logger.info(f"[EXPORT] Found {excel_count} visible 'Excel' options across all dropdowns")
 
         if excel_count < 3:
             raise Exception(f"Expected at least 3 Excel export options, found only {excel_count}")
 
         target_excel = excel_items.nth(2)
 
-        print(f"[EXPORT] Targeting the 3rd 'Excel' option (index 2 in filtered list)")
+        logger.info(f"[EXPORT] Targeting the 3rd 'Excel' option (index 2 in filtered list)")
 
         # 4. Click + download
         with page.expect_download(timeout=60_000) as download_info:
             # First try normal click
             try:
                 target_excel.click(force=True, timeout=15_000)
-                print("[EXPORT] Clicked 'Excel' (All Data) successfully")
+                logger.info("[EXPORT] Clicked 'Excel' (All Data) successfully")
             except Exception as e:
-                print("[EXPORT] Normal click failed, falling back to JS click...")
+                logger.error("[EXPORT] Normal click failed, falling back to JS click...")
                 target_excel.evaluate("el => el.click()")
 
         download: Download = download_info.value
 
         # THIS IS THE MAGIC: Read bytes directly into pandas
-        print(f"[EXPORT] Reading {download.suggested_filename} directly into pandas...")
+        logger.info(f"[EXPORT] Reading {download.suggested_filename} directly into pandas...")
         temp_path = download.path()  # Playwright saves it temporarily
         
         df,success_value = update_transactions_from_file(
@@ -1246,14 +1241,14 @@ def save_table_to_dataframe_download(page: Page, business_shortcode: int, additi
             agent_id=None
         )
 
-        print(f"[SUCCESS] Loaded DataFrame in-memory: {df.shape[0]} rows × {df.shape[1]} columns")
-        print(f"   Columns: {list(df.columns)}")
+        logger.info(f"[SUCCESS] Loaded DataFrame in-memory: {df.shape[0]} rows × {df.shape[1]} columns")
+        logger.info(f"   Columns: {list(df.columns)}")
 
         return df, success_value
     except Exception as e:
-        print(f"[ERROR] An error has occurred {e}")
+        logger.error(f"[ERROR] An error has occurred {e}")
         if _retry_count + 1 >= max_retries:
-            print(f"[ERROR] Export failed after {max_retries} attempts — sending session timeout email")
+            logger.error(f"[ERROR] Export failed after {max_retries} attempts — sending session timeout email")
             send_session_timeout_email("martinmaati31@gmail.com")
             return pd.DataFrame(), False
         return save_table_to_dataframe_download(page=page, business_shortcode=business_shortcode, additional_category=additional_category, _retry_count=_retry_count + 1)
@@ -1279,13 +1274,13 @@ def save_table_to_dataframe_download_head_office(
     """
     try:
         close_irritative_dialog_box(page)
-        print(f"[EXPORT] Starting Head Office export (filter='{filter_text}')...")
+        logger.info(f"[EXPORT] Starting Head Office export (filter='{filter_text}')...")
 
         visible_dropdown = page.locator("div.el-dropdown.padding-export:visible")
         try:
             visible_dropdown.wait_for(state="visible", timeout=10000)
         except Exception:
-            print("[EXPORT] No visible export dropdown — no data for this period")
+            logger.info("[EXPORT] No visible export dropdown — no data for this period")
             return pd.DataFrame(), False
 
         visible_dropdown.scroll_into_view_if_needed()
@@ -1301,7 +1296,7 @@ def save_table_to_dataframe_download_head_office(
             raise Exception("Could not resolve export button viewport coordinates")
 
         page.mouse.move(coords['x'], coords['y'])
-        print("[EXPORT] Hovered via mouse coordinates")
+        logger.info("[EXPORT] Hovered via mouse coordinates")
         time.sleep(2)
 
         # Also dispatch mouseenter/mouseover in case the pointer-events model
@@ -1334,7 +1329,7 @@ def save_table_to_dataframe_download_head_office(
                 menu_open = True
                 break
             except Exception:
-                print(f"[EXPORT] Dropdown not open yet (attempt {_attempt + 1}/3), re-hovering...")
+                logger.info(f"[EXPORT] Dropdown not open yet (attempt {_attempt + 1}/3), re-hovering...")
                 page.mouse.move(0, 0)
                 time.sleep(0.3)
                 page.mouse.move(coords['x'], coords['y'])
@@ -1355,15 +1350,15 @@ def save_table_to_dataframe_download_head_office(
                     return { w: r.width, h: r.height, top: r.top, display: getComputedStyle(m).display };
                 });
             }""")
-            print(f"[EXPORT] Menu debug state: {menu_debug}")
+            logger.info(f"[EXPORT] Menu debug state: {menu_debug}")
             raise Exception("Export dropdown did not open after 3 hover attempts")
 
-        print("[EXPORT] Export dropdown menu is visually open")
+        logger.info("[EXPORT] Export dropdown menu is visually open")
 
         all_items = page.locator("ul.el-dropdown-menu li.el-dropdown-menu__item")
         matched_items = all_items.filter(has_text=filter_text)          # ← dynamic
         matched_count = matched_items.count()
-        print(f"[EXPORT] Found {matched_count} visible '{filter_text}' options across all dropdowns")
+        logger.info(f"[EXPORT] Found {matched_count} visible '{filter_text}' options across all dropdowns")
 
         if matched_count < min_item_count:
             raise Exception(
@@ -1372,7 +1367,7 @@ def save_table_to_dataframe_download_head_office(
             )
 
         target_item = matched_items.nth(target_index)
-        print(f"[EXPORT] Targeting '{filter_text}' option at index {target_index}")
+        logger.info(f"[EXPORT] Targeting '{filter_text}' option at index {target_index}")
 
         # Resolve the item's viewport coordinates so we can click via raw mouse
         # movement — moving the mouse to an element coordinate keeps the El-UI
@@ -1382,7 +1377,7 @@ def save_table_to_dataframe_download_head_office(
             const r = el.getBoundingClientRect();
             return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
         }""")
-        print(f"[EXPORT] Item coords resolved: {item_coords}")
+        logger.info(f"[EXPORT] Item coords resolved: {item_coords}")
 
         with page.expect_download(timeout=60_000) as download_info:
             if item_coords and item_coords.get('x') and item_coords.get('y'):
@@ -1391,14 +1386,14 @@ def save_table_to_dataframe_download_head_office(
                 page.mouse.move(item_coords['x'], item_coords['y'])
                 time.sleep(0.3)
                 page.mouse.click(item_coords['x'], item_coords['y'])
-                print(f"[EXPORT] Clicked '{filter_text}' via mouse coordinates")
+                logger.info(f"[EXPORT] Clicked '{filter_text}' via mouse coordinates")
             else:
                 # Coords unavailable — try JS click as a last resort
-                print("[EXPORT] Could not resolve item coords, falling back to JS click...")
+                logger.warning("[EXPORT] Could not resolve item coords, falling back to JS click...")
                 target_item.evaluate("el => el.click()")
 
         download: Download = download_info.value
-        print(f"[EXPORT] Reading {download.suggested_filename} directly into pandas...")
+        logger.info(f"[EXPORT] Reading {download.suggested_filename} directly into pandas...")
         temp_path = download.path()
 
         # Save a debug copy so we can inspect the raw file if parsing fails
@@ -1410,9 +1405,9 @@ def save_table_to_dataframe_download_head_office(
             ts = _dt.datetime.now().strftime("%Y%m%d_%H%M%S")
             debug_path = os.path.join(debug_dir, f"head_office_{business_shortcode}_{ts}{ext}")
             shutil.copy2(temp_path, debug_path)
-            print(f"[DEBUG] Raw export saved to: {debug_path}")
+            logger.info(f"[DEBUG] Raw export saved to: {debug_path}")
         except Exception as _e:
-            print(f"[DEBUG] Could not save debug copy: {_e}")
+            logger.warning(f"[DEBUG] Could not save debug copy: {_e}")
 
         # M-PESA sometimes returns a JSON error payload instead of a spreadsheet.
         # Detect this before handing the file to pandas.
@@ -1425,7 +1420,7 @@ def save_table_to_dataframe_download_head_office(
                 _header = _err.get("header", _err)
                 _code = _header.get("responseCode", "?")
                 _desc = _header.get("responseDesc", "unknown")
-                print(f"[EXPORT] M-PESA returned an error payload (code={_code}): {_desc}")
+                logger.error(f"[EXPORT] M-PESA returned an error payload (code={_code}): {_desc}")
                 return pd.DataFrame(), False
         except Exception:
             pass  # not JSON — proceed normally
@@ -1433,16 +1428,16 @@ def save_table_to_dataframe_download_head_office(
         # If the download is a CSV it's the Head Office Balance Overview (Level 1/2
         # hierarchy), not a transaction export. Parse and upsert commission balances.
         if (download.suggested_filename or '').lower().endswith('.csv'):
-            print("[EXPORT] CSV detected — parsing as Head Office commission balance overview")
+            logger.info("[EXPORT] CSV detected — parsing as Head Office commission balance overview")
             result = transaction_service.save_head_office_commission_balances(
                 csv_path=temp_path,
                 parent_shortcode=business_shortcode,
             )
             if result.get('success'):
                 s = result['summary']
-                print(f"[EXPORT] Commission balances saved: created={s['created']} updated={s['updated']} skipped={s['skipped']}")
+                logger.warning(f"[EXPORT] Commission balances saved: created={s['created']} updated={s['updated']} skipped={s['skipped']}")
             else:
-                print(f"[EXPORT] Commission balance save failed: {result.get('error')}")
+                logger.error(f"[EXPORT] Commission balance save failed: {result.get('error')}")
             return pd.DataFrame(), result.get('success', False)
 
         df, success_value = update_transactions_from_file(
@@ -1453,11 +1448,11 @@ def save_table_to_dataframe_download_head_office(
             agent_id=None
         )
 
-        print(f"[SUCCESS] Head Office export loaded: {df.shape[0]} rows × {df.shape[1]} columns")
+        logger.info(f"[SUCCESS] Head Office export loaded: {df.shape[0]} rows × {df.shape[1]} columns")
         return df, success_value
 
     except Exception as e:
-        print(f"[ERROR] Head Office export failed: {e}")
+        logger.error(f"[ERROR] Head Office export failed: {e}")
         return None, False
 def process_detailed_receipt(page: Page, receipt_no: str, transaction_type: str = 'float'):
     try:
@@ -1475,11 +1470,11 @@ def process_detailed_receipt(page: Page, receipt_no: str, transaction_type: str 
             commit=True
         )
         
-        print(f"[DETAIL] {result['message']}")
+        logger.info(f"[DETAIL] {result['message']}")
         return result["success"]
         
     except Exception as e:
-        print(f"[ERROR] Failed to process detailed receipt {receipt_no}: {str(e)}")
+        logger.error(f"[ERROR] Failed to process detailed receipt {receipt_no}: {str(e)}")
         return False    
 
 def update_transactions_from_file(file_path, business_shortcode, transaction_type, company_shortcode, agent_id):
@@ -1489,16 +1484,15 @@ def update_transactions_from_file(file_path, business_shortcode, transaction_typ
     
     success_value : bool = False
     
-    print(f"Processing file: {file_path}")
-    print(f"Business: {business_shortcode}")
-    print(f"Type: {transaction_type}")
+    logger.info(f"Processing file: {file_path}")
+    logger.info(f"Business: {business_shortcode}")
+    logger.info(f"Type: {transaction_type}")
     
     # Read the file
     df = pd.read_excel(file_path, skiprows=6)
     
-    print(f"Data shape: {df.shape}")
-    print(f"Sample data:")
-    print(df.tail())
+    logger.info(f"Data shape: {df.shape}")
+    logger.info(f"Sample data:")
     
     # Update transactions
     results = transaction_service.update_transactions_from_dataframe(
@@ -1511,16 +1505,16 @@ def update_transactions_from_file(file_path, business_shortcode, transaction_typ
     success_value = results.get('success', False)
     if success_value:
         summary = results.get('summary', {})
-        print(f"\n Success!")
-        print(f"   Updated: {summary.get('updated_count', 0)}")
-        print(f"   Created: {summary.get('created_count', 0)}")
-        print(f"   Total: {summary.get('total_processed', 0)}")
-        print(f"   Success rate: {summary.get('success_rate', 0):.1f}%")
+        logger.info(f"\n Success!")
+        logger.info(f"   Updated: {summary.get('updated_count', 0)}")
+        logger.info(f"   Created: {summary.get('created_count', 0)}")
+        logger.info(f"   Total: {summary.get('total_processed', 0)}")
+        logger.info(f"   Success rate: {summary.get('success_rate', 0):.1f}%")
     else:
-        print(f"\n Failed: {results.get('error', 'Unknown error')}")
+        logger.error(f"\n Failed: {results.get('error', 'Unknown error')}")
     
     # Save the processed file
-    print(f"💾 Saved to: {business_shortcode}_{transaction_type}.xlsx")
+    logger.info(f"💾 Saved to: {business_shortcode}_{transaction_type}.xlsx")
     
     return df, success_value
 
@@ -1531,7 +1525,7 @@ def is_till_frozen(page:Page)-> bool:
         div_frozen = page.wait_for_selector("//div[normalize-space()='Frozen']",timeout=1000)
         return div_frozen.is_visible()
     except Exception as e:
-        print(f"The till is not frozen {str(e)}")
+        logger.info(f"The till is not frozen {str(e)}")
         return False
 
 def clean_label_for_db(label: str) -> str:
@@ -1662,20 +1656,20 @@ def scrape_till_details(page: Page, business_short_code: int) -> dict:
         # Extract till info
         till_info = extract_till_info(inner_html)
         
-        print(f"[INFO] Scraped till info for business short code {business_short_code}:")
+        logger.info(f"[INFO] Scraped till info for business short code {business_short_code}:")
         till_info['business_short_code'] = business_short_code
         for key, value in till_info.items():
-            print(f"  {key}: {value}")
+            logger.info(f"  {key}: {value}")
         
         # Map to AgentCompany fields
         mapped_data = map_scraped_data_to_agent_company(till_info)
                         
-        print(f"[INFO] Map result for business short code {business_short_code}: {mapped_data}")
+        logger.info(f"[INFO] Map result for business short code {business_short_code}: {mapped_data}")
 
         return mapped_data
         
     except Exception as e:
-        print(f"[ERROR] Could not scrape till details: {str(e)}")
+        logger.error(f"[ERROR] Could not scrape till details: {str(e)}")
         return {
             'success': False,
             'error': str(e),
@@ -1685,19 +1679,19 @@ def scrape_till_details(page: Page, business_short_code: int) -> dict:
 
 def click_receipt_link(page:Page,transaction_id: str) -> bool:
     try:
-        print(f"Clicking receipt link for transaction ID: {transaction_id}")
+        logger.info(f"Clicking receipt link for transaction ID: {transaction_id}")
         selector = f'span.receipt-link:has-text("{transaction_id}")'
         page.wait_for_selector(selector, state="visible",timeout=5000)
         page.click(selector)
         return extract_extra_details_on_receipt(page=page,receipt_no=transaction_id)
     except Exception as e:
-        print(f"Error clicking receipt link: {e}")
+        logger.error(f"Error clicking receipt link: {e}")
         return False
 
 
 def extract_extra_details_on_receipt(page:Page,receipt_no:str) -> bool:
     try:
-        print(f"[INFO] Trying to extract more details")
+        logger.info(f"[INFO] Trying to extract more details")
         transactions_div = page.wait_for_selector(selector="//div[@class='portal-collapse background-box section-box section-box-buttom bottom-radius']",
                                                   state="visible",
                                                   timeout=10000)
@@ -1708,7 +1702,7 @@ def extract_extra_details_on_receipt(page:Page,receipt_no:str) -> bool:
         
         return True
     except Exception as e:
-        print(f"[ERROR] An error has occurred {str(e)}")                
+        logger.error(f"[ERROR] An error has occurred {str(e)}")                
         return False
 
 
@@ -1742,30 +1736,28 @@ def extract_till_info(inner_html: str) -> dict:
     return till_info
     
 def save_table_to_dataframe_download_debug(page: Page, max_wait: int = 30_000):
-    print("[EXPORT] Starting Excel export...")
+    logger.info("[EXPORT] Starting Excel export...")
 
     export_trigger = page.locator("div.el-dropdown.padding-export >> span").first
     export_trigger.wait_for(state="visible", timeout=max_wait)
     export_trigger.scroll_into_view_if_needed()
 
     export_trigger.hover(force=True, timeout=10_000)
-    print("[EXPORT] Hovered successfully")
+    logger.info("[EXPORT] Hovered successfully")
 
     # Give Vue time to open the dropdown
     time.sleep(2)  # or use wait_for_function as before
 
-    print("\n" + "="*60)
-    print("DROPDOWN MENU DEBUG INFO")
-    print("="*60)
+    logger.info("DROPDOWN MENU DEBUG INFO")
 
     # Method 1: Try get_by_role (what you were using)
     excel_by_role = page.get_by_role("menuitem", name="Excel", exact=True)
-    print(f"get_by_role('menuitem', name='Excel') → Found: {excel_by_role.count()} items")
+    logger.info(f"get_by_role('menuitem', name='Excel') → Found: {excel_by_role.count()} items")
 
     # Method 2: Raw locator for all menu items
     all_menu_items = page.locator("ul.el-dropdown-menu >> li.el-dropdown-menu__item")
     count = all_menu_items.count()
-    print(f"Total <li class='el-dropdown-menu__item'> found: {count}")
+    logger.info(f"Total <li class='el-dropdown-menu__item'> found: {count}")
 
     # Print EVERY item with index + text + visibility
     for i in range(count):
@@ -1774,21 +1766,21 @@ def save_table_to_dataframe_download_debug(page: Page, max_wait: int = 30_000):
         is_visible = item.is_visible()
         is_enabled = item.is_enabled()
         
-        print(f"  [{i:2d}] '{text}' → visible={is_visible}, enabled={is_enabled}")
+        logger.info(f"  [{i:2d}] '{text}' → visible={is_visible}, enabled={is_enabled}")
 
         # Highlight Excel ones
         if "excel" in text.lower():
-            print(f"     →→→ THIS IS AN EXCEL OPTION (index {i})")
+            logger.info(f"     →→→ THIS IS AN EXCEL OPTION (index {i})")
 
     # Bonus: Show which one has the actual download behavior (usually the 3rd)
     excel_candidates = [i for i in range(count) if "excel" in all_menu_items.nth(i).inner_text().lower()]
-    print(f"\nExcel option indices: {excel_candidates}")
-    print(f"Recommended to click index: {excel_candidates[2] if len(excel_candidates) > 2 else 'Not enough!'}")
+    logger.info(f"\nExcel option indices: {excel_candidates}")
+    logger.info(f"Recommended to click index: {excel_candidates[2] if len(excel_candidates) > 2 else 'Not enough!'}")
 
-    print("="*60 + "\n")
+    logger.info("="*60 + "\n")
 
     # Stop here for debugging
-    print("Stopping for inspection. Comment out exit() when ready.")
+    logger.info("Stopping for inspection. Comment out exit() when ready.")
     
 def first_day_of_quarter() -> str:
     """
@@ -1835,22 +1827,22 @@ def click_random_spot(page, padding: int = 50) -> None:
 
     # 4. Click it
     page.mouse.click(rand_x, rand_y)
-    print(f"[Success] Clicked random spot at ({rand_x}, {rand_y})")
+    logger.info(f"[Success] Clicked random spot at ({rand_x}, {rand_y})")
 
 def get_total_from_pagination(page) -> int | None:
     locator = page.locator("//div[@id='pagination']/span[contains(text(), 'Total')]").first
     
     try:
         if locator.count() == 0:
-            print("[WARN] Total span not found in pagination")
+            logger.warning("[WARN] Total span not found in pagination")
             return None
             
         text = locator.inner_text().strip()          # e.g. "Total 103"
         number = int(''.join(filter(str.isdigit, text)))
-        print(f"[INFO] Detected total records: {number}")
+        logger.info(f"[INFO] Detected total records: {number}")
         return number
     except Exception as e:
-        print(f"[ERROR] Could not parse total: {e}")
+        logger.error(f"[ERROR] Could not parse total: {e}")
         return None
     
 def go_forth_on_organization(page: Page, row_count: int):
@@ -1861,17 +1853,17 @@ def go_forth_on_organization(page: Page, row_count: int):
 
     try:
         if next_page_btn.is_enabled():
-            print("[INFO] Clicking 'Next Page' button...")
+            logger.info("[INFO] Clicking 'Next Page' button...")
             next_page_btn.click()
             page.wait_for_load_state("networkidle", timeout=20000)
             time.sleep(0.5)
             return  True  # Continue processing
         else:
-            print(f"[INFO] Next page disabled. Finished all {row_count} rows on last page.")
+            logger.info(f"[INFO] Next page disabled. Finished all {row_count} rows on last page.")
             return  False
 
     except Exception as e:
-        print(f"[WARNING] Error clicking next page: {e}")
+        logger.error(f"[WARNING] Error clicking next page: {e}")
         user = User.query.filter_by(id=user_id).first()
 
         if user:
@@ -1890,17 +1882,17 @@ def go_previous_on_organisation(page: Page):
 
     try:
         if prev_page_btn.is_enabled():
-            print("[INFO] Clicking 'Previous Page' button...")
+            logger.info("[INFO] Clicking 'Previous Page' button...")
             prev_page_btn.click()
             page.wait_for_load_state("networkidle", timeout=20000)
             time.sleep(0.5)
             return True  # Continue processing
         else:
-            print(f"[INFO] Previous page disabled.")
+            logger.info(f"[INFO] Previous page disabled.")
             return False
 
     except Exception as e:
-        print(f"[WARNING] Error clicking previous page: {e}")
+        logger.error(f"[WARNING] Error clicking previous page: {e}")
         page.screenshot(path="pagination_error.png")
         return False
     
@@ -1919,7 +1911,7 @@ def rerun_failed_codes(page: Page, failed_codes: List[int], max_retries: int = 2
     remaining = original_failed.copy()
 
     while remaining and max(retry_count.values()) < max_retries:
-        print(f"\n[RETRY] Retry attempt #{max(retry_count.values()) + 1} for {len(remaining)} items...")
+        logger.info(f"\n[RETRY] Retry attempt #{max(retry_count.values()) + 1} for {len(remaining)} items...")
 
         # Restart from first page for each retry pass
         go_previous_on_organisation(page)
@@ -1948,7 +1940,7 @@ def rerun_failed_codes(page: Page, failed_codes: List[int], max_retries: int = 2
                     code = int(match.group(1))
 
                     if code in remaining:
-                        print(f"[RETRY] Found failed row: {code} — reprocessing...")
+                        logger.error(f"[RETRY] Found failed row: {code} — reprocessing...")
                         found_any = True
                         
                         row.click(timeout=15000)
@@ -1958,32 +1950,32 @@ def rerun_failed_codes(page: Page, failed_codes: List[int], max_retries: int = 2
 
                         if success:
                             remaining.remove(code)
-                            print(f"[SUCCESS] Retry succeeded for {code}")
+                            logger.info(f"[SUCCESS] Retry succeeded for {code}")
                         else:
                             retry_count[code] += 1
                             if retry_count[code] >= max_retries:
-                                print(f"[FAILED] Max retries reached for {code}")
+                                logger.error(f"[FAILED] Max retries reached for {code}")
                                 remaining.remove(code)
                             else:
-                                print(f"[RETRY] Will retry {code} later (attempt {retry_count[code] + 1})")
+                                logger.info(f"[RETRY] Will retry {code} later (attempt {retry_count[code] + 1})")
 
                         time.sleep(1)
 
                 except Exception as e:
-                    print(f"[ERROR] Error during retry scan of row: {e}")
+                    logger.error(f"[ERROR] Error during retry scan of row: {e}")
                     continue
 
             if not remaining:
-                print("[SUCCESS] All failed items successfully retried!")
+                logger.error("[SUCCESS] All failed items successfully retried!")
                 break
 
             # Go to next page if we didn't find everything
             if go_forth_on_organization(page, total_in_list):
                 current_page += 1
-                print(f"[INFO] Moving to page {current_page} for retry...")
+                logger.info(f"[INFO] Moving to page {current_page} for retry...")
                 time.sleep(2)
             else:
-                print("[INFO] Reached last page during retry pass.")
+                logger.info("[INFO] Reached last page during retry pass.")
                 break
 
         if not remaining:
@@ -1991,9 +1983,9 @@ def rerun_failed_codes(page: Page, failed_codes: List[int], max_retries: int = 2
 
     # Final summary
     if remaining:
-        print(f"[WARNING] These codes failed even after {max_retries} retries: {remaining}")
+        logger.error(f"[WARNING] These codes failed even after {max_retries} retries: {remaining}")
     else:
-        print("[SUCCESS] All previously failed organizations were successfully recovered!")
+        logger.error("[SUCCESS] All previously failed organizations were successfully recovered!")
         failed_codes.clear()
         return True
         
@@ -2002,7 +1994,7 @@ def select_account_dropdown(page: Page, account_name: str, arrow_down_count: int
     Generic function to select any account dropdown (Float or Commission)
     """
     try:
-        print(f"[INFO] Selecting account: {account_name}")
+        logger.info(f"[INFO] Selecting account: {account_name}")
 
         # Best possible locator chain for Element UI dropdowns
         dropdown: Locator = (
@@ -2015,33 +2007,33 @@ def select_account_dropdown(page: Page, account_name: str, arrow_down_count: int
 
         # Alternative rock-solid fallback if above fails
         if dropdown.count() == 0:
-            print("[INFO] Falling back to CSS-based dropdown locator...")
+            logger.info("[INFO] Falling back to CSS-based dropdown locator...")
             dropdown = page.locator(".el-select").nth(0) \
                            .locator("i.el-select__caret")
 
         # Wait for it to be visible and clickable
         dropdown.wait_for(state="visible", timeout=15000)
         dropdown.click(force=True)  # force=True helps with overlay issues
-        print(f"[INFO] {account_name} dropdown opened")
+        logger.info(f"[INFO] {account_name} dropdown opened")
 
         # Navigate with ArrowDown + Enter
         for _ in range(arrow_down_count):
             page.keyboard.press("ArrowDown")
             time.sleep(0.2)
         page.keyboard.press("Enter")
-        print(f"[INFO] Selected option #{arrow_down_count + 1} in {account_name}")
+        logger.info(f"[INFO] Selected option #{arrow_down_count + 1} in {account_name}")
         time.sleep(1)  # Let selection settle
 
         return True
 
     except Exception as e:
-        print(f"[ERROR] Failed to select {account_name} dropdown: {e}")
+        logger.error(f"[ERROR] Failed to select {account_name} dropdown: {e}")
         page.screenshot(path=f"dropdown_error_{account_name.lower()}.png")
         return False
 
 def process_float_account_details(page: Page, business_short_code: int, mapped_data: Optional[dict], pass_value: str) -> tuple:
     try:
-        print("[INFO] Processing Float Account Details")
+        logger.info("[INFO] Processing Float Account Details")
 
         # Step 1: Select Float Account (usually 2nd or 3rd option)
         if not select_account_dropdown(page, "Float Account", arrow_down_count=2):
@@ -2049,7 +2041,7 @@ def process_float_account_details(page: Page, business_short_code: int, mapped_d
         
         extract_extra_till_info(page, mapped_data)
         
-        print("We are checking whether a till is frozen or not")        
+        logger.info("We are checking whether a till is frozen or not")        
         if is_till_frozen(page):
             send_alert_on_non_active_(user.email,
                                         mapped_data.get("company_name","-"),
@@ -2059,48 +2051,48 @@ def process_float_account_details(page: Page, business_short_code: int, mapped_d
 
         time.sleep(1)  # Wait for table to load
 
-        print("We are trying to save to the dataframe")
+        logger.info("We are trying to save to the dataframe")
 
         df,success_value = scrape_180_days_monthly(page,business_short_code=business_short_code,pass_value=pass_value,additional_category="float")
         if df is not None or success_value:
-            print("[SUCCESS] Float table extracted")
+            logger.info("[SUCCESS] Float table extracted")
             return "dataframe",True
         else:
-            print("[ERROR] Failed to extract float table")
+            logger.error("[ERROR] Failed to extract float table")
             return "dataframe",False
 
     except Exception as e:
-        print(f"[ERROR] process_float_account_details failed: {e}")
+        logger.error(f"[ERROR] process_float_account_details failed: {e}")
         page.screenshot(path="float_error.png")
         return False
 
 def click_search_button(page: Page) -> bool:
     try:
-        print("[INFO] Clicking Search button")
+        logger.info("[INFO] Clicking Search button")
         search_button = page.locator("//div[@class='section-content']//button").first
         search_button.wait_for(state="visible", timeout=10000)
         search_button.click(force=True)
-        print("[INFO] Search button clicked")
+        logger.info("[INFO] Search button clicked")
         return True
     except Exception as e:
-        print(f"[ERROR] Failed to click Search button: {e}")
+        logger.error(f"[ERROR] Failed to click Search button: {e}")
         return False
 
 def click_search_button_head_office(page: Page) -> bool:
     try:
-        print("[INFO] Clicking Search button")
+        logger.info("[INFO] Clicking Search button")
         search_button = page.locator("//div[@id='pane-transactions']//form[@class='el-form el-form--default el-form--label-top form-flex-container']//button[1]").first
         search_button.wait_for(state="visible", timeout=10000)
         search_button.click(force=True)
-        print("[INFO] Search button clicked")
+        logger.info("[INFO] Search button clicked")
         return True
     except Exception as e:
-        print(f"[ERROR] Failed to click Search button: {e}")
+        logger.error(f"[ERROR] Failed to click Search button: {e}")
         return False
 
 def process_commission_account_details(page: Page, business_short_code: int, mapped_data: Optional[dict], pass_value: str) -> bool:
     try:
-        print("[INFO] Processing Commission Account Details")
+        logger.info("[INFO] Processing Commission Account Details")
         scroll_to_top(page)
         time.sleep(1)
 
@@ -2112,14 +2104,14 @@ def process_commission_account_details(page: Page, business_short_code: int, map
         
         df,success_value = scrape_180_days_monthly(page,business_short_code=business_short_code,pass_value=pass_value,additional_category="commission")
         if df is not None or success_value:
-            print("[SUCCESS] Commission table extracted")
+            logger.info("[SUCCESS] Commission table extracted")
             return True
         else:
-            print("[ERROR] Failed to extract commission table")
+            logger.error("[ERROR] Failed to extract commission table")
             return False
 
     except Exception as e:
-        print(f"[ERROR] process_commission_account_details failed: {e}")
+        logger.error(f"[ERROR] process_commission_account_details failed: {e}")
         page.screenshot(path="commission_error.png")
         return False
 
@@ -2129,49 +2121,49 @@ def process_float_commission(page: Page, business_short_code: int , mapped_data:
     trials = 3
 
     proc_type, success = process_float_account_details(page, business_short_code,mapped_data=mapped_data, pass_value=pass_value)
-    print(f"[DEBUG] Float Account processing result: {proc_type}, success: {success}")
+    logger.info(f"[DEBUG] Float Account processing result: {proc_type}, success: {success}")
     if not success and proc_type != "frozen":
         close_irritative_dialog_box(page)
-        print(f"[ERROR] Failed at Float Account step {business_short_code} - Retrying...")
+        logger.error(f"[ERROR] Failed at Float Account step {business_short_code} - Retrying...")
         while trials > 0:
             trials -= 1
-            print(f"[INFO] Retrying Float Account step {business_short_code} ({3 - trials} attempts left)...")
+            logger.info(f"[INFO] Retrying Float Account step {business_short_code} ({3 - trials} attempts left)...")
             proc_type_inner, success_inner = process_float_account_details(page, business_short_code,mapped_data=mapped_data, pass_value=pass_value)
             if success_inner:
-                print("[SUCCESS] Float Account step completed")
+                logger.info("[SUCCESS] Float Account step completed")
                 break
             time.sleep(1)  # Wait before retrying
         else:
-            print("[ERROR] All retries failed for Float Account step")
+            logger.error("[ERROR] All retries failed for Float Account step")
             return False
         return False
     elif not success and proc_type == "frozen":
-        print(f"[INFO] Till is frozen for business {business_short_code}, skipping further processing.")
+        logger.info(f"[INFO] Till is frozen for business {business_short_code}, skipping further processing.")
         return False
         
     if pass_value == "first":                                                                                                       
-        print(f"[INFO] First pass — skipping commission for {business_short_code}")                                          
+        logger.info(f"[INFO] First pass — skipping commission for {business_short_code}")                                          
         return True  
 
     # Small pause to let page stabilize
     time.sleep(1)
 
     if not process_commission_account_details(page, business_short_code,mapped_data=mapped_data, pass_value=pass_value):
-        print(f"[ERROR] Failed at Commission Account step {business_short_code} - Retrying...")
+        logger.error(f"[ERROR] Failed at Commission Account step {business_short_code} - Retrying...")
         close_irritative_dialog_box(page)
         while trials > 0:
             trials -= 1
-            print(f"[INFO] Retrying Commission Account step {business_short_code} ({3 - trials} attempts left)...")
+            logger.info(f"[INFO] Retrying Commission Account step {business_short_code} ({3 - trials} attempts left)...")
             if process_commission_account_details(page, business_short_code,mapped_data=mapped_data, pass_value=pass_value):
-                print("[SUCCESS] Commission Account step completed")
+                logger.info("[SUCCESS] Commission Account step completed")
                 break
             time.sleep(1)  # Wait before retrying
         else:
-            print("[ERROR] All retries failed for Commission Account step") 
+            logger.error("[ERROR] All retries failed for Commission Account step") 
             
         return False
 
-    print(f"[SUCCESS] Completed processing business {business_short_code}")
+    logger.info(f"[SUCCESS] Completed processing business {business_short_code}")
     return True
 
 def _find_visible_date_input(page: Page, placeholder: str, max_wait: int = 15):
@@ -2188,18 +2180,18 @@ def _find_visible_date_input(page: Page, placeholder: str, max_wait: int = 15):
             inp = locator.nth(i)
             try:
                 if inp.is_visible():
-                    print(f"[✓] Found visible '{placeholder}' input (index {i} of {count})")
+                    logger.info(f"[✓] Found visible '{placeholder}' input (index {i} of {count})")
                     return inp
             except Exception:
                 continue
-        print(f"[WAIT] '{placeholder}' — none of {count} candidates visible yet, retrying...")
+        logger.info(f"[WAIT] '{placeholder}' — none of {count} candidates visible yet, retrying...")
         time.sleep(1)
 
     # Dump page state for diagnosis
     try:
         with open("date_input_debug.html", "w", encoding="utf-8") as f:
             f.write(page.content())
-        print("[DEBUG] Page HTML dumped to date_input_debug.html")
+        logger.info("[DEBUG] Page HTML dumped to date_input_debug.html")
     except Exception:
         pass
     raise Exception(f"No visible input with placeholder '{placeholder}' found after {max_wait}s")
@@ -2214,12 +2206,12 @@ def select_dates_and_submit_head_office_monthly(page: Page, month_offset: int = 
     """
     try:
         start_time_input = _find_visible_date_input(page, "Start Time")
-        print("[✓] Found Start Time date picker input")
+        logger.info("[✓] Found Start Time date picker input")
         end_time_input = _find_visible_date_input(page, "End Time")
-        print("[✓] Found End Time date picker input")
+        logger.info("[✓] Found End Time date picker input")
 
     except Exception as e:
-        print(f"[ERROR] Could not find date picker inputs: {e}")
+        logger.error(f"[ERROR] Could not find date picker inputs: {e}")
         return False
 
     try:
@@ -2243,9 +2235,9 @@ def select_dates_and_submit_head_office_monthly(page: Page, month_offset: int = 
         start_date_str = f"{start_date.strftime('%d/%m/%Y')} 00:00:00"
         end_date_str   = f"{end_date.strftime('%d/%m/%Y')} 23:59:59"
 
-        print(f"[INFO] Head Office Commission month {month_offset + 1}/6:")
-        print(f"[INFO]   From: {start_date_str}")
-        print(f"[INFO]   To:   {end_date_str}")
+        logger.info(f"[INFO] Head Office Commission month {month_offset + 1}/6:")
+        logger.info(f"[INFO]   From: {start_date_str}")
+        logger.info(f"[INFO]   To:   {end_date_str}")
 
         page.click("body", position={"x": 10, "y": 10})
         time.sleep(1)
@@ -2271,11 +2263,11 @@ def select_dates_and_submit_head_office_monthly(page: Page, month_offset: int = 
             close_irritative_dialog_box(page)
             return select_dates_and_submit_head_office_monthly(page, month_offset=month_offset)
 
-        print("[✓] Head Office Commission form submitted")
+        logger.info("[✓] Head Office Commission form submitted")
         return True
 
     except Exception as e:
-        print(f"[ERROR] Could not set Head Office Commission dates: {e}")
+        logger.error(f"[ERROR] Could not set Head Office Commission dates: {e}")
         traceback.print_exc()
         return False
 
@@ -2287,17 +2279,17 @@ def scrape_head_office_commission_held_account(page: Page) -> bool:
     Keeps only rows where Paid In > 0 before saving to the database.
     """
     try:
-        print("[INFO] ===== Starting Commission Held Account Scraping =====")
+        logger.info("[INFO] ===== Starting Commission Held Account Scraping =====")
 
         # Step 1: Click Account Statement tab
-        print("[STEP 1] Clicking Account Statement tab...")
+        logger.info("[STEP 1] Clicking Account Statement tab...")
         acct_tab = page.wait_for_selector("//div[@id='tab-accountStatement']", timeout=30000)
         acct_tab.click()
         time.sleep(2)
 
         # Step 2: Open dropdown and select Commission Held Account (7 arrow-downs)
         # 8 lands on "Agency Commission Account"; 7 lands on "Commission Held Account"
-        print("[STEP 2] Selecting Commission Held Account (7 arrow-downs)...")
+        logger.info("[STEP 2] Selecting Commission Held Account (7 arrow-downs)...")
         dropdown_caret = page.locator(
             "//div[@class='el-form-item is-success is-required asterisk-left "
             "el-form-item--label-top none-margin-bottom']"
@@ -2312,22 +2304,21 @@ def scrape_head_office_commission_held_account(page: Page) -> bool:
             time.sleep(0.2)
         page.keyboard.press("Enter")
         time.sleep(2)
-        print("[INFO] Commission Held Account selected")
+        logger.info("[INFO] Commission Held Account selected")
 
         # Step 3: Scrape last 6 calendar months
         all_data = []
         for month_offset in range(6):
             close_irritative_dialog_box(page)
-            print(f"\n{'=' * 60}")
-            print(f"Commission Held Account - chunk {month_offset + 1}/6")
-            print("=" * 60)
+            logger.info(f"\n{'=' * 60}")
+            logger.info(f"Commission Held Account - chunk {month_offset + 1}/6")
 
             # Find date inputs
             try:
                 start_time_input = _find_visible_date_input(page, "Start Time")
                 end_time_input   = _find_visible_date_input(page, "End Time")
             except Exception as e:
-                print(f"[ERROR] Date inputs not found for month {month_offset + 1}: {e}")
+                logger.error(f"[ERROR] Date inputs not found for month {month_offset + 1}: {e}")
                 continue
 
             # Calendar month boundaries
@@ -2348,7 +2339,7 @@ def scrape_head_office_commission_held_account(page: Page) -> bool:
 
             start_date_str = f"{start_date.strftime('%d/%m/%Y')} 00:00:00"
             end_date_str   = f"{end_date.strftime('%d/%m/%Y')} 23:59:59"
-            print(f"[INFO] From: {start_date_str}  To: {end_date_str}")
+            logger.info(f"[INFO] From: {start_date_str}  To: {end_date_str}")
 
             # Fill date inputs
             page.click("body", position={"x": 10, "y": 10})
@@ -2371,14 +2362,14 @@ def scrape_head_office_commission_held_account(page: Page) -> bool:
             try:
                 search_btn = page.locator("//div[@class='section-content']//button[1]").first
                 search_btn.click(force=True)
-                print("[INFO] Search button clicked")
+                logger.info("[INFO] Search button clicked")
             except Exception as e:
-                print(f"[ERROR] Search failed for month {month_offset + 1}: {e}")
+                logger.error(f"[ERROR] Search failed for month {month_offset + 1}: {e}")
                 continue
             time.sleep(2)
 
             if not does_transaction_exist_for_period_(page):
-                print("[INFO] No data for this period — skipping")
+                logger.info("[INFO] No data for this period — skipping")
                 continue
 
             # Download and filter (Paid In > 0 only)
@@ -2395,7 +2386,7 @@ def scrape_head_office_commission_held_account(page: Page) -> bool:
                     return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
                 }""")
                 if not coords:
-                    print("[EXPORT] Could not resolve export button coordinates — skipping")
+                    logger.warning("[EXPORT] Could not resolve export button coordinates — skipping")
                     continue
 
                 page.mouse.move(coords['x'], coords['y'])
@@ -2416,7 +2407,7 @@ def scrape_head_office_commission_held_account(page: Page) -> bool:
                 all_items  = page.locator("ul.el-dropdown-menu li.el-dropdown-menu__item")
                 excel_items = all_items.filter(has_text="Excel")
                 if excel_items.count() < 3:
-                    print("[EXPORT] Not enough Excel options — skipping")
+                    logger.info("[EXPORT] Not enough Excel options — skipping")
                     continue
 
                 with page.expect_download(timeout=60_000) as dl_info:
@@ -2437,14 +2428,14 @@ def scrape_head_office_commission_held_account(page: Page) -> bool:
                         sc_match = re.search(r'Short\s*Code[:\s]+(\d{4,})', row_str, re.IGNORECASE)
                         if sc_match:
                             excel_shortcode = sc_match.group(1).strip()
-                            print(f"[INFO] Excel company shortcode: {excel_shortcode}")
+                            logger.info(f"[INFO] Excel company shortcode: {excel_shortcode}")
                             break
                 except Exception as _hdr_err:
-                    print(f"[WARN] Could not extract shortcode from Excel header: {_hdr_err}")
+                    logger.warning(f"[WARN] Could not extract shortcode from Excel header: {_hdr_err}")
 
                 # Read and split by transaction kind
                 df_raw = pd.read_excel(temp_path, skiprows=6)
-                print(f"[DEBUG] Raw columns: {list(df_raw.columns)}, rows: {len(df_raw)}")
+                logger.info(f"[DEBUG] Raw columns: {list(df_raw.columns)}, rows: {len(df_raw)}")
 
                 # Identify clawback rows via the Details column
                 details_col = next(
@@ -2469,7 +2460,7 @@ def scrape_head_office_commission_held_account(page: Page) -> bool:
                         agent_id=None,
                         business_shortcode=excel_shortcode
                     )
-                    print(f"[INFO] Clawback save result: {r_cb.get('success')} — {len(df_clawback)} row(s) for month {month_offset + 1}")
+                    logger.info(f"[INFO] Clawback save result: {r_cb.get('success')} — {len(df_clawback)} row(s) for month {month_offset + 1}")
 
                 # Save commission held rows (non-clawback, attributed to Excel's company)
                 results = transaction_service.update_transactions_from_dataframe(
@@ -2479,17 +2470,17 @@ def scrape_head_office_commission_held_account(page: Page) -> bool:
                     agent_id=None,
                     business_shortcode=excel_shortcode
                 )
-                print(f"[DEBUG] Commission held save result: success={results.get('success')}, "
+                logger.info(f"[DEBUG] Commission held save result: success={results.get('success')}, "
                       f"created={results.get('created_count',0)}, updated={results.get('updated_count',0)}, "
                       f"errors={results.get('error_count',0)}, error={results.get('error','')}")
                 if results.get('success'):
                     df_raw['scrape_timestamp'] = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
                     df_raw['month_offset'] = month_offset
                     all_data.append(df_raw)
-                    print(f"[SUCCESS] Commission Held: {len(df_held)} rows saved for month {month_offset + 1}")
+                    logger.info(f"[SUCCESS] Commission Held: {len(df_held)} rows saved for month {month_offset + 1}")
 
             except Exception as exp_err:
-                print(f"[ERROR] Export/save failed for month {month_offset + 1}: {exp_err}")
+                logger.error(f"[ERROR] Export/save failed for month {month_offset + 1}: {exp_err}")
                 traceback.print_exc()
 
             if month_offset < 5:
@@ -2497,17 +2488,16 @@ def scrape_head_office_commission_held_account(page: Page) -> bool:
 
         if all_data:
             combined = pd.concat(all_data, ignore_index=True)
-            print(f"\n{'=' * 60}")
-            print(f"COMMISSION HELD TOTAL: {len(combined)} rows from {len(all_data)} periods")
-            print("=" * 60)
+            logger.info(f"\n{'=' * 60}")
+            logger.info(f"COMMISSION HELD TOTAL: {len(combined)} rows from {len(all_data)} periods")
         else:
-            print("[INFO] No Commission Held data scraped")
+            logger.info("[INFO] No Commission Held data scraped")
 
-        print("[INFO] ===== Commission Held Account Scraping Complete =====")
+        logger.info("[INFO] ===== Commission Held Account Scraping Complete =====")
         return True
 
     except Exception as e:
-        print(f"[ERROR] scrape_head_office_commission_held_account failed: {e}")
+        logger.error(f"[ERROR] scrape_head_office_commission_held_account failed: {e}")
         traceback.print_exc()
         return False
 
@@ -2520,10 +2510,10 @@ def scrape_head_office_commission(page: Page) -> bool:
     then scrapes the last 6 calendar months of data via Excel export.
     """
     try:
-        print("[INFO] ===== Starting Head Office Commission Scraping =====")
+        logger.info("[INFO] ===== Starting Head Office Commission Scraping =====")
 
         # Step 1: Click the Review Transaction card button on the dashboard
-        print("[STEP 1] Clicking Review Transaction card button...")
+        logger.info("[STEP 1] Clicking Review Transaction card button...")
         review_btn = page.wait_for_selector(
             "//div[@class='el-card is-always-shadow home-card portal-item review-transaction']"
             "//div[@class='el-card__header']"
@@ -2538,7 +2528,7 @@ def scrape_head_office_commission(page: Page) -> bool:
         
 
         # # Step 2: Click Transactions tab
-        print("[STEP 2] Clicking Transactions tab...")
+        logger.info("[STEP 2] Clicking Transactions tab...")
         transactions_tab = page.wait_for_selector(
             "//div[@id='tab-transactions']",
             timeout=30000
@@ -2547,10 +2537,10 @@ def scrape_head_office_commission(page: Page) -> bool:
         time.sleep(1)        
 
         # Step 3: Open the 7th account dropdown caret and arrow-down 6 times
-        print("[STEP 3] Selecting Head Office Commission account from dropdown...")
+        logger.info("[STEP 3] Selecting Head Office Commission account from dropdown...")
         dropdown = page.locator("(//i[@class='el-icon el-select__caret el-select__icon'])[7]")
         if dropdown.count() == 0:
-            print("[INFO] Primary dropdown locator not found, trying positional fallback...")
+            logger.warning("[INFO] Primary dropdown locator not found, trying positional fallback...")
             dropdown = page.locator(
                 "//div[5]//div[1]//div[1]//div[1]//div[1]//div[1]//div[2]//i[1]"
             )
@@ -2564,7 +2554,7 @@ def scrape_head_office_commission(page: Page) -> bool:
             time.sleep(0.2)
         page.keyboard.press("Enter")
         time.sleep(3)
-        print("[INFO] Head Office Commission account selected")
+        logger.info("[INFO] Head Office Commission account selected")
 
         # Step 4: Single date range — 1st of 2 months ago → today
         close_irritative_dialog_box(page)
@@ -2576,7 +2566,7 @@ def scrape_head_office_commission(page: Page) -> bool:
             start_year -= 1
         start_date_str = f"{datetime(start_year, start_month, 1).strftime('%d/%m/%Y')} 00:00:00"
         end_date_str   = f"{today.strftime('%d/%m/%Y')} 23:59:59"
-        print(f"[INFO] Head Office Commission date range: {start_date_str} → {end_date_str}")
+        logger.info(f"[INFO] Head Office Commission date range: {start_date_str} → {end_date_str}")
 
         page.click("body", position={"x": 10, "y": 10})
         time.sleep(0.5)
@@ -2602,7 +2592,7 @@ def scrape_head_office_commission(page: Page) -> bool:
 
         # all_data = []
         # if not does_transaction_exist_for_period_(page):
-        #     print("[INFO] No Head Office Commission transactions found for this period")
+        #     logger.info("[INFO] No Head Office Commission transactions found for this period")
         # else:
         #     df, success_value = save_table_to_dataframe_download_head_office(
         #         page,
@@ -2612,15 +2602,15 @@ def scrape_head_office_commission(page: Page) -> bool:
         #     if df is not None and len(df) > 0:
         #         df['scrape_timestamp'] = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
         #         all_data.append(df)
-        #         print(f"[SUCCESS] Head Office Commission: {len(df)} rows")
+        #         logger.info(f"[SUCCESS] Head Office Commission: {len(df)} rows")
         #     else:
-        #         print("[INFO] No Head Office Commission data returned")
+        #         logger.info("[INFO] No Head Office Commission data returned")
 
         # if all_data:
         #     combined_df = pd.concat(all_data, ignore_index=True)
-        #     print(f"HEAD OFFICE COMMISSION TOTAL: {len(combined_df)} rows")
+        #     logger.info(f"HEAD OFFICE COMMISSION TOTAL: {len(combined_df)} rows")
         # else:
-        #     print("[INFO] No Head Office Commission data scraped")
+        #     logger.info("[INFO] No Head Office Commission data scraped")
         
         # Hover the visible export trigger (there are 2 in the DOM; :visible picks the right one)
         t = time.time()
@@ -2628,7 +2618,7 @@ def scrape_head_office_commission(page: Page) -> bool:
         export_trigger.wait_for(state="visible", timeout=30000)
         export_trigger.scroll_into_view_if_needed()
         export_trigger.hover(force=True, timeout=10_000)
-        print(f"[TIMING] Export trigger hovered: {_elapsed(t)}")
+        logger.info(f"[TIMING] Export trigger hovered: {_elapsed(t)}")
         time.sleep(3)
 
         page.wait_for_function(
@@ -2642,12 +2632,12 @@ def scrape_head_office_commission(page: Page) -> bool:
             }""",
             timeout=40000,
         )
-        print(f"[TIMING] Export dropdown open: {_elapsed(t)}")
+        logger.info(f"[TIMING] Export dropdown open: {_elapsed(t)}")
 
         all_items = page.locator("ul.el-dropdown-menu li.el-dropdown-menu__item")
         excel_items = all_items.filter(has_text="Excel")
         excel_count = excel_items.count()
-        print(f"[EXPORT] Found {excel_count} Excel option(s)")
+        logger.info(f"[EXPORT] Found {excel_count} Excel option(s)")
 
         if excel_count < 1:
             raise Exception(f"No Excel export options found (count={excel_count})")
@@ -2658,9 +2648,9 @@ def scrape_head_office_commission(page: Page) -> bool:
         with page.expect_download(timeout=60_000) as dl_info:
             try:
                 target_excel.click(force=True, timeout=15_000)
-                print("[EXPORT] Clicked Excel option")
+                logger.info("[EXPORT] Clicked Excel option")
             except Exception:
-                print("[EXPORT] Normal click failed — falling back to JS click")
+                logger.error("[EXPORT] Normal click failed — falling back to JS click")
                 target_excel.evaluate("el => el.click()")
 
         download = dl_info.value
@@ -2669,7 +2659,7 @@ def scrape_head_office_commission(page: Page) -> bool:
         debug_path = f"transaction_export_debug_{company_shortcode}{ext}"
         import shutil as _shutil
         _shutil.copy2(temp_path, debug_path)
-        print(f"[TIMING] Excel downloaded → {debug_path}: {_elapsed(t)}")
+        logger.info(f"[TIMING] Excel downloaded → {debug_path}: {_elapsed(t)}")
 
         # Parse and persist directly from the Playwright temp file
         t = time.time()
@@ -2680,16 +2670,16 @@ def scrape_head_office_commission(page: Page) -> bool:
             company_shortcode=company_shortcode,
             agent_id=None,
         )
-        print(f"[TIMING] DB upsert: {_elapsed(t)} | success={success} | rows={len(df) if df is not None else 0}")
+        logger.info(f"[TIMING] DB upsert: {_elapsed(t)} | success={success} | rows={len(df) if df is not None else 0}")
 
-        print("[INFO] ===== Head Office Commission Scraping Complete =====")
+        logger.info("[INFO] ===== Head Office Commission Scraping Complete =====")
 
         # Immediately scrape Commission Held Account from the Account Statement tab
         scrape_child_org_commission(page, business_shortcode=company_shortcode)
         return True
 
     except Exception as e:
-        print(f"[ERROR] scrape_head_office_commission failed: {e}")
+        logger.error(f"[ERROR] scrape_head_office_commission failed: {e}")
         traceback.print_exc()
         return False
 
@@ -2706,16 +2696,16 @@ def select_dates_and_submit_monthly(page: Page, month_offset: int = 0) -> bool:
             "//input[@placeholder='Start Time']", 
             timeout=30000
         )
-        print("[✓] Found Start Time date picker input")
+        logger.info("[✓] Found Start Time date picker input")
         
         end_time_input = page.wait_for_selector(
             "//input[@placeholder='End Time']", 
             timeout=30000
         )
-        print("[✓] Found End Time date picker input")
+        logger.info("[✓] Found End Time date picker input")
         
     except Exception as e:
-        print(f"[ERROR] Could not find date picker inputs: {e}")
+        logger.error(f"[ERROR] Could not find date picker inputs: {e}")
         user = User.query.filter_by(id=user_id).first()
         if user:
             send_session_timeout_email("martinmaati31@gmail.com")
@@ -2745,23 +2735,23 @@ def select_dates_and_submit_monthly(page: Page, month_offset: int = 0) -> bool:
         
         # Ensure we're within 180 days limit
         if days_to_go_back_start > 180:
-            print(f"[INFO] Month offset {month_offset} exceeds 180 days limit")
+            logger.info(f"[INFO] Month offset {month_offset} exceeds 180 days limit")
             return False
         
         # Format dates with time appended
         start_date_str = f"{start_date.strftime('%d/%m/%Y')} 00:00:00"
         end_date_str = f"{end_date.strftime('%d/%m/%Y')} 23:59:59"  # Changed to end of day
         
-        print(f"[INFO] Selecting date range {month_offset+1}/6:")
-        print(f"[INFO] From: {start_date_str}")
-        print(f"[INFO] To: {end_date_str}")
+        logger.info(f"[INFO] Selecting date range {month_offset+1}/6:")
+        logger.info(f"[INFO] From: {start_date_str}")
+        logger.info(f"[INFO] To: {end_date_str}")
         
         # Close any open calendars first
         page.click("body", position={"x": 10, "y": 10})
         time.sleep(1)
         
         # --- SET START DATE WITH TIME ---
-        print("[STEP 1] Setting Start Date with time...")
+        logger.info("[STEP 1] Setting Start Date with time...")
         
         # Click to open calendar if needed
         start_time_input.click()
@@ -2778,7 +2768,7 @@ def select_dates_and_submit_monthly(page: Page, month_offset: int = 0) -> bool:
         time.sleep(0.5)
         
         # --- SET END DATE WITH TIME ---
-        print("[STEP 2] Setting End Date with time...")
+        logger.info("[STEP 2] Setting End Date with time...")
         
         # Click End Time input
         end_time_input.click()
@@ -2795,7 +2785,7 @@ def select_dates_and_submit_monthly(page: Page, month_offset: int = 0) -> bool:
         # time.sleep(1)
         
         # --- SUBMIT THE FORM ---
-        print("[STEP 3] Submitting form...")
+        logger.info("[STEP 3] Submitting form...")
         
         # Try to find and click submit button if exists
         click_search_button(page)
@@ -2806,12 +2796,12 @@ def select_dates_and_submit_monthly(page: Page, month_offset: int = 0) -> bool:
         if too_large_error.is_visible():
             close_irritative_dialog_box(page)
             select_dates_and_submit_monthly(page, month_offset=month_offset)
-            print("[ERROR] Date range too large error encountered")
-        print("[✓] Form submitted successfully")
+            logger.error("[ERROR] Date range too large error encountered")
+        logger.info("[✓] Form submitted successfully")
         return True
         
     except Exception as e:
-        print(f"[ERROR] Could not set dates: {e}")
+        logger.error(f"[ERROR] Could not set dates: {e}")
         import traceback
         traceback.print_exc()
         return False
@@ -2925,20 +2915,20 @@ def scrape_180_days_monthly(page:Page, business_short_code:int=0, pass_value:str
             transaction_type=transaction_type
         )
 
-    print(f"[INFO] Transaction type: {transaction_type}, Pass value: {pass_value}, Days since last scrape: {days}")
+    logger.info(f"[INFO] Transaction type: {transaction_type}, Pass value: {pass_value}, Days since last scrape: {days}")
 
     # Determine scraping strategy based on days since last scrape
     if days < 1 and pass_value == "first":
         force, reason = transaction_service.should_force_float_scrape(business_short_code)
         if force:
-            print(f"[INFO] Float transactions appear current (days={days}) but {reason} — forcing 1-month scrape.")
+            logger.info(f"[INFO] Float transactions appear current (days={days}) but {reason} — forcing 1-month scrape.")
             total_months = max(1, total_months)
         else:
-            print(f"[INFO] {reason} — skipping float scrape.")
+            logger.info(f"[INFO] {reason} — skipping float scrape.")
             return pd.DataFrame(), True
     elif days < 1 and pass_value == "second":
         # Commission was recently scraped - just get latest
-        print(f"[INFO] Commission transactions recently scraped ({days} days ago). Getting latest only.")
+        logger.info(f"[INFO] Commission transactions recently scraped ({days} days ago). Getting latest only.")
         df, success_value = save_table_to_dataframe_latest_(
             page,
             business_shortcode=business_short_code,
@@ -2947,14 +2937,13 @@ def scrape_180_days_monthly(page:Page, business_short_code:int=0, pass_value:str
         )
         return df, success_value
     # For both float (first) and commission (second) with days >= 1, proceed to monthly scraping
-    print(f"[INFO] Will scrape {total_months} month(s) of {transaction_type} data (last scraped {days} days ago).")
-    print(f"[INFO] Selecting date range for {transaction_type} download...")
+    logger.info(f"[INFO] Will scrape {total_months} month(s) of {transaction_type} data (last scraped {days} days ago).")
+    logger.info(f"[INFO] Selecting date range for {transaction_type} download...")
 
     for month_offset in range(total_months):
         close_irritative_dialog_box(page)
-        print(f"\n{'='*60}")
-        print(f"Scraping {transaction_type} - month chunk {month_offset+1}/{total_months}")
-        print('='*60)
+        logger.info(f"\n{'='*60}")
+        logger.info(f"Scraping {transaction_type} - month chunk {month_offset+1}/{total_months}")
 
         # Method 1: 30-day chunks
         success = select_dates_and_submit_monthly(page, month_offset=month_offset)
@@ -2965,22 +2954,22 @@ def scrape_180_days_monthly(page:Page, business_short_code:int=0, pass_value:str
         if not success:
             close_irritative_dialog_box(page)
             time.sleep(1)
-            print(f"[INFO] Retrying date selection for month offset {month_offset}...")
+            logger.info(f"[INFO] Retrying date selection for month offset {month_offset}...")
             success = select_dates_and_submit_monthly(page, month_offset=month_offset)
             if not success:
                 close_irritative_dialog_box(page)
-                print(f"[ERROR] Failed to select dates for month offset {month_offset}")
+                logger.error(f"[ERROR] Failed to select dates for month offset {month_offset}")
                 break
 
         # Wait for table to load
         time.sleep(1)
 
-        print(f"Saving {transaction_type} data for this period to dataframe...")
+        logger.info(f"Saving {transaction_type} data for this period to dataframe...")
 
         # Get data for this period
         try:
             if not does_transaction_exist_for_period_(page=page):
-                print(f"[INFO] No {transaction_type} transactions found for this period. Skipping.")
+                logger.info(f"[INFO] No {transaction_type} transactions found for this period. Skipping.")
                 continue
 
             # Use download method for both float and commission when days > 2
@@ -3002,26 +2991,25 @@ def scrape_180_days_monthly(page:Page, business_short_code:int=0, pass_value:str
                 
                 all_data.append(df)
                 
-                print(f"[SUCCESS] Scraped {len(df)} rows for period {days_ago_start}-{days_ago_end} days ago")
+                logger.info(f"[SUCCESS] Scraped {len(df)} rows for period {days_ago_start}-{days_ago_end} days ago")
                 success_value_ = success_value
             else:
-                print("[INFO] No data found in dataframe")
+                logger.info("[INFO] No data found in dataframe")
                 
         except Exception as e:
-            print(f"[ERROR] Failed to save data for month offset {month_offset}: {e}")
+            logger.error(f"[ERROR] Failed to save data for month offset {month_offset}: {e}")
             success_value_ = False
         
         # Add delay between requests
         if month_offset < total_months - 1:
-            print("[INFO] Waiting before next period...")
+            logger.info("[INFO] Waiting before next period...")
             time.sleep(1)
     
     # Combine all data
     if all_data:
         combined_df = pd.concat(all_data, ignore_index=True)
-        print(f"\n{'='*60}")
-        print(f"TOTAL DATA: {len(combined_df)} rows from {len(all_data)} periods")
-        print('='*60)
+        logger.info(f"\n{'='*60}")
+        logger.info(f"TOTAL DATA: {len(combined_df)} rows from {len(all_data)} periods")
         return combined_df, True if all_data else []
     
     return pd.DataFrame(), success_value_
@@ -3033,14 +3021,14 @@ def select_dates_and_submit_(page: Page) -> bool:
                 "//input[@placeholder='Start Time']", 
                 timeout=10000
             )
-            print("[✓] Found Start Time date picker input")
+            logger.info("[✓] Found Start Time date picker input")
             
             # Find the End Time input (first date picker with placeholder "End Time")
             end_time_input = page.wait_for_selector(
                 "//input[@placeholder='End Time']", 
                 timeout=10000
             )
-            print("[✓] Found End Time date picker input")
+            logger.info("[✓] Found End Time date picker input")
             user = User.query.filter_by(id=user_id).first()
             if user:
                 # send_session_timeout_email(user.email)
@@ -3050,23 +3038,23 @@ def select_dates_and_submit_(page: Page) -> bool:
                 
 
         except Exception as e:
-            print(f"[ERROR] Could not find date picker inputs: {e}")
+            logger.error(f"[ERROR] Could not find date picker inputs: {e}")
             
             # Fallback: Try finding by class and position
             try:
-                print("[INFO] Trying fallback selector for date pickers...")
+                logger.info("[INFO] Trying fallback selector for date pickers...")
                 date_inputs = page.query_selector_all(
                     "//div[@class='el-date-editor']//input[@class='el-input__inner']"
                 )
                 if len(date_inputs) >= 2:
                     start_time_input = date_inputs[0]
                     end_time_input = date_inputs[1]
-                    print(f"[✓] Found {len(date_inputs)} date picker inputs using fallback")
+                    logger.info(f"[✓] Found {len(date_inputs)} date picker inputs using fallback")
                 else:
-                    print(f"[ERROR] Expected at least 2 date inputs, found {len(date_inputs)}")
+                    logger.error(f"[ERROR] Expected at least 2 date inputs, found {len(date_inputs)}")
                     return False
             except Exception as fallback_error:
-                print(f"[ERROR] Fallback selector also failed: {fallback_error}")
+                logger.error(f"[ERROR] Fallback selector also failed: {fallback_error}")
                 return False
         
         # Step 3: Fill Start Time with first day of current month in dd/MM/yyyy format
@@ -3075,7 +3063,7 @@ def select_dates_and_submit_(page: Page) -> bool:
             # Click the Start Time input to focus
             start_time_input.click()
             
-            print(f"We have just clicked the start time")
+            logger.info(f"We have just clicked the start time")
             previous_month_icon = page.wait_for_selector(
                 "//div[@actualvisible='true']//button[@aria-label='Previous Month']", 
                 timeout=5000
@@ -3084,21 +3072,21 @@ def select_dates_and_submit_(page: Page) -> bool:
             for i in range(3):
                 previous_month_icon.click() 
             
-            print("The previous button has been clicked thrice .......")
+            logger.info("The previous button has been clicked thrice .......")
             
             for i in range(5):
                 page.keyboard.press("Tab")
-                print("Tab pressed")
+                logger.info("Tab pressed")
             
             page.keyboard.press("Enter")
             
         except Exception as e:
-            print(f"[ERROR] Could not fill Start Time input: {e}")
+            logger.error(f"[ERROR] Could not fill Start Time input: {e}")
             return False
         
         # Step 4: Press Tab three times and Enter to submit
         try:
-            print("[INFO] Pressing Tab three times and Enter to submit...")
+            logger.info("[INFO] Pressing Tab three times and Enter to submit...")
             
             # Ensure Start Time input has focus
             start_time_input.focus()
@@ -3108,7 +3096,7 @@ def select_dates_and_submit_(page: Page) -> bool:
             focused_element = page.evaluate_handle("() => document.activeElement")
             focused_tag = page.evaluate("(elem) => elem.tagName", focused_element)
             focused_id = page.evaluate("(elem) => elem.id || elem.placeholder || 'no-id'", focused_element)
-            print(f"[DEBUG] Current focused element: {focused_tag} (ID/Placeholder: {focused_id})")
+            logger.info(f"[DEBUG] Current focused element: {focused_tag} (ID/Placeholder: {focused_id})")
             
             # Press Tab three times
             for i in range(4):
@@ -3118,15 +3106,15 @@ def select_dates_and_submit_(page: Page) -> bool:
                 focused_element = page.evaluate_handle("() => document.activeElement")
                 focused_tag = page.evaluate("(elem) => elem.tagName", focused_element)
                 focused_id = page.evaluate("(elem) => elem.id || elem.placeholder || 'no-id'", focused_element)
-                print(f"[DEBUG] After Tab {i+1}, focused element: {focused_tag} (ID/Placeholder: {focused_id})")
+                logger.info(f"[DEBUG] After Tab {i+1}, focused element: {focused_tag} (ID/Placeholder: {focused_id})")
             
             # Press Enter to submit
             page.keyboard.press("Enter")
-            print("[✓] Pressed Enter to submit form")
+            logger.info("[✓] Pressed Enter to submit form")
             # page.wait_for_timeout(3000)  # Wait for page to load results
             time.sleep(1)  # Wait for page to load results
         except Exception as e:
-            print(f"[ERROR] Could not complete Tab/Enter submission: {e}")
+            logger.error(f"[ERROR] Could not complete Tab/Enter submission: {e}")
             traceback.print_exc()
             return False
 
@@ -3173,7 +3161,7 @@ def solveCaptchaXai(image_path):
 
     # Print the extracted CAPTCHA
     captcha_text = response.choices[0].message.content.strip()
-    print(f"Extracted CAPTCHA: {captcha_text}")
+    logger.info(f"Extracted CAPTCHA: {captcha_text}")
     return captcha_text
 
 def extract_user_agent_kyc(short_code: str, page: Page) -> bool:
@@ -3188,7 +3176,7 @@ def extract_user_agent_kyc(short_code: str, page: Page) -> bool:
     """
     try:
         # Step 1: Click the "Organization Operator" tab/section
-        print("[INFO] Navigating to Organization Operator section...")
+        logger.info("[INFO] Navigating to Organization Operator section...")
         org_operator_tab = page.wait_for_selector(
             "//div[contains(text(),'Organization Operator')]",
             timeout=15000
@@ -3198,7 +3186,7 @@ def extract_user_agent_kyc(short_code: str, page: Page) -> bool:
 
         # Step 2: Collect all operator rows
         rows = page.query_selector_all("//tr[@class='el-table__row']")
-        print(f"[INFO] Found {len(rows)} operator row(s) for short_code {short_code}")
+        logger.info(f"[INFO] Found {len(rows)} operator row(s) for short_code {short_code}")
 
         agent_company_service_local = AgentCompanyService()
         agent_company = agent_company_service_local.get_agent_company_by_shortcode_(str(short_code))
@@ -3214,12 +3202,12 @@ def extract_user_agent_kyc(short_code: str, page: Page) -> bool:
                     role_text = cells[3].inner_text().strip()
                     if role_text and role_text != "-":
                         operator_role = role_text
-                print(f"[INFO] Row {idx + 1}/{len(rows)} — role: {operator_role}")
+                logger.info(f"[INFO] Row {idx + 1}/{len(rows)} — role: {operator_role}")
 
                 # Step 3: Click the Detail button on this row
                 detail_btn = row.query_selector("button[type='button']")
                 if not detail_btn:
-                    print(f"[WARN] No button found on row {idx + 1}, skipping.")
+                    logger.warning(f"[WARN] No button found on row {idx + 1}, skipping.")
                     continue
 
                 detail_btn.click()
@@ -3231,7 +3219,7 @@ def extract_user_agent_kyc(short_code: str, page: Page) -> bool:
                     timeout=15000
                 )
                 kyc_html = kyc_panel.inner_html()
-                print(f"[DEBUG] Captured KYC HTML for row {idx + 1} ({len(kyc_html)} chars)")
+                logger.info(f"[DEBUG] Captured KYC HTML for row {idx + 1} ({len(kyc_html)} chars)")
 
                 # Step 5: Parse and save the KYC form
                 _parse_and_save_kyc(
@@ -3250,7 +3238,7 @@ def extract_user_agent_kyc(short_code: str, page: Page) -> bool:
                 rows = page.query_selector_all("//tr[@class='el-table__row']")
 
             except Exception as row_err:
-                print(f"[ERROR] Failed to process row {idx + 1}: {row_err}")
+                logger.error(f"[ERROR] Failed to process row {idx + 1}: {row_err}")
                 traceback.print_exc()
                 # Try to recover — go back to the list
                 try:
@@ -3262,11 +3250,11 @@ def extract_user_agent_kyc(short_code: str, page: Page) -> bool:
                 continue
 
         db.session.commit()
-        print(f"[INFO] Successfully processed KYC for short_code {short_code}")
+        logger.info(f"[INFO] Successfully processed KYC for short_code {short_code}")
 
     except Exception as e:
         db.session.rollback()
-        print(f"[ERROR] extract_user_agent_kyc failed for {short_code}: {e}")
+        logger.error(f"[ERROR] extract_user_agent_kyc failed for {short_code}: {e}")
         traceback.print_exc()
 
 
@@ -3332,12 +3320,9 @@ def _parse_and_save_kyc(kyc_html: str, short_code: str, agent_company, operator_
     email_val = val_or_none(email) or val_or_none(notif_email)
 
     if not id_number or id_number == "-":
-        print("[WARN] No ID number found in KYC form, skipping.")
+        logger.warning("[WARN] No ID number found in KYC form, skipping.")
         return
 
-    print(f"[INFO] KYC — name: {first_name} {lastname}, ID: {id_number}, "
-          f"phone: {phone}, email: {email_val}, dob: {date_of_birth}, "
-          f"gender: {gender}, nationality: {nationality}")
 
     # Look for an existing UserAgent scoped to this company with the same role (category).
     # If found → update; if different role or no match → create a new UserAgent for this company.
@@ -3355,11 +3340,7 @@ def _parse_and_save_kyc(kyc_html: str, short_code: str, agent_company, operator_
             .first()
         )
         if existing:
-            print(f"[INFO] Found existing UserAgent id={existing.id} with same role={operator_role} "
-                  f"for company {agent_company.short_code} — updating.")
         else:
-            print(f"[INFO] No UserAgent with role={operator_role} for company {agent_company.short_code} "
-                  f"— will create new.")
 
     if existing:
         existing.firstname         = first_name or existing.firstname
@@ -3373,7 +3354,7 @@ def _parse_and_save_kyc(kyc_html: str, short_code: str, agent_company, operator_
         if agent_company and not existing.agent_company_id:
             existing.agent_company_id = agent_company.id
         user_agent = existing
-        print(f"[INFO] Updated UserAgent id={existing.id} role={operator_role}")
+        logger.info(f"[INFO] Updated UserAgent id={existing.id} role={operator_role}")
     else:
         # Guard against idnumber uniqueness violation: if this ID number is already in the
         # system under a different company/role, we reuse that record rather than duplicating.
@@ -3391,8 +3372,6 @@ def _parse_and_save_kyc(kyc_html: str, short_code: str, agent_company, operator_
             if agent_company and not id_conflict.agent_company_id:
                 id_conflict.agent_company_id = agent_company.id
             user_agent = id_conflict
-            print(f"[INFO] ID {id_number} already exists globally (id={id_conflict.id}), "
-                  f"reused and updated role to {operator_role}.")
         else:
             user_agent = UserAgent(
                 firstname=first_name,
@@ -3407,11 +3386,11 @@ def _parse_and_save_kyc(kyc_html: str, short_code: str, agent_company, operator_
             )
             db.session.add(user_agent)
             db.session.flush()
-            print(f"[INFO] Created new UserAgent id={user_agent.id} role={operator_role}")
+            logger.info(f"[INFO] Created new UserAgent id={user_agent.id} role={operator_role}")
 
     if agent_company and agent_company not in user_agent.agent_companies:
         user_agent.agent_companies.append(agent_company)
-        print(f"[INFO] Linked UserAgent to AgentCompany {agent_company.company_name}")
+        logger.info(f"[INFO] Linked UserAgent to AgentCompany {agent_company.company_name}")
 
 def navigate_to_review_transaction(business_short_code:str, page:Page) -> bool:
     """Navigate through detail panel to Review Transaction button."""
@@ -3445,7 +3424,7 @@ def navigate_to_review_transaction(business_short_code:str, page:Page) -> bool:
         
         return True
     except Exception as e:
-        print(f"[ERROR] Navigation failed: {e}")
+        logger.error(f"[ERROR] Navigation failed: {e}")
         return False
 
 def select_pagination_size(page: Page, down_presses: int = 3, timeout: int = 20000) -> bool:
@@ -3476,7 +3455,7 @@ def select_pagination_size(page: Page, down_presses: int = 3, timeout: int = 200
             
             page.keyboard.press("Enter")
         else:
-            print("[WARN] Pagination size dropdown not visible")
+            logger.warning("[WARN] Pagination size dropdown not visible")
             return False
 
         # Optional: wait a tiny bit for UI to settle
@@ -3485,7 +3464,7 @@ def select_pagination_size(page: Page, down_presses: int = 3, timeout: int = 200
         return True
 
     except Exception as e:
-        print(f" Error while changing page size: {e}")
+        logger.error(f" Error while changing page size: {e}")
         return False
     
     
@@ -3523,7 +3502,7 @@ def select_pagination_size_prev_press(page: Page, down_presses: int = 3, timeout
             
             page.keyboard.press("Enter")
         else:
-            print("[WARN] Pagination size dropdown not visible")
+            logger.warning("[WARN] Pagination size dropdown not visible")
             return False
 
         # Optional: wait a tiny bit for UI to settle
@@ -3532,7 +3511,7 @@ def select_pagination_size_prev_press(page: Page, down_presses: int = 3, timeout
         return True
 
     except Exception as e:
-        print(f" Error while changing page size: {e}")
+        logger.error(f" Error while changing page size: {e}")
         return False
     
 def close_irritative_dialog_box(page:Page) -> bool:
@@ -3544,7 +3523,7 @@ def close_irritative_dialog_box(page:Page) -> bool:
             page.wait_for_timeout(1000)
             return True
     except Exception as e:
-        print(f"[ERROR] Failed to close irritative dialog box: {e}")
+        logger.error(f"[ERROR] Failed to close irritative dialog box: {e}")
     return False
 
 def does_transaction_exist_for_period_(page:Page) -> bool:
@@ -3556,7 +3535,7 @@ def does_transaction_exist_for_period_(page:Page) -> bool:
         )
         return False
     except Exception as e:
-        print(f"[WARN]: The transactions exists {e}")
+        logger.warning(f"[WARN]: The transactions exists {e}")
         return True
     
 def close_portal_tabs(page: Page) -> None:
@@ -3568,16 +3547,16 @@ def close_portal_tabs(page: Page) -> None:
             return
         last_icon = icons.nth(count - 1)
         if last_icon.is_visible():
-            print(f"[INFO] Closing last portal tab via icon [{count}]")
+            logger.info(f"[INFO] Closing last portal tab via icon [{count}]")
             last_icon.click()
             page.wait_for_timeout(500)
-        print(f"[INFO] Total portal tabs (icons) found: {count}")
+        logger.info(f"[INFO] Total portal tabs (icons) found: {count}")
     except Exception as e:
-        print(f"[WARN] close_portal_tabs: {e}")
+        logger.warning(f"[WARN] close_portal_tabs: {e}")
 
 def close_detail_panel(page):
     """Attempt to close any open detail panels and return to list."""
-    print("[INFO] Attempting to close detail panel...")
+    logger.info("[INFO] Attempting to close detail panel...")
     try:
         # Try clicking "Organization Detail" tab to go back
         # org_detail = page.locator("//div[@title='Organization Detail']").first
@@ -3587,7 +3566,7 @@ def close_detail_panel(page):
             page.wait_for_timeout(1000)
             return True
     except:
-        print("[WARN] 'Organization Detail' tab not found.")
+        logger.warning("[WARN] 'Organization Detail' tab not found.")
         pass
     
     # Try ESC key
@@ -3603,7 +3582,7 @@ def close_detail_panel(page):
 
 def close_detail_panel_idx(page:Page , idx: int = 4) -> bool:
     """Attempt to close any open detail panels and return to list."""
-    print("[INFO] Attempting to close detail panel...")
+    logger.info("[INFO] Attempting to close detail panel...")
     try:
         # Try clicking "Organization Detail" tab to go back
         # org_detail = page.locator("//div[@title='Organization Detail']").first
@@ -3613,15 +3592,15 @@ def close_detail_panel_idx(page:Page , idx: int = 4) -> bool:
             page.wait_for_timeout(1000)
             return True
         else:
-            print(f"[WARN] Detail panel icon at index {idx} not visible.")
+            logger.warning(f"[WARN] Detail panel icon at index {idx} not visible.")
             return False
     except:
-        print("[WARN] 'Organization Detail' tab not found.")
+        logger.warning("[WARN] 'Organization Detail' tab not found.")
         return False
 
 def return_to_organization_list(page) -> bool:
     """Return to organization list view."""
-    print("[INFO] Returning to organization list...")
+    logger.info("[INFO] Returning to organization list...")
     for _ in range(3):
         close_detail_panel(page)
     try:
@@ -3634,7 +3613,7 @@ def return_to_organization_list(page) -> bool:
         close_portal_tabs(page)
         return True
     except Exception as e:
-        print(f"[ERROR] Failed to return to organization list: {e}")
+        logger.error(f"[ERROR] Failed to return to organization list: {e}")
         return False
 
 def _scrape_head_office(page: Page) -> None:
@@ -3643,7 +3622,7 @@ def _scrape_head_office(page: Page) -> None:
         page.locator("(//*[name()='svg'][@class='svg-icon'])[1]").first.click()
         time.sleep(2)
     except Exception as _nav_err:
-        print(f"[WARN] Dashboard nav click failed: {_nav_err}")
+        logger.error(f"[WARN] Dashboard nav click failed: {_nav_err}")
     scrape_head_office_commission(page)
 
 
@@ -3688,10 +3667,10 @@ def process_organization_rows(page: Page) -> None:
     all_shortcodes_: Set[str] = set()
     time.sleep(1)
     all_shortcodes = extract_all_business_short_codes(page, all_shortcodes_)
-    print(f"[INFO] Extracted {len(all_shortcodes)} business short codes on all pages")
+    logger.info(f"[INFO] Extracted {len(all_shortcodes)} business short codes on all pages")
 
     priority_short_codes = _get_priority_shortcodes_(all_shortcodes)
-    print(f"[INFO] {len(priority_short_codes)} priority short codes identified for processing")
+    logger.info(f"[INFO] {len(priority_short_codes)} priority short codes identified for processing")
     has_priority_codes = bool(priority_short_codes)
 
     while go_previous_on_organisation(page):
@@ -3700,23 +3679,23 @@ def process_organization_rows(page: Page) -> None:
     if not has_priority_codes:
         # ── Case 1: no priority shortcodes ──────────────────────────────────
         # Scrape head office + children commission first, then float all children.
-        print("[INFO] No priority shortcodes. Scraping Head Office Commission and Children Commission first...")
+        logger.info("[INFO] No priority shortcodes. Scraping Head Office Commission and Children Commission first...")
         _scrape_head_office(page)
-        print("[INFO] Navigating back to Child Organisation list for float scraping...")
+        logger.info("[INFO] Navigating back to Child Organisation list for float scraping...")
         _navigate_to_child_org_list(page)
         wait_for_table_load(page)
         total_processed = _run_float_pass(page, all_shortcodes, to_be_rerun)
         _scrap_swaps_(page, all_shortcodes)
-        print(f"[SUCCESS] Float pass complete — {total_processed} organizations processed.")
+        logger.info(f"[SUCCESS] Float pass complete — {total_processed} organizations processed.")
     else:
         # ── Case 2: priority shortcodes exist ───────────────────────────────
         
         # Scrape head office + children commission after the priority float pass.
-        print("[INFO] Priority float pass complete. Scraping Head Office Commission and Children Commission...")
+        logger.info("[INFO] Priority float pass complete. Scraping Head Office Commission and Children Commission...")
         _scrape_head_office(page)
         
         # Pass 1: float transactions for priority children only.
-        print("[INFO] Starting priority float pass...")
+        logger.info("[INFO] Starting priority float pass...")
         total_processed = _run_float_pass(page, priority_short_codes, to_be_rerun)
 
         stats = transaction_service.gather_scraping_statistics(
@@ -3727,26 +3706,26 @@ def process_organization_rows(page: Page) -> None:
         send_scraping_report_email("martinmaati31@gmail.com", stats)
 
         # Pass 2: float transactions for every child.
-        print("[INFO] Navigating back to Child Organisation list for all-children float pass...")
+        logger.info("[INFO] Navigating back to Child Organisation list for all-children float pass...")
         _navigate_to_child_org_list(page)
         wait_for_table_load(page)
         all_pass_total = _run_float_pass(page, all_shortcodes, to_be_rerun)
-        print(f"[SUCCESS] All-children float pass complete — {all_pass_total} organizations processed.")
+        logger.info(f"[SUCCESS] All-children float pass complete — {all_pass_total} organizations processed.")
 
         # Scrape head office + children commission again after the all-children float pass.
-        print("[INFO] All-children float pass complete. Scraping Head Office Commission and Children Commission...")
+        logger.info("[INFO] All-children float pass complete. Scraping Head Office Commission and Children Commission...")
         _scrap_swaps_(page, all_shortcodes)
 
     if to_be_rerun:
-        print(f"[WARN] {len(to_be_rerun)} organizations failed and need reprocessing: {to_be_rerun}")
+        logger.error(f"[WARN] {len(to_be_rerun)} organizations failed and need reprocessing: {to_be_rerun}")
         if rerun_failed_codes(page, to_be_rerun):
-            print("[SUCCESS] All failed organizations reprocessed successfully!")
+            logger.error("[SUCCESS] All failed organizations reprocessed successfully!")
         else:
-            print("[ERROR] Some organizations still failed after retries.")
+            logger.error("[ERROR] Some organizations still failed after retries.")
 
 def scrape_child_org_commission(page:Page,business_shortcode:str=""):
     try:
-        print("[INFO] Scraping Child Organisation Commission...")
+        logger.info("[INFO] Scraping Child Organisation Commission...")
         commission_tab = page.wait_for_selector(
             "//div[@class='item_name item_num_active'][normalize-space()='Balance Overview']",
             timeout=10000
@@ -3783,7 +3762,7 @@ def scrape_child_org_commission(page:Page,business_shortcode:str=""):
             target_index=1,
         )
     except Exception as e:
-        print(f"[ERROR] Failed to scrape child organization commission: {e}")
+        logger.error(f"[ERROR] Failed to scrape child organization commission: {e}")
 
 def wait_for_table_load(page: Page, timeout: int = 15000) -> None:
     """Wait for network idle and allow lazy loading."""
@@ -3799,7 +3778,7 @@ def extract_all_business_short_codes(
         short_codes = set()
 
     rows_locator = page.locator("//tbody//tr[@class='el-table__row childTableRow']")
-    print(f"The length of the shortcodes is {len(short_codes)}")    
+    logger.info(f"The length of the shortcodes is {len(short_codes)}")    
 
     for i in range(rows_locator.count()):
         row = rows_locator.nth(i)
@@ -3810,11 +3789,11 @@ def extract_all_business_short_codes(
             if match:
                 short_codes.add(match.group(1))  # set auto-deduplicates
         except Exception as e:
-            print(f"[ERROR] Error extracting short code from row: {e}")
+            logger.error(f"[ERROR] Error extracting short code from row: {e}")
 
     if go_forth_on_organization(page, get_total_from_pagination(page)):
         wait_for_table_load(page)
-        # print(f"From page {counter} We are passing {len(short_codes)}")
+        # logger.info(f"From page {counter} We are passing {len(short_codes)}")
         extract_all_business_short_codes(page, short_codes)
 
     return short_codes
@@ -3878,7 +3857,7 @@ def _get_stale_scrape_shortcodes_(all_shortcodes: Set[str], stale_days: int = 30
     stale.update(unregistered)
 
     if stale:
-        print(f"[PRIORITY] {len(stale)} shortcode(s) stale by scrape-age (>{stale_days}d or never scraped): {sorted(stale)}")
+        logger.info(f"[PRIORITY] {len(stale)} shortcode(s) stale by scrape-age (>{stale_days}d or never scraped): {sorted(stale)}")
 
     return stale
 
@@ -3892,7 +3871,7 @@ def _get_priority_shortcodes_(all_shortcodes: Set[str]) -> Set[str]:
     """
     priority_shortcode_indexes: Set[str] = set()
 
-    print(f"All shortcodes are of length {len(all_shortcodes)}")
+    logger.info(f"All shortcodes are of length {len(all_shortcodes)}")
 
     for business_shortcode in all_shortcodes:
         total_months, days = _get_total_months_by_shortcode_shortfall(
@@ -3901,10 +3880,6 @@ def _get_priority_shortcodes_(all_shortcodes: Set[str]) -> Set[str]:
             transaction_type='float'
         )
 
-        print(
-            f"[INFO] Total months to scrape based on shortfall: "
-            f"{total_months} for shortcode {business_shortcode} and {days} days"
-        )
 
         if days >= 1:
             priority_shortcode_indexes.add(business_shortcode)
@@ -3922,15 +3897,15 @@ def _get_priority_shortcodes_(all_shortcodes: Set[str]) -> Set[str]:
 #         page.route('**', lambda route: route.continue())
 
 #         page.goto("https://example.com")
-#         print("Page loaded the first time (cache disabled).")
+#         logger.info("Page loaded the first time (cache disabled).")
 
 #         # Now, page.reload() will perform a hard refresh because the cache is disabled
 #         page.reload()
-#         print("Page reloaded (hard refresh).")
+#         logger.info("Page reloaded (hard refresh).")
 
 #         return True
 #     except Exception as e:
-#         print(f"[ERROR] An error occurred {str(e)}")
+#         logger.error(f"[ERROR] An error occurred {str(e)}")
 #         return False
 
 def _is_agent_company_scraped(business_short_code: int) -> bool:
@@ -3948,7 +3923,7 @@ def _is_agent_company_scraped(business_short_code: int) -> bool:
             return True
         return False
     except Exception as e:
-        print(f"[WARN] Could not check scrape status for {business_short_code}: {e}")
+        logger.warning(f"[WARN] Could not check scrape status for {business_short_code}: {e}")
         return False
 
 def process_single_row_kyc_only(page: Page, business_short_code: int, row_number: int) -> bool:
@@ -3958,7 +3933,7 @@ def process_single_row_kyc_only(page: Page, business_short_code: int, row_number
     Used for non-priority tills that haven't been scraped yet.
     """
     try:
-        print(f"\n[KYC-ONLY] Processing Row {row_number} | Business Code: {business_short_code} (lightweight)")
+        logger.info(f"\n[KYC-ONLY] Processing Row {row_number} | Business Code: {business_short_code} (lightweight)")
         close_irritative_dialog_box(page)
 
         # Scrape basic till details and save agent company
@@ -3968,7 +3943,7 @@ def process_single_row_kyc_only(page: Page, business_short_code: int, row_number
         save_results = agent_company_service.save_or_update_scraped_agent_company(
             mapped_data=mapped_data, user_id=user_id
         )
-        print(f"[KYC-ONLY] Saved till details: {save_results}")
+        logger.info(f"[KYC-ONLY] Saved till details: {save_results}")
 
         # Navigate to detail panel to extract KYC
         try:
@@ -3989,13 +3964,13 @@ def process_single_row_kyc_only(page: Page, business_short_code: int, row_number
 
             # Extract KYC user agents
             extract_user_agent_kyc(short_code=business_short_code, page=page)
-            print(f"[KYC-ONLY] KYC extraction complete for {business_short_code}")
+            logger.info(f"[KYC-ONLY] KYC extraction complete for {business_short_code}")
         except Exception as kyc_err:
-            print(f"[KYC-ONLY] KYC extraction failed for {business_short_code}: {kyc_err}")
+            logger.error(f"[KYC-ONLY] KYC extraction failed for {business_short_code}: {kyc_err}")
 
         # Return to org list
         if not return_to_organization_list(page):
-            print("[KYC-ONLY] Failed to return to list — attempting recovery")
+            logger.error("[KYC-ONLY] Failed to return to list — attempting recovery")
             page.reload()
             wait_for_table_load(page)
             return False
@@ -4003,7 +3978,7 @@ def process_single_row_kyc_only(page: Page, business_short_code: int, row_number
         return True
 
     except Exception as e:
-        print(f"[ERROR] KYC-only processing failed for {business_short_code}: {e}")
+        logger.error(f"[ERROR] KYC-only processing failed for {business_short_code}: {e}")
         traceback.print_exc()
         close_irritative_dialog_box(page)
         close_detail_panel(page)
@@ -4024,15 +3999,15 @@ def process_page_rows(
 
     visible_rows = get_visible_rows(rows_locator)
 
-    print(f"The priority short codes are {priority_short_codes}")
+    logger.info(f"The priority short codes are {priority_short_codes}")
 
     if not visible_rows:
-        print("[INFO] No visible rows — scrolling to load more...")
+        logger.info("[INFO] No visible rows — scrolling to load more...")
         page.mouse.wheel(0, 1200)
         time.sleep(2)
 
     visible_rows_size = len(visible_rows)
-    print(f"[INFO] Found {visible_rows_size} visible rows to process on this page")
+    logger.info(f"[INFO] Found {visible_rows_size} visible rows to process on this page")
 
     for row in visible_rows:
         if processed_on_page >= 10:
@@ -4048,7 +4023,7 @@ def process_page_rows(
 
         if not is_priority and already_scraped:
             # Non-priority AND already scraped — skip entirely
-            print(f"[INFO] Skipping row {business_short_code} — not priority and already scraped.")
+            logger.info(f"[INFO] Skipping row {business_short_code} — not priority and already scraped.")
             processed_on_page += 1
             continue
 
@@ -4060,16 +4035,16 @@ def process_page_rows(
             success = process_single_row(page, business_short_code, total_processed_so_far + processed_on_page + 1, pass_value=pass_value)
         else:
             # Lightweight scrape: till details + KYC only (no transactions)
-            print(f"[INFO] Non-priority but unscraped — doing KYC-only scrape for {business_short_code}")
+            logger.info(f"[INFO] Non-priority but unscraped — doing KYC-only scrape for {business_short_code}")
             success = process_single_row_kyc_only(page, business_short_code, total_processed_so_far + processed_on_page + 1)
 
         if success:
-            print(f"[SUCCESS] Completed row {total_processed_so_far + processed_on_page + 1}")
+            logger.info(f"[SUCCESS] Completed row {total_processed_so_far + processed_on_page + 1}")
         else:
             if is_priority:
                 to_be_rerun.append(business_short_code)
             return_to_organization_list(page)
-            print(f"[WARN] Row {business_short_code} failed{', added to rerun list' if is_priority else ''}")
+            logger.error(f"[WARN] Row {business_short_code} failed{', added to rerun list' if is_priority else ''}")
 
         processed_on_page += 1
 
@@ -4098,12 +4073,12 @@ def extract_business_short_code(row: Locator) -> int | None:
         row_text = row.text_content(timeout=5000) or ""
         match = re.search(r'^(\d+)', row_text.strip())
         if not match:
-            print(f"[WARN] Could not extract business short code from row: {row_text[:100]}...")
+            logger.warning(f"[WARN] Could not extract business short code from row: {row_text[:100]}...")
             return None
 
         return int(match.group(1))
     except Exception as e:
-        print(f"[ERROR] Failed to extract short code: {e}")
+        logger.error(f"[ERROR] Failed to extract short code: {e}")
         return None
 
 _TRANSACTION_TYPE_DROPDOWN_XPATH = (
@@ -4138,7 +4113,7 @@ def scrape_transaction_tab(page: Page, business_short_code: int) -> bool:
         start_date_str = f"{datetime(three_months_ago_year, three_months_ago_month, 1).strftime('%d/%m/%Y')} 00:00:00"
         end_date_str   = f"{today.strftime('%d/%m/%Y')} 23:59:59"
 
-        print(f"[INFO] Transactions tab scrape | {business_short_code} | {start_date_str} → {end_date_str}")
+        logger.info(f"[INFO] Transactions tab scrape | {business_short_code} | {start_date_str} → {end_date_str}")
 
         page.click("body", position={"x": 10, "y": 10})
         time.sleep(0.5)
@@ -4176,16 +4151,16 @@ def scrape_transaction_tab(page: Page, business_short_code: int) -> bool:
                 if re.search(r'commission', active_text, re.IGNORECASE):
                     page.keyboard.press("Enter")
                     commission_found = True
-                    print(f"[INFO] Selected dropdown option: '{active_text}'")
+                    logger.info(f"[INFO] Selected dropdown option: '{active_text}'")
                     break
                 page.keyboard.press("ArrowDown")
                 time.sleep(0.3)
 
             if not commission_found:
-                print("[WARN] Commission option not found in dropdown after 30 steps — proceeding anyway")
+                logger.warning("[WARN] Commission option not found in dropdown after 30 steps — proceeding anyway")
         except Exception as e:
-            print(f"[ERROR] Failed to select Commission from dropdown: {e}")
-            print("[INFO] Attempting fallback method to select Commission option...")
+            logger.error(f"[ERROR] Failed to select Commission from dropdown: {e}")
+            logger.info("[INFO] Attempting fallback method to select Commission option...")
             # Open transaction-type dropdown and navigate to the Commission option
             page.click(_TRANSACTION_TYPE_DROPDOWN_XPATH)
             time.sleep(0.5)
@@ -4201,13 +4176,13 @@ def scrape_transaction_tab(page: Page, business_short_code: int) -> bool:
                 if re.search(r'commission', active_text, re.IGNORECASE):
                     page.keyboard.press("Enter")
                     commission_found = True
-                    print(f"[INFO] Selected dropdown option: '{active_text}'")
+                    logger.info(f"[INFO] Selected dropdown option: '{active_text}'")
                     break
                 page.keyboard.press("ArrowDown")
                 time.sleep(0.3)
 
             if not commission_found:
-                print("[WARN] Commission option not found in dropdown after 30 steps — proceeding anyway")
+                logger.warning("[WARN] Commission option not found in dropdown after 30 steps — proceeding anyway")
 
         click_search_button_head_office(page)
         time.sleep(2)
@@ -4218,7 +4193,7 @@ def scrape_transaction_tab(page: Page, business_short_code: int) -> bool:
         export_trigger.wait_for(state="visible", timeout=30000)
         export_trigger.scroll_into_view_if_needed()
         export_trigger.hover(force=True, timeout=10_000)
-        print(f"[TIMING] Export trigger hovered: {_elapsed(t)}")
+        logger.info(f"[TIMING] Export trigger hovered: {_elapsed(t)}")
         time.sleep(3)
 
         page.wait_for_function(
@@ -4232,12 +4207,12 @@ def scrape_transaction_tab(page: Page, business_short_code: int) -> bool:
             }""",
             timeout=40000,
         )
-        print(f"[TIMING] Export dropdown open: {_elapsed(t)}")
+        logger.info(f"[TIMING] Export dropdown open: {_elapsed(t)}")
 
         all_items = page.locator("ul.el-dropdown-menu li.el-dropdown-menu__item")
         excel_items = all_items.filter(has_text="Excel")
         excel_count = excel_items.count()
-        print(f"[EXPORT] Found {excel_count} Excel option(s)")
+        logger.info(f"[EXPORT] Found {excel_count} Excel option(s)")
 
         if excel_count < 1:
             raise Exception(f"No Excel export options found (count={excel_count})")
@@ -4248,9 +4223,9 @@ def scrape_transaction_tab(page: Page, business_short_code: int) -> bool:
         with page.expect_download(timeout=60_000) as dl_info:
             try:
                 target_excel.click(force=True, timeout=15_000)
-                print("[EXPORT] Clicked Excel option")
+                logger.info("[EXPORT] Clicked Excel option")
             except Exception:
-                print("[EXPORT] Normal click failed — falling back to JS click")
+                logger.error("[EXPORT] Normal click failed — falling back to JS click")
                 target_excel.evaluate("el => el.click()")
 
         download = dl_info.value
@@ -4259,7 +4234,7 @@ def scrape_transaction_tab(page: Page, business_short_code: int) -> bool:
         debug_path = f"transaction_export_debug_{business_short_code}{ext}"
         import shutil as _shutil
         _shutil.copy2(temp_path, debug_path)
-        print(f"[TIMING] Excel downloaded → {debug_path}: {_elapsed(t)}")
+        logger.info(f"[TIMING] Excel downloaded → {debug_path}: {_elapsed(t)}")
 
         # Parse and persist directly from the Playwright temp file
         t = time.time()
@@ -4270,12 +4245,12 @@ def scrape_transaction_tab(page: Page, business_short_code: int) -> bool:
             company_shortcode=company_shortcode,
             agent_id=None,
         )
-        print(f"[TIMING] DB upsert: {_elapsed(t)} | success={success} | rows={len(df) if df is not None else 0}")
+        logger.info(f"[TIMING] DB upsert: {_elapsed(t)} | success={success} | rows={len(df) if df is not None else 0}")
 
         return True
 
     except Exception as e:
-        print(f"[ERROR] scrape_transaction_tab({business_short_code}): {e}")
+        logger.error(f"[ERROR] scrape_transaction_tab({business_short_code}): {e}")
         traceback.print_exc()
         return False
 
@@ -4283,7 +4258,7 @@ def scrape_transaction_tab(page: Page, business_short_code: int) -> bool:
 def process_single_row(page: Page, business_short_code: int, row_number: int, pass_value: int) -> bool:
     """Process one organization row end-to-end."""
     try:
-        print(f"\n[SUCCESS] Processing Row {row_number} | Business Code: {business_short_code}")
+        logger.info(f"\n[SUCCESS] Processing Row {row_number} | Business Code: {business_short_code}")
         close_irritative_dialog_box(page)
 
         # Scrape basic till details
@@ -4299,22 +4274,22 @@ def process_single_row(page: Page, business_short_code: int, row_number: int, pa
 
         # Navigate and process float/commission
         if not navigate_to_review_transaction(business_short_code=business_short_code,page=page):
-            print("[ERROR] Failed to navigate to review transaction")
+            logger.error("[ERROR] Failed to navigate to review transaction")
             return_to_organization_list(page)
             return False
 
         if not process_float_commission(page, business_short_code, mapped_data=mapped_data, pass_value=pass_value):
-            print("[ERROR] Failed to process float/commission")
+            logger.error("[ERROR] Failed to process float/commission")
             # return_to_organization_list(page)
             return False
 
         if not scrape_transaction_tab(page, business_short_code):
-            print("[ERROR] Failed to scrape transaction tab")
+            logger.error("[ERROR] Failed to scrape transaction tab")
             return False
 
         # Return safely
         if not return_to_organization_list(page):
-            print("[WARN] Failed to return to list — attempting recovery")
+            logger.error("[WARN] Failed to return to list — attempting recovery")
             page.reload()
             wait_for_table_load(page)
             return False
@@ -4322,7 +4297,7 @@ def process_single_row(page: Page, business_short_code: int, row_number: int, pa
         return True
 
     except Exception as e:
-        print(f"[ERROR] Exception processing row {business_short_code}: {e}")
+        logger.error(f"[ERROR] Exception processing row {business_short_code}: {e}")
         traceback.print_exc()
         close_irritative_dialog_box(page)
         page.screenshot(path=f"error_row_{business_short_code}_{row_number}.png")
@@ -4341,10 +4316,10 @@ if __name__ == '__main__':
     user_id    = os.getenv('TEST_USER_ID', '1')
 
     if not all([short_code, username, password]):
-        print('[ERROR] Set TEST_SHORTCODE, TEST_USERNAME, TEST_PASSWORD in your .env to run locally.')
+        logger.error('[ERROR] Set TEST_SHORTCODE, TEST_USERNAME, TEST_PASSWORD in your .env to run locally.')
         sys.exit(1)
 
-    print(f'[TEST] Running login_to_mpesa for short_code={short_code}')
+    logger.info(f'[TEST] Running login_to_mpesa for short_code={short_code}')
     login_to_mpesa(
         password=password,
         username=username,

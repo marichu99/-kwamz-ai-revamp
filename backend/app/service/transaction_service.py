@@ -96,8 +96,6 @@ class TransactionService:
             # Convert to list of dictionaries
             transactions_data = df.to_dict('records')
             
-            print(f"📊 Processing {len(transactions_data)} {additional_category} transactions...")
-            print(df.tail())  # Show last few rows for verification
             
             # Process and update transactions
             results = self._update_transactions_batch(
@@ -288,7 +286,7 @@ class TransactionService:
             pass
         
         # Genuinely unparseable — return None so the caller can skip or default
-        print(f"Warning: Could not parse date '{date_string}'. Storing as null.")
+        logger.warning(f"Could not parse date '{date_string}'. Storing as null.")
         return None
         
     def map_transaction_keys(self, original_data: Dict[str, Any]) -> Dict[str, Any]:
@@ -444,7 +442,7 @@ class TransactionService:
             ))
 
         db.session.commit()
-        print(f"  ✅ AgentAccountBalance synced for {business_shortcode}: balance={current_bal}")
+        logger.info(f"AgentAccountBalance synced for {business_shortcode}: balance={current_bal}")
 
     def _update_transactions_batch(self, transactions_data: List[Dict],
                                   transaction_type: str, company_shortcode: str, 
@@ -470,7 +468,6 @@ class TransactionService:
         updated_transactions = []
         created_transactions = []
         
-        print(f"🔄 Starting batch update for {len(transactions_data)} transactions...")
         
         for idx, trans_data in enumerate(transactions_data):
             try:
@@ -478,7 +475,6 @@ class TransactionService:
                 trans_data = self.map_transaction_keys(trans_data)
                 if not trans_data.get('receipt_no'):
                     error_count += 1
-                    print(f"  ❌ Row {idx+1}: Missing receipt number")
                     errors.append(f"Row {idx+1}: Missing receipt number")
                     continue
                 
@@ -557,7 +553,6 @@ class TransactionService:
                     updated_count += 1
                     
                     if updated_count % 50 == 0:
-                        print(f"  ✅ Updated {updated_count} transactions...")
                         
                 else:
                     # Create new transaction
@@ -568,19 +563,16 @@ class TransactionService:
                     
                     self.update_transaction_stats(transaction)
                     if created_count % 50 == 0:
-                        print(f"  📝 Created {created_count} new transactions...")
                 
                 # Commit in batches of 100 to avoid memory issues
                 if (updated_count + created_count) % 100 == 0:
                     db.session.commit()
-                    print(f"  💾 Committed batch of 100 transactions...")
                 
             except Exception as e:
                 db.session.rollback()  # reset poisoned session so subsequent rows can proceed
                 error_count += 1
                 error_msg = f"Row {idx+1} (Receipt: {trans_data.get('receipt_no', 'N/A')}): {str(e)}"
                 errors.append(error_msg)
-                print(f"  ❌ Error: {error_msg}")
                 continue
         
         # Final commit
@@ -593,16 +585,10 @@ class TransactionService:
                 try:
                     self._sync_commission_account_balance(business_shortcode)
                 except Exception as _sync_err:
-                    print(f"  ⚠️  AgentAccountBalance sync skipped for {business_shortcode}: {_sync_err}")
+                    logger.warning(f"AgentAccountBalance sync skipped for {business_shortcode}: {_sync_err}")
 
             # Log summary
-            print(f"\n📊 Batch Update Summary:")
-            print(f"   Total processed: {len(transactions_data)}")
-            print(f"   Updated: {updated_count}")
-            print(f"   Created: {created_count}")
-            print(f"   Errors: {error_count}")
-            print(f"   Business: {business_shortcode}")
-            print(f"   Type: {transaction_type}")
+            logger.info(f"\n📊 Batch Update Summary:")
             
             logger.info(f"Successfully processed {updated_count + created_count} transactions "
                        f"(updated: {updated_count}, created: {created_count}) for {business_shortcode}")
@@ -680,14 +666,28 @@ class TransactionService:
                     if not row or len(row) < 6:
                         continue
                     level = str(row[0]).strip()
-                    if level != '2':
-                        continue
 
                     org_name = str(row[1]).strip().strip('"').strip()
-                    # Shortcode is the leading digits before the first '-'
                     m = re.match(r'^(\d+)-', org_name)
                     if not m:
                         continue
+
+                    if level == '1':
+                        # Head office row — write directly to Company.commission_balance
+                        try:
+                            current_amount = _parse_ksh(row[4])
+                        except Exception as parse_err:
+                            errors.append(f'Bad balance for head office {parent_shortcode}: {parse_err}')
+                            continue
+
+                        parent_company.commission_balance    = current_amount
+                        parent_company.commission_balance_at = today
+                        logger.info(f'[COMM-BALANCE] Head office {parent_shortcode} commission_balance updated: {current_amount}')
+                        continue
+
+                    if level != '2':
+                        continue
+
                     child_shortcode = m.group(1)
 
                     # Parse all four balance columns (CSV layout):
@@ -793,7 +793,7 @@ class TransactionService:
                         ))
 
             db.session.commit()
-            print(f'[COMM-BALANCE] created={created} updated={updated} skipped={skipped} errors={len(errors)}')
+            logger.info(f'[COMM-BALANCE] created={created} updated={updated} skipped={skipped} errors={len(errors)}')
             return {
                 'success': True,
                 'summary': {'created': created, 'updated': updated, 'skipped': skipped, 'errors': errors}
@@ -801,7 +801,7 @@ class TransactionService:
 
         except Exception as e:
             db.session.rollback()
-            print(f'[COMM-BALANCE] Failed: {e}')
+            logger.error(f'[COMM-BALANCE] Failed: {e}')
             return {'success': False, 'error': str(e)}
 
     def get_commission_till_balances(self, company_ids: list = None, page: int = 1, per_page: int = 10, updated_after: str = None) -> dict:
@@ -1166,8 +1166,6 @@ class TransactionService:
         try:
             query = Transaction.query
             
-            print("Applying filters:")
-            print(filters)
 
             # Apply filters
             if filters.get('agent_id'):
@@ -1190,8 +1188,6 @@ class TransactionService:
                 query = query.filter(Transaction.transaction_status.ilike(f"%{filters['transaction_status']}%"))
 
             if filters.get('reasonType'):
-                print("Filtering by reasonType:")
-                print(filters['reasonType'])
                 query = query.filter(Transaction.reason_type.ilike(f"%{filters['reasonType']}%"))
 
             # Date range filtering on completion_time
@@ -1600,7 +1596,6 @@ class TransactionService:
             If transaction_type is None: {shortcode: {'float': [days, receipt_no], 'commission': [days, receipt_no]}}
         """
         try:
-            print(f"Getting last scraped dictionary for transaction_type: {transaction_type or 'all'}")
             with db_pool.get_cursor() as cursor:
                 return self._get_last_scraped_per_till(cursor, transaction_type=transaction_type)
 
@@ -3856,7 +3851,6 @@ class TransactionService:
             top_stats["top_companies"] = []
             for data in top_companies:
                 # Need to get company name - assuming we have a get_company function
-                print(f"Fetching company info for ID: {data['company_id']}")
                 company = company_service.get_company_by_id(data['company_id'])
                 top_stats["top_companies"].append({
                     "company_id": data['company_id'],
@@ -4684,7 +4678,6 @@ class TransactionService:
             prev_end_date = (start_date - timedelta(seconds=1))  # end of the day before start
             prev_start_date = (start_date - timedelta(days=days)).replace(hour=0, minute=0, second=0, microsecond=0)
 
-            print(f"Calculated date ranges - Current: {start_date} to {end_date}, Previous: {prev_start_date} to {prev_end_date}")
 
             with db_pool.get_cursor() as cursor:
                 # Build WHERE conditions
@@ -4694,12 +4687,10 @@ class TransactionService:
                 if 'company_id' in filters and filters['company_id']:
                     conditions.append("company_id = %s")
                     params.append(filters['company_id'])
-                    print("Added company_id filter: %s", filters['company_id'])
 
                 if 'agent_id' in filters and filters['agent_id']:
                     conditions.append("agent_id = %s")
                     params.append(filters['agent_id'])
-                    print("Added agent_id filter: %s", filters['agent_id'])
 
                 where_clause = " AND ".join(conditions)
 
@@ -4719,16 +4710,11 @@ class TransactionService:
                     WHERE {where_clause}
                     AND completion_time BETWEEN %s AND %s
                 """
-                print("[ANALYTICS KPI] period=%s → %s | params=%s", start_date.date(), end_date.date(), params + [start_date, end_date])
                 cursor.execute(kpi_query, params + [start_date, end_date])
                 current_stats = cursor.fetchone()
-                print("[ANALYTICS KPI] current → txns=%s deposits=%s withdrawals=%s",
-                            current_stats['total_transactions'], current_stats['total_deposits'], current_stats['total_withdrawals'])
 
                 cursor.execute(kpi_query, params + [prev_start_date, prev_end_date])
                 prev_stats = cursor.fetchone()
-                print("[ANALYTICS KPI] prev    → txns=%s deposits=%s withdrawals=%s",
-                            prev_stats['total_transactions'], prev_stats['total_deposits'], prev_stats['total_withdrawals'])
 
                 # Active agents: distinct tills that have at least one float transaction
                 # older than 1 month (proves the till has been operational for ≥ 1 month).
@@ -4739,11 +4725,9 @@ class TransactionService:
                       AND completion_time <= NOW() - INTERVAL '1 month'
                       AND {where_clause}
                 """
-                print("[ANALYTICS AGENTS] query params=%s", params)
                 cursor.execute(active_agents_query, params)
                 active_agents_row = cursor.fetchone()
                 active_agents_count = int(active_agents_row['active_agents'] or 0)
-                print("[ANALYTICS AGENTS] current active_agents=%s", active_agents_count)
 
                 # Previous period: tills with a float transaction older than 2 months
                 prev_active_agents_query = f"""
@@ -4756,7 +4740,6 @@ class TransactionService:
                 cursor.execute(prev_active_agents_query, params)
                 prev_active_agents_row = cursor.fetchone()
                 prev_active_agents_count = int(prev_active_agents_row['active_agents'] or 0)
-                print("[ANALYTICS AGENTS] prev    active_agents=%s", prev_active_agents_count)
 
                 # Commission: sum the latest per-till COMM-* snapshot balance.
                 # Each COMM-{shortcode}-{YYYYMMDD} record stores paid_in = current_balance

@@ -1,3 +1,4 @@
+import logging
 from flask import Blueprint, jsonify, request,current_app,send_file
 from app.utils.kra_pin_details import extract_taxpayer_details
 from app.utils.company_details import extract_company_number
@@ -13,6 +14,8 @@ import os
 import re
 import io
 
+logger = logging.getLogger(__name__)
+
 document_bp = Blueprint('document', __name__)
 
 @document_bp.route('/submit', methods=['POST'])
@@ -26,18 +29,10 @@ def submit():
     if not all([kra_pin, police_clearance, id_number]):
         return jsonify({'error': 'kraPin, policeClearance, and idNumber are required'}), 400
 
-    from app.model.verification_job import VerificationJob
-    job = VerificationJob(
-        kra_pin=kra_pin,
-        police_clearance=police_clearance,
-        id_number=id_number,
-        taxpayer_name=tax_payer_name,
-        status='pending'
-    )
-    db.session.add(job)
-    db.session.commit()
+    from app.utils.script import authenticate_kra_from_app
 
-    return jsonify({"success": True, "job_id": job.id, "status": "pending"})
+    result = authenticate_kra_from_app(kra_pin, police_clearance, id_number, tax_payer_name)
+    return jsonify({"success": True, "result": result})
 @document_bp.route('/extract_kra_pin', methods=['POST'])
 def extract_kra_pin():
     """
@@ -79,7 +74,7 @@ def extract_kra_pin():
                     if blob.exists():
                         blob.delete()
                 except Exception as e:
-                    print(f"Warning: Failed to delete old file: {str(e)}")
+                    logger.error(f"Warning: Failed to delete old file: {str(e)}")
 
                 # Delete old database record
                 db.session.delete(existing_doc)
@@ -123,7 +118,7 @@ def extract_kra_pin():
         }), 200
 
     except Exception as e:
-        print(f"KRA PIN extraction error: {str(e)}")
+        logger.error(f"KRA PIN extraction error: {str(e)}")
         return jsonify({"error": str(e)}), 400
 
 
@@ -194,7 +189,7 @@ def extract_cr12():
                 if blob.exists():
                     blob.delete()
             except Exception as e:
-                print(f"Warning: Failed to delete old file: {str(e)}")
+                logger.error(f"Warning: Failed to delete old file: {str(e)}")
 
             # Delete old database record
             db.session.delete(existing_doc)
@@ -218,7 +213,7 @@ def extract_cr12():
         }), 200
 
     except Exception as e:
-        print(f"CR12 extraction error: {str(e)}")
+        logger.error(f"CR12 extraction error: {str(e)}")
         return jsonify({"error": str(e)}), 400
 
 
@@ -246,50 +241,66 @@ def extract_police_clearance():
         return jsonify({"error": "File and agent_id are required"}), 400
     
     try:
-        # Check if document already exists (for re-upload)
-        existing_doc = AgentDocuments.query.filter_by(
-            agent_id=agent_id,
-            doc_type='police_clearance'
-        ).first()
-        
-        # If re-uploading, delete old file from GCP
-        if existing_doc:
-            try:
-                bucket = current_app.document_service.storage_client.bucket(current_app.document_service.bucket_name)
-                blob = bucket.blob(existing_doc.gcp_path)
-                if blob.exists():
-                    blob.delete()
-            except Exception as e:
-                print(f"Warning: Failed to delete old file: {str(e)}")
-            
-            # Delete old database record
-            db.session.delete(existing_doc)
-            db.session.commit()
-        
-        # Process the document
-        result = current_app.document_service.process(
-            file=file,
-            agent_id=agent_id,
-            doc_type='police_clearance',
-            extract_func=extract_clearance_details
-        )
+        document_service = current_app.document_service
 
-        # Get the newly created document ID
-        new_doc = AgentDocuments.query.filter_by(
-            agent_id=agent_id,
-            doc_type='police_clearance'
-        ).order_by(AgentDocuments.uploaded_at.desc()).first()
+        if document_service:
+            # Check if document already exists (for re-upload)
+            existing_doc = AgentDocuments.query.filter_by(
+                agent_id=agent_id,
+                doc_type='police_clearance'
+            ).first()
+
+            # If re-uploading, delete old file from GCP
+            if existing_doc:
+                try:
+                    bucket = document_service.storage_client.bucket(document_service.bucket_name)
+                    blob = bucket.blob(existing_doc.gcp_path)
+                    if blob.exists():
+                        blob.delete()
+                except Exception as e:
+                    logger.error(f"Warning: Failed to delete old file: {str(e)}")
+
+                db.session.delete(existing_doc)
+                db.session.commit()
+
+            result = document_service.process(
+                file=file,
+                agent_id=agent_id,
+                doc_type='police_clearance',
+                extract_func=extract_clearance_details
+            )
+
+            new_doc = AgentDocuments.query.filter_by(
+                agent_id=agent_id,
+                doc_type='police_clearance'
+            ).order_by(AgentDocuments.uploaded_at.desc()).first()
+            document_id = new_doc.id if new_doc else None
+        else:
+            # GCS not configured — extract only, no upload/DB save
+            import tempfile, os
+            with tempfile.NamedTemporaryFile(delete=False, suffix='.pdf') as tmp:
+                file.save(tmp.name)
+                temp_path = tmp.name
+            try:
+                extracted = extract_clearance_details(temp_path)
+                if extracted.get("error"):
+                    raise ValueError(extracted["error"])
+                result = {"gcp_url": None, **extracted}
+            finally:
+                if os.path.exists(temp_path):
+                    os.remove(temp_path)
+            document_id = None
 
         return jsonify({
             "refNo": result.get("Reference Number", ""),
             "idNo": result.get("ID Number", ""),
             "name": result.get("Name", ""),
             "gcp_url": result.get("gcp_url", ""),
-            "documentId": new_doc.id if new_doc else None
+            "documentId": document_id
         }), 200
 
     except Exception as e:
-        print(f"Police clearance extraction error: {str(e)}")
+        logger.error(f"Police clearance extraction error: {str(e)}")
         return jsonify({"error": str(e)}), 400
 
 
@@ -316,46 +327,73 @@ def extract_mpesa_agreement():
         return jsonify({"error": "File and agent_id are required"}), 400
     
     try:
+        document_service = current_app.document_service
+
+        if not document_service:
+            # GCS not configured — save record to DB without GCP upload
+            from app.model.useragent import UserAgent
+            from werkzeug.utils import secure_filename
+            user_agent = UserAgent.query.filter_by(id=agent_id).first()
+            if not user_agent or not user_agent.agent_companies:
+                return jsonify({"error": "Agent not found or not linked to a company"}), 400
+            company_id = user_agent.agent_companies[0].company_id
+            filename = secure_filename(file.filename)
+            doc = AgentDocuments(
+                agent_id=agent_id,
+                company_id=company_id,
+                doc_type='mpesa_agreement',
+                filename=filename,
+                gcp_path=None,
+                gcp_url=None,
+                extracted_data={}
+            )
+            db.session.add(doc)
+            db.session.commit()
+            return jsonify({
+                "gcp_url": "",
+                "documentId": doc.id,
+                "message": "Mpesa Agency Agreement saved (no cloud storage configured)"
+            }), 200
+
         # Check if document already exists (for re-upload)
         existing_doc = AgentDocuments.query.filter_by(
             agent_id=agent_id,
             doc_type='mpesa_agreement'
         ).first()
-        
+
         # If re-uploading, delete old file from GCP
         if existing_doc:
             try:
-                bucket = current_app.document_service.storage_client.bucket(current_app.document_service.bucket_name)
+                bucket = document_service.storage_client.bucket(document_service.bucket_name)
                 blob = bucket.blob(existing_doc.gcp_path)
                 if blob.exists():
                     blob.delete()
             except Exception as e:
-                print(f"Warning: Failed to delete old file: {str(e)}")
-            
-            # Delete old database record
+                logger.error(f"Warning: Failed to delete old file: {str(e)}")
+
             db.session.delete(existing_doc)
             db.session.commit()
-        
+
         # Process the document - Mpesa agreement doesn't need extraction
-        result = current_app.document_service.process_mpesa_agreement(
+        result = document_service.process_mpesa_agreement(
             file=file,
             agent_id=agent_id
         )
-        
+
         # Get the newly created document ID
         new_doc = AgentDocuments.query.filter_by(
             agent_id=agent_id,
             doc_type='mpesa_agreement'
         ).order_by(AgentDocuments.uploaded_at.desc()).first()
-        
+
         return jsonify({
             "gcp_url": result.get("gcp_url", ""),
             "documentId": new_doc.id if new_doc else None,
             "message": "Mpesa Agency Agreement uploaded successfully"
         }), 200
-        
+
     except Exception as e:
-        print(f"Mpesa Agreement upload error: {str(e)}")
+        logger.error(f"Mpesa Agreement upload error: {str(e)}")
         return jsonify({"error": str(e)}), 400
 
 @document_bp.route('/delete/<int:document_id>', methods=['DELETE'])
@@ -386,11 +424,11 @@ def delete_document(document_id):
             
             if blob.exists():
                 blob.delete()
-                print(f"Deleted file from GCP: {document.gcp_path}")
+                logger.info(f"Deleted file from GCP: {document.gcp_path}")
             else:
-                print(f"Warning: File not found in GCP: {document.gcp_path}")
+                logger.warning(f"Warning: File not found in GCP: {document.gcp_path}")
         except Exception as e:
-            print(f"Warning: Failed to delete from GCP: {str(e)}")
+            logger.error(f"Warning: Failed to delete from GCP: {str(e)}")
             # Continue with database deletion even if GCP deletion fails
         
         # Delete from database
@@ -411,7 +449,7 @@ def delete_document(document_id):
         
     except Exception as e:
         db.session.rollback()
-        print(f"Delete error: {str(e)}")
+        logger.error(f"Delete error: {str(e)}")
         return jsonify({"error": "An error occurred during deletion"}), 500
 
 
@@ -462,7 +500,7 @@ def download_document(document_id):
         )
         
     except Exception as e:
-        print(f"Download error: {str(e)}")
+        logger.error(f"Download error: {str(e)}")
         return jsonify({"error": "An error occurred during download"}), 500
 
 
@@ -523,7 +561,7 @@ def list_agent_documents(agent_id):
         }), 200
         
     except Exception as e:
-        print(f"List error: {str(e)}")
+        logger.error(f"List error: {str(e)}")
         return jsonify({"error": "An error occurred while fetching documents"}), 500
 
 
@@ -570,7 +608,7 @@ def get_document_status(agent_id, doc_type):
             }), 200
             
     except Exception as e:
-        print(f"Status check error: {str(e)}")
+        logger.error(f"Status check error: {str(e)}")
         return jsonify({"error": "An error occurred while checking document status"}), 500
 
 
@@ -620,7 +658,7 @@ def download_all_agent_documents(agent_id):
                     blob = bucket.blob(doc.gcp_path)
                     
                     if not blob.exists():
-                        print(f"Warning: File not found in GCP: {doc.gcp_path}")
+                        logger.warning(f"Warning: File not found in GCP: {doc.gcp_path}")
                         continue
                     
                     file_content = blob.download_as_bytes()
@@ -633,7 +671,7 @@ def download_all_agent_documents(agent_id):
                     zip_file.writestr(zip_path, file_content)
                     
                 except Exception as e:
-                    print(f"Error adding file to ZIP: {doc.filename}, Error: {str(e)}")
+                    logger.error(f"Error adding file to ZIP: {doc.filename}, Error: {str(e)}")
                     continue
             
             # Add a manifest file with document metadata
@@ -667,7 +705,7 @@ def download_all_agent_documents(agent_id):
         )
         
     except Exception as e:
-        print(f"Download all error: {str(e)}")
+        logger.error(f"Download all error: {str(e)}")
         import traceback
         traceback.print_exc()
         return jsonify({"error": "An error occurred while creating the ZIP file"}), 500

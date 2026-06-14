@@ -1,3 +1,4 @@
+import logging
 from flask import Blueprint, request, jsonify, current_app
 from flask_jwt_extended import jwt_required, get_jwt_identity
 from app.service.config_service import DetectionService, ConfigService
@@ -6,7 +7,9 @@ import json
 from datetime import datetime
 import pandas as pd
 
-detection_bp = Blueprint('detection', __name__, url_prefix='/api/detection')
+logger = logging.getLogger(__name__)
+
+detection_bp = Bluelogger.info('detection', __name__, url_prefix='/api/detection')
 
 @detection_bp.route('/run', methods=['POST'])
 @jwt_required()

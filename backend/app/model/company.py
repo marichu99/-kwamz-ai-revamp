@@ -17,6 +17,8 @@ class Company(db.Model):
     shortcode = db.Column(db.String(100), nullable=True,unique=True)
     compliance_status = db.Column(db.String(20), default='compliant', nullable=False) 
     total_float_balance = db.Column(db.Numeric(precision=15, scale=2), default=Decimal('0.00'), nullable=False)
+    commission_balance = db.Column(db.Numeric(precision=15, scale=2), nullable=True)
+    commission_balance_at = db.Column(db.DateTime, nullable=True)
     primary_owner_shares = db.Column(db.Numeric(precision=15, scale=2), default=Decimal('0.00'), nullable=True)
     file_location = db.Column(db.Text, nullable=True) 
     last_compliance_audit = db.Column(db.Date, nullable=True)

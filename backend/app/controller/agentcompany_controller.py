@@ -1,8 +1,11 @@
+import logging
 from flask import Blueprint, request, jsonify
 from flask_jwt_extended import jwt_required, get_jwt_identity
 from app.service.agentcompany_service import AgentCompanyService
 
-agent_company_bp = Blueprint('agent_company', __name__, url_prefix='/agentcompany')
+logger = logging.getLogger(__name__)
+
+agent_company_bp = Bluelogger.info('agent_company', __name__, url_prefix='/agentcompany')
 
 # Handle OPTIONS requests separately
 @agent_company_bp.route('', methods=['OPTIONS'])

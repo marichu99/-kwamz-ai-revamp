@@ -1,3 +1,4 @@
+import logging
 from flask import Blueprint, request, jsonify, current_app
 from app import db
 from app.service.company_service import CompanyService
@@ -14,8 +15,10 @@ import threading
 import os
 import json
 
+logger = logging.getLogger(__name__)
 
-company_bp = Blueprint('company', __name__, url_prefix='/company')
+
+company_bp = Bluelogger.info('company', __name__, url_prefix='/company')
 
 company_service = CompanyService(db)
 
@@ -55,24 +58,24 @@ def create_or_update_company(company_id=None):
         if file:
             data['cr12_file'] = file
         
-        print(f"Raw form data: {data}")  # Debug log
+        logger.info(f"Raw form data: {data}")  # Debug log
         data["user_id"]=current_user_id
         
         # Parse JSON strings for arrays
         if 'secondary_shareholders' in data:
             try:
                 data['secondary_shareholders'] = json.loads(data['secondary_shareholders'])
-                print(f"Parsed secondary_shareholders: {data['secondary_shareholders']}")
+                logger.info(f"Parsed secondary_shareholders: {data['secondary_shareholders']}")
             except json.JSONDecodeError as e:
-                print(f"Failed to parse secondary_shareholders JSON: {e}")
+                logger.error(f"Failed to parse secondary_shareholders JSON: {e}")
                 data['secondary_shareholders'] = []
         
         if 'directors' in data:
             try:
                 data['directors'] = json.loads(data['directors'])
-                print(f"Parsed directors: {data['directors']}")
+                logger.info(f"Parsed directors: {data['directors']}")
             except json.JSONDecodeError as e:
-                print(f"Failed to parse directors JSON: {e}")
+                logger.error(f"Failed to parse directors JSON: {e}")
                 data['directors'] = []
         
         # Convert numeric fields
@@ -82,7 +85,7 @@ def create_or_update_company(company_id=None):
             except (ValueError, TypeError):
                 data['primary_owner_shares'] = 0.0
         
-        print(f"Processed data for service: {data}")  # Debug log
+        logger.info(f"Processed data for service: {data}")  # Debug log
         
         if company_id:
             # Update existing company
@@ -97,9 +100,9 @@ def create_or_update_company(company_id=None):
         return jsonify({'id': company_id, 'message': message, 'company': {'id': company_id}}), 201 if not company_id else 200
         
     except Exception as e:
-        print(f"Error in create_or_update_company route: {str(e)}")
+        logger.error(f"Error in create_or_update_company route: {str(e)}")
         import traceback
-        print(f"Traceback: {traceback.format_exc()}")
+        logger.error(f"Traceback: {traceback.format_exc()}")
         return jsonify({'error': f'Failed to {"update" if company_id else "create"} company: {str(e)}'}), 500
 
 @company_bp.route('/<int:id>', methods=['PUT'])
@@ -370,8 +373,8 @@ def get_company_hierarchy():
         hierarchy = []
         
         for company in companies:
-            print(f"Processing company: {company.company_name}")
-            print(f"Processing company: {company.id}")
+            logger.info(f"Processing company: {company.company_name}")
+            logger.info(f"Processing company: {company.id}")
             # Get all agent companies for this company
             agent_companies = AgentCompany.query.filter_by(company_id=company.id).all()
             

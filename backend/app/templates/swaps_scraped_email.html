@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Swap Scraping Complete</title>
+<style>
+body, table, td, a { -webkit-text-size-adjust: 100%; -ms-text-size-adjust: 100%; }
+body { margin: 0; padding: 0; background-color: #f4f4f4; font-family: Arial, Helvetica, sans-serif; color: #333333; }
+.container { width: 100%; max-width: 640px; margin: 0 auto; background-color: #ffffff; border-radius: 8px; overflow: hidden; }
+.header { background-color: #1a3c34; color: #ffffff; text-align: center; padding: 28px 24px; }
+.header h1 { margin: 0; font-size: 22px; font-weight: 700; }
+.header p { margin: 6px 0 0; font-size: 13px; opacity: 0.8; }
+.body { padding: 28px 32px; }
+.body p { margin: 0 0 16px; font-size: 15px; line-height: 1.6; }
+.summary-box { background-color: #f0f7f4; border-left: 4px solid #1a3c34; border-radius: 4px; padding: 16px 20px; margin: 20px 0; }
+.summary-box p { margin: 4px 0; font-size: 14px; }
+.summary-box strong { color: #1a3c34; }
+.cta { text-align: center; margin: 28px 0; }
+.cta a { background-color: #1a3c34; color: #ffffff; text-decoration: none; padding: 13px 28px; border-radius: 6px; font-size: 15px; font-weight: 600; display: inline-block; }
+.footer { background-color: #f9f9f9; text-align: center; padding: 18px 24px; font-size: 12px; color: #888888; border-top: 1px solid #eeeeee; }
+</style>
+</head>
+<body>
+<table width="100%" cellpadding="0" cellspacing="0">
+  <tr>
+    <td align="center" style="padding: 24px 12px;">
+      <table class="container" width="640" cellpadding="0" cellspacing="0">
+        <tr>
+          <td class="header">
+            <h1>Swap Scraping Complete</h1>
+            <p>{{ scraped_date }}</p>
+          </td>
+        </tr>
+        <tr>
+          <td class="body">
+            <p>Hi {{ username }},</p>
+            <p>
+              The daily swap scraping run has finished successfully. Operator swap data for
+              <strong>{{ total_shortcodes }} shortcode(s)</strong> has been collected and saved.
+            </p>
+            <div class="summary-box">
+              <p><strong>Date scraped:</strong> {{ scraped_date }}</p>
+              <p><strong>Shortcodes processed:</strong> {{ total_shortcodes }}</p>
+              {% if skipped_shortcodes > 0 %}
+              <p><strong>Shortcodes skipped (already done today):</strong> {{ skipped_shortcodes }}</p>
+              {% endif %}
+            </div>
+            <p>
+              You can now view the full swap history in the dashboard under
+              <strong>Operations → Swap History</strong>.
+            </p>
+            <div class="cta">
+              <a href="{{ dashboard_url }}/operations/swap-history">View Swap History</a>
+            </div>
+            <p style="font-size:13px; color:#666;">
+              The next scheduled swap scrape for these shortcodes will run tomorrow.
+              If you need to re-run the scrape manually, please contact your system administrator.
+            </p>
+          </td>
+        </tr>
+        <tr>
+          <td class="footer">
+            &copy; {{ current_year }} Kwamz-AI &mdash; This is an automated notification, please do not reply.
+          </td>
+        </tr>
+      </table>
+    </td>
+  </tr>
+</table>
+</body>
+</html>

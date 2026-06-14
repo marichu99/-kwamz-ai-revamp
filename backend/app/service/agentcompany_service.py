@@ -1,3 +1,4 @@
+import logging
 from app import db
 from app.model.agentcompany import AgentCompany
 from app.service.company_service import CompanyService
@@ -11,6 +12,8 @@ from flask import current_app
 
 from app.model.agent_account_balances import AgentAccountBalance
 from app.model.agent_accounts import AgentAccount
+
+logger = logging.getLogger(__name__)
 
 
 
@@ -286,7 +289,7 @@ class AgentCompanyService:
         try:
             agent_company = AgentCompany.query.get_or_404(id)
             
-            print(f"Updating agent company {id} with user_id {agent_company.user_id} for user {user_id} with data: {data}")
+            logger.info(f"Updating agent company {id} with user_id {agent_company.user_id} for user {user_id} with data: {data}")
             if agent_company.user_id != user_id:
                 return None, 'Unauthorized: You can only update your own agent companies'
 

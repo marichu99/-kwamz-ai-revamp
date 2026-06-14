@@ -1,8 +1,11 @@
+import logging
 from flask import Blueprint, request, jsonify
 from flask_jwt_extended import jwt_required, get_jwt_identity
 from app.service.user_report_config_service import UserReportConfigService
 
-user_report_config_bp = Blueprint('user_report_config', __name__, url_prefix='/api/user-report-config')
+logger = logging.getLogger(__name__)
+
+user_report_config_bp = Bluelogger.info('user_report_config', __name__, url_prefix='/api/user-report-config')
 
 
 @user_report_config_bp.route('/', methods=['GET'])

@@ -1,3 +1,4 @@
+import logging
 from flask import Blueprint, jsonify, request, redirect, current_app
 from app.model.payment import Payment
 from app.utils.user_service import UserService
@@ -14,6 +15,8 @@ from app.model.config import SmtpConfig
 from app import db
 
 import os
+
+logger = logging.getLogger(__name__)
 
 payment_bp = Blueprint('payment', __name__)
 company_service = CompanyService(db)
@@ -101,8 +104,7 @@ def get_all_payments():
 
     except Exception as e:
         import traceback
-        print(f"Error in get_all_payments: {str(e)}")
-        print(traceback.format_exc())
+        logger.error(f"Error in get_all_payments: {str(e)}")
         return jsonify({
             'success': False,
             'message': 'Failed to retrieve payments',
@@ -193,11 +195,10 @@ def create_payment():
 @payment_bp.route('/callback', methods=['POST'])
 @jwt_required()
 def payment_callback():
-    print(f"Payment callback received with args: {request.args}")
-    print(f"Payment request obj: {request.json}")
+    logger.info(f"Payment callback received with args: {request.args}")
+    logger.info(f"Payment request obj: {request.json}")
     data = request.json
     order_tracking_id = data.get('order_id')
-    print("The order tracking id is ", order_tracking_id)
     if not order_tracking_id:
         return jsonify({'error': 'Missing order_id'}), 400
 

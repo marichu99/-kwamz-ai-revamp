@@ -1,3 +1,4 @@
+import logging
 from app import db
 from datetime import datetime
 from typing import Optional, Dict
@@ -9,6 +10,8 @@ from app.utils.pesapalclient import PesapalClient
 
 
 from typing import Optional, Dict, List
+
+logger = logging.getLogger(__name__)
 
 class PesapalPaymentService:
     """Service class to handle Pesapal payments with database integration"""
@@ -44,16 +47,16 @@ class PesapalPaymentService:
         if not merchant_reference:
             merchant_reference = f"ORDER-{datetime.utcnow().strftime('%Y%m%d%H%M%S')}-{user_id or 'GUEST'}"
         
-        print("We are trying to make a payment with the following details:")
-        print(f"User ID: {user_id}")
-        print(f"Merchant Reference: {merchant_reference}")
-        print(f"Amount: {amount}")
-        print(f"Currency: {currency}")
-        print(f"Description: {description}")
-        print(f"Customer Email: {customer_email}")
-        print(f"Customer Phone: {customer_phone}")
-        print(f"Customer First Name: {customer_first_name}")
-        print(f"Customer Last Name: {customer_last_name}")
+        logger.info("We are trying to make a payment with the following details:")
+        logger.info(f"User ID: {user_id}")
+        logger.info(f"Merchant Reference: {merchant_reference}")
+        logger.info(f"Amount: {amount}")
+        logger.info(f"Currency: {currency}")
+        logger.info(f"Description: {description}")
+        logger.info(f"Customer Email: {customer_email}")
+        logger.info(f"Customer Phone: {customer_phone}")
+        logger.info(f"Customer First Name: {customer_first_name}")
+        logger.info(f"Customer Last Name: {customer_last_name}")
         # Create payment record in database
         payment = PesapalPayment(
             user_id=user_id,

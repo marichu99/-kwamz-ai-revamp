@@ -1,4 +1,4 @@
-import { Bell, ChevronDown, Clock, CheckCircle, Filter, Menu, Plus, Search, Settings, Sun } from 'lucide-react';
+import { Bell, ChevronDown, Clock, CheckCircle, Filter, Menu, Search, Sun } from 'lucide-react';
 import React from 'react';
 import UserDropdown from '../Dashboard/UserDropdown';
 import { useNavigate } from 'react-router-dom';
@@ -48,26 +48,16 @@ function Header({ sideBarCollapsed, onToggleSideBar, currentPage, setCurrentPage
                             <span className='text-xs font-medium'>Active</span>
                         </div>
                     )}
-                    <button className='hidden lg:flex items-center space-x-2 py-2 px-4 bg-gradient-to-r
-                from-blue-500 to-purple-600 text-white rounded-xl hover:shadow transition-all'>
-                        <Plus className='w-4 h-4' />
-                        <span className='text-sm font-medium'>New</span>
-                    </button>
-                    <button className='p-2.5 rounded-xl text-slate-600 dark:text-slate-300 
+                    <button className='p-2.5 rounded-xl text-slate-600 dark:text-slate-300
                 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors'>
                         <Sun className='w-5 h-5' />
                     </button>
-                    <button className='relative p-2.5 rounded-xl text-slate-600 
-                dark:text-slate-300 hover:bg-slate-100 
+                    <button className='relative p-2.5 rounded-xl text-slate-600
+                dark:text-slate-300 hover:bg-slate-100
                 dark:hover:bg-slate-800 transition-colors'>
                         <Bell className='w-5 h-5' />
-                        <span className='absolute -top-1 w-5 h-5 bg-red-500 
+                        <span className='absolute -top-1 w-5 h-5 bg-red-500
                     text-white text-xs rounded-full flex items-center justify-center'>3</span>
-                    </button>
-                    <button className='relative p-2.5 rounded-xl text-slate-600 
-                dark:text-slate-300 hover:bg-slate-100 
-                dark:hover:bg-slate-800 transition-colors'>
-                        <Settings className='w-5 h-5' />
                     </button>
                     <UserDropdown
                         user={{

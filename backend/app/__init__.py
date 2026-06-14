@@ -1,3 +1,4 @@
+import logging
 # app/__init__.py
 from flask import Flask
 from flask_sqlalchemy import SQLAlchemy
@@ -9,6 +10,8 @@ from google.cloud import storage
 import os
 import sys
 from dotenv import load_dotenv
+
+logger = logging.getLogger(__name__)
 
 db = SQLAlchemy()
 migrate = Migrate()
@@ -92,6 +95,7 @@ def create_app():
     from app.model.subscription import Subscription
     from app.model.agent_swap import AgentSwap
     from app.model.swap_payout import SwapPayout
+    from app.model.swap_scrape_log import SwapScrapeLog
     
     # Initialize Pesapal Client and Payment Service
     from app.utils.pesapalclient import PesapalClient, PesapalConfig, FlaskIPNStorage
@@ -114,9 +118,9 @@ def create_app():
             bucket_name = os.getenv('GCP_BUCKET', 'trovana-docs')
             document_service = DocumentProcessingService(storage_client=storage_client, bucket_name=bucket_name)
         except Exception as e:
-            print(f"Warning: Could not initialize Google Cloud Storage: {e}")
+            logger.warning(f"Warning: Could not initialize Google Cloud Storage: {e}")
     else:
-        print("Warning: Google Cloud Storage not configured (GOOGLE_APPLICATION_CREDENTIALS not found)")
+        logger.warning("Warning: Google Cloud Storage not configured (GOOGLE_APPLICATION_CREDENTIALS not found)")
 
     transaction_service = TransactionService()
 
@@ -132,7 +136,7 @@ def create_app():
                 pesapal_client.config.environment = smtp_cfg.pesapal_environment
         except Exception as _e:
             db.session.rollback()
-            print(f"Warning: Could not apply Pesapal config from DB: {_e}")
+            logger.warning(f"Warning: Could not apply Pesapal config from DB: {_e}")
         pesapal_client.initialize()
 
     # Attach to app for access in blueprints

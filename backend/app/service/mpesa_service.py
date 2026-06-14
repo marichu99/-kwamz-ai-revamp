@@ -1,3 +1,4 @@
+import logging
 import os
 import base64
 import time
@@ -8,6 +9,8 @@ from dotenv import load_dotenv
 from app.model.payment import Payment
 from app import db
 import uuid
+
+logger = logging.getLogger(__name__)
 
 # Load environment variables
 load_dotenv()
@@ -25,10 +28,10 @@ class MpesaService:
 
     def authenticate(self):
         """Authenticate with Safaricom API and return an access token."""
-        print("we are now authenticating >>>>>>>")
+        logger.info("we are now authenticating >>>>>>>")
         encoded_key = base64.b64encode(self.app_key_secret.encode()).decode()
         url = f"{self.api_url}/oauth/v1/generate?grant_type=client_credentials"
-        print(f"The url is {url}")        
+        logger.info(f"The url is {url}")        
 
         headers = {"Authorization": f"Basic {encoded_key}"}
         response = requests.get(url, headers=headers, verify=False)
@@ -41,13 +44,13 @@ class MpesaService:
     def callBackUrl(self):
         """Authenticate with Safaricom API and return an access token."""
         callback_url = f"{self.callback_url}"
-        print(f"The url is {callback_url}")        
+        logger.info(f"The url is {callback_url}")        
 
         response = requests.get(callback_url, verify=False)
 
-        print(f"The response received is {response}")
+        logger.info(f"The response received is {response}")
         if response.status_code == 200:
-            print(f"The response received is {response.json()}")
+            logger.info(f"The response received is {response.json()}")
             #return response.json().get("access_token")
         else:
             raise Exception(f"Error getting access token: {response.text}")
@@ -83,7 +86,7 @@ class MpesaService:
         response = requests.post(url, json=payload, headers=headers)
 
         response_data = response.json()
-        print(f"the response data obtained is {response_data}")
+        logger.info(f"the response data obtained is {response_data}")
         checkout_request_id = response_data.get("CheckoutRequestID")
 
 
@@ -94,28 +97,28 @@ class MpesaService:
         time.sleep(12)  #
 
         response = self.path(checkout_request_id, token)
-        print(f"The result obtained is {response}")
+        logger.info(f"The result obtained is {response}")
 
         if not response:
-            print("Empty response.")
+            logger.info("Empty response.")
             return 1  
 
         error_code = response.get("errorCode")
         if error_code:
-            print(f"API error code: {error_code}")
+            logger.error(f"API error code: {error_code}")
             if retries > 0:
                 return self.call_path_recursively(
                     checkout_request_id, token, phone_number, amount, user_id, retries - 1
                 )
             else:
-                print("Max retries reached due to errorCode.")
+                logger.error("Max retries reached due to errorCode.")
                 return 1
 
         result_code = response.get("ResultCode")
         result_desc = response.get("ResultDesc", "Unknown error")
 
         if result_code == "0":
-            print("Transaction completed successfully.")
+            logger.info("Transaction completed successfully.")
             payment = Payment(
                 user_id=user_id,
                 phone_number=phone_number,
@@ -128,17 +131,17 @@ class MpesaService:
             return 0
 
         elif result_code == "4999":
-            print("Still under processing.")
+            logger.info("Still under processing.")
             if retries > 0:
                 return self.call_path_recursively(
                     checkout_request_id, token, phone_number, amount, user_id, retries - 1
                 )
             else:
-                print("Max retries reached while processing.")
+                logger.info("Max retries reached while processing.")
                 return 1
 
         else:
-            print(f"Transaction failed: {result_desc}")
+            logger.error(f"Transaction failed: {result_desc}")
             payment = Payment(
                 user_id=user_id,
                 phone_number=phone_number,
@@ -167,7 +170,7 @@ class MpesaService:
         headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
         response = requests.post(url, json=payload, headers=headers)
 
-        print(f"the response by safaricom is {response}")
+        logger.info(f"the response by safaricom is {response}")
 
         return response.json()
 

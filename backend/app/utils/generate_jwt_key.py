@@ -1,4 +1,7 @@
+import logging
 import secrets
+
+logger = logging.getLogger(__name__)
 
 def generate_jwt_secret(length=64):
     return secrets.token_urlsafe(length)
@@ -25,7 +28,7 @@ def update_env_file(env_path=".env", key="JWT_SECRET_KEY"):
     with open(env_path, "w") as file:
         file.writelines(lines)
 
-    print(f"{key} updated in {env_path}")
+    logger.info(f"{key} updated in {env_path}")
 
 if __name__ == "__main__":
     update_env_file()

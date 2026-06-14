@@ -573,19 +573,19 @@ function SwapHistoryGrid() {
                         {expandedTills[till.agent_company_id] && (
                           <div className="divide-y divide-slate-100 dark:divide-slate-700">
                             {/* Column headers */}
-                            <div className="grid grid-cols-[140px_1fr_auto_1fr_110px_110px_auto] gap-3 px-6 py-2 bg-slate-50 dark:bg-slate-800/50 text-xs font-semibold text-slate-500 dark:text-slate-400">
+                            <div className="grid grid-cols-[140px_1fr_auto_1fr_120px_150px_auto] gap-3 px-6 py-2 bg-slate-50 dark:bg-slate-800/50 text-xs font-semibold text-slate-500 dark:text-slate-400">
                               <div>Swap Date</div>
                               <div>Agent</div>
                               <div className="text-center">Status</div>
                               <div>Replaced By / Replaced</div>
-                              <div className="text-right">Float at Swap</div>
-                              <div className="text-right">Commission at Swap</div>
+                              <div className="text-right whitespace-nowrap">Float at Swap</div>
+                              <div className="text-right whitespace-nowrap">Commission at Swap</div>
                               <div className="text-center">Payout</div>
                             </div>
 
                             {/* Current agents row (shown first) */}
                             {(till.current_agents || []).length > 0 && (
-                              <div className="grid grid-cols-[140px_1fr_auto_1fr_110px_110px_auto] gap-3 px-6 py-3 bg-green-50/40 dark:bg-green-900/10">
+                              <div className="grid grid-cols-[140px_1fr_auto_1fr_120px_150px_auto] gap-3 px-6 py-3 bg-green-50/40 dark:bg-green-900/10">
                                 <div className="text-xs text-slate-400 italic self-start pt-0.5">Latest</div>
                                 <div className="space-y-1 self-start">
                                   {till.current_agents.map((a, ai) => {
@@ -615,7 +615,7 @@ function SwapHistoryGrid() {
                             {(till.previous_rows || []).map((row, ri) => (
                               <div
                                 key={`${row.swap_id}-${ri}`}
-                                className="grid grid-cols-[140px_1fr_auto_1fr_110px_110px_auto] gap-3 px-6 py-3 hover:bg-slate-50 dark:hover:bg-slate-700/30 transition-colors"
+                                className="grid grid-cols-[140px_1fr_auto_1fr_120px_150px_auto] gap-3 px-6 py-3 hover:bg-slate-50 dark:hover:bg-slate-700/30 transition-colors"
                               >
                                 <div className="text-xs text-slate-500 dark:text-slate-400 self-start pt-0.5">
                                   {row.agent_registration_time

@@ -1,3 +1,4 @@
+import logging
 from typing import List
 from app.model.company import Company
 from app.model.shareholder import Shareholder
@@ -16,6 +17,8 @@ from werkzeug.utils import secure_filename
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from flask import current_app
 from datetime import timedelta
+
+logger = logging.getLogger(__name__)
 
 class CompanyService:
     def __init__(self, db):
@@ -40,7 +43,7 @@ class CompanyService:
             try:
                 storage_client, bucket_name = self._get_gcp_client()
                 if not storage_client:
-                    print("GCP storage client not available")
+                    logger.info("GCP storage client not available")
                     return None
 
                 # Generate unique filename
@@ -57,11 +60,11 @@ class CompanyService:
                 file.seek(0)
                 blob.upload_from_file(file, content_type=file.content_type or 'application/pdf')
 
-                print(f"File uploaded to GCP: {blob_path}")
+                logger.info(f"File uploaded to GCP: {blob_path}")
                 return blob_path
 
             except Exception as e:
-                print(f"Error uploading to GCP: {e}")
+                logger.error(f"Error uploading to GCP: {e}")
                 return None
         return None
 
@@ -72,7 +75,7 @@ class CompanyService:
         try:
             storage_client, bucket_name = self._get_gcp_client()
             if not storage_client:
-                print("GCP storage client not available")
+                logger.info("GCP storage client not available")
                 return False
 
             bucket = storage_client.bucket(bucket_name)
@@ -80,14 +83,14 @@ class CompanyService:
 
             if blob.exists():
                 blob.delete()
-                print(f"File deleted from GCP: {gcp_path}")
+                logger.info(f"File deleted from GCP: {gcp_path}")
                 return True
             else:
-                print(f"File not found in GCP: {gcp_path}")
+                logger.warning(f"File not found in GCP: {gcp_path}")
                 return True  # Consider it deleted if not found
 
         except Exception as e:
-            print(f"Error deleting from GCP: {e}")
+            logger.error(f"Error deleting from GCP: {e}")
             return False
 
     def get_file_url(self, gcp_path: str, expires: int = 3600) -> str:
@@ -97,7 +100,7 @@ class CompanyService:
         try:
             storage_client, bucket_name = self._get_gcp_client()
             if not storage_client:
-                print("GCP storage client not available")
+                logger.info("GCP storage client not available")
                 return None
 
             bucket = storage_client.bucket(bucket_name)
@@ -112,7 +115,7 @@ class CompanyService:
             return url
 
         except Exception as e:
-            print(f"Error getting signed URL from GCP: {e}")
+            logger.error(f"Error getting signed URL from GCP: {e}")
             return None
 
     def get_file_bytes(self, gcp_path: str) -> bytes:
@@ -122,7 +125,7 @@ class CompanyService:
         try:
             storage_client, bucket_name = self._get_gcp_client()
             if not storage_client:
-                print("GCP storage client not available")
+                logger.info("GCP storage client not available")
                 return None
 
             bucket = storage_client.bucket(bucket_name)
@@ -131,7 +134,7 @@ class CompanyService:
             return blob.download_as_bytes()
 
         except Exception as e:
-            print(f"Error getting file from GCP: {e}")
+            logger.error(f"Error getting file from GCP: {e}")
             return None
 
     def get_companies(self):
@@ -165,14 +168,14 @@ class CompanyService:
                 'agent_user_id': c.agent_user_id
             } for c in companies], None
         except Exception as e:
-            print(f"Error retrieving companies: {str(e)}")
+            logger.error(f"Error retrieving companies: {str(e)}")
             return None, str(e)
     
     def get_companies_by_user_id(self, user_id:int) ->List[Company]:
         try:
             return Company.query.filter_by(user_id=user_id).all()
         except Exception as e:
-            print(f"The error on fetching companies is {str(e)}")
+            logger.error(f"The error on fetching companies is {str(e)}")
             return []
     def get_companies_by_userid(self,user_id):
         """Retrieve all companies."""
@@ -203,7 +206,7 @@ class CompanyService:
                 'total_float_balance': float(c.total_float_balance) if c.total_float_balance else 0.0
             } for c in companies], None
         except Exception as e:
-            print(f"Error retrieving companies: {str(e)}")
+            logger.error(f"Error retrieving companies: {str(e)}")
             return None, str(e)
         
     def get_company_by_id(self, company_id):
@@ -228,7 +231,7 @@ class CompanyService:
             return None, "Company not found"
 
         company.user_id = update_data["user_id"]
-        print(f"The shortcode is {update_data['shortcode']}")
+        logger.info(f"The shortcode is {update_data['shortcode']}")
 
         try:
             # Handle file upload - delete old file if re-uploading
@@ -369,8 +372,8 @@ class CompanyService:
         """
         try:
             # Debug: Print received data structure
-            print(f"Raw company_data type: {type(company_data)}")
-            print(f"Raw company_data: {company_data}")
+            logger.info(f"Raw company_data type: {type(company_data)}")
+            logger.info(f"Raw company_data: {company_data}")
             
             # Input validation
             required_fields = ['company_name', 'address', 'shortcode']
@@ -402,16 +405,16 @@ class CompanyService:
             secondary_shareholders = company_data.get('secondary_shareholders', [])
             secondary_shares = Decimal('0.00')
             
-            print(f"Secondary shareholders raw: {secondary_shareholders}")
-            print(f"Secondary shareholders type: {type(secondary_shareholders)}")
+            logger.info(f"Secondary shareholders raw: {secondary_shareholders}")
+            logger.info(f"Secondary shareholders type: {type(secondary_shareholders)}")
             
             # Parse if it's a JSON string
             if isinstance(secondary_shareholders, str):
                 try:
                     secondary_shareholders = json.loads(secondary_shareholders)
-                    print(f"Parsed secondary_shareholders: {secondary_shareholders}")
+                    logger.info(f"Parsed secondary_shareholders: {secondary_shareholders}")
                 except json.JSONDecodeError as e:
-                    print(f"Failed to parse secondary_shareholders JSON: {e}")
+                    logger.error(f"Failed to parse secondary_shareholders JSON: {e}")
                     secondary_shareholders = []
             
             # Ensure it's a list and handle each item safely
@@ -425,13 +428,13 @@ class CompanyService:
                             # Skip invalid share values
                             continue
                     else:
-                        print(f"Warning: shareholder item is not a dict: {type(sh)} - {sh}")
+                        logger.warning(f"Warning: shareholder item is not a dict: {type(sh)} - {sh}")
             else:
                 # If it's not a list, log and treat as empty
-                print(f"Warning: secondary_shareholders is not a list: {type(secondary_shareholders)}")
+                logger.warning(f"Warning: secondary_shareholders is not a list: {type(secondary_shareholders)}")
                 secondary_shareholders = []
 
-            print(f"Primary shares: {primary_shares}, Secondary shares: {secondary_shares}")
+            logger.info(f"Primary shares: {primary_shares}, Secondary shares: {secondary_shares}")
             
             total_shares = primary_shares + secondary_shares
             if abs(total_shares - Decimal('100.00')) > Decimal('0.01'):
@@ -442,9 +445,9 @@ class CompanyService:
             if isinstance(directors, str):
                 try:
                     directors = json.loads(directors)
-                    print(f"Parsed directors: {directors}")
+                    logger.info(f"Parsed directors: {directors}")
                 except json.JSONDecodeError as e:
-                    print(f"Failed to parse directors JSON: {e}")
+                    logger.error(f"Failed to parse directors JSON: {e}")
                     directors = []
             
             if not isinstance(directors, list):
@@ -458,7 +461,7 @@ class CompanyService:
                     try:
                         registration_date = datetime.strptime(company_data['registration_date'], '%Y-%m-%d').date()
                     except ValueError as e:
-                        print(f"Invalid registration date format: {e}")
+                        logger.warning(f"Invalid registration date format: {e}")
                         # Continue without registration date
 
                 company = Company(
@@ -501,7 +504,7 @@ class CompanyService:
                                 company.shareholders.append(shareholder)
                         except (TypeError, ValueError, InvalidOperation):
                             # Skip shareholders with invalid share values
-                            print(f"Invalid shares value for shareholder: {sh}")
+                            logger.warning(f"Invalid shares value for shareholder: {sh}")
                             continue
 
                 # Add directors safely
@@ -556,21 +559,21 @@ class CompanyService:
             return company.id, "Company onboarded successfully"
         except ValueError as ve:
             self.db.session.rollback()
-            print(f"Validation error: {str(ve)}")
+            logger.error(f"Validation error: {str(ve)}")
             return None, str(ve)
         except IntegrityError as ie:
             self.db.session.rollback()
-            print(f"Integrity error: {str(ie)}")        
+            logger.error(f"Integrity error: {str(ie)}")        
             return None, "It is most likely that the company has already been onboarded"
         except SQLAlchemyError as sae:
             self.db.session.rollback()
-            print(f"SQLAlchemy error: {str(sae)}")
+            logger.error(f"SQLAlchemy error: {str(sae)}")
             return None, str(sae)
         except Exception as e:
             self.db.session.rollback()
-            print(f"Unexpected error: {str(e)}")
+            logger.error(f"Unexpected error: {str(e)}")
             import traceback
-            print(f"Traceback: {traceback.format_exc()}")
+            logger.error(f"Traceback: {traceback.format_exc()}")
             return None, f"Failed to onboard company: {str(e)}"
     def validate_batch_company(self, file):
         """Validate a batch of companies from an Excel file."""

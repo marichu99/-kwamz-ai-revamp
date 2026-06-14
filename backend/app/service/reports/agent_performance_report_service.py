@@ -121,13 +121,18 @@ class AgentPerformanceReportService:
             return {}
 
     def _commission_map(self, start_dt, end_dt):
-        """Sum commission_amount per business_shortcode in the period."""
+        """
+        Sum commission earned per business_shortcode within the date range.
+        Excludes COMM-% synthetic snapshot records (child shortcode rollups).
+        """
         rows = (
             db.session.query(
                 Transaction.business_shortcode,
-                func.coalesce(func.sum(Transaction.commission_amount), 0).label('total'),
+                func.coalesce(func.sum(func.abs(Transaction.withdrawn)), 0).label('total'),
             )
             .filter(
+                Transaction.transaction_type == 'commission',
+                Transaction.receipt_no.notlike('COMM-%'),
                 Transaction.completion_time >= start_dt,
                 Transaction.completion_time <= end_dt,
             )

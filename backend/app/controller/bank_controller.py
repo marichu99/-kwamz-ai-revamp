@@ -1,10 +1,13 @@
+import logging
 
 from app import db
 from flask import Blueprint, request, jsonify
 from app.service.bank_service import BankService
 from app.utils.response_utils import success_response, error_response
 
-bank_bp = Blueprint('banks', __name__, url_prefix='/')
+logger = logging.getLogger(__name__)
+
+bank_bp = Bluelogger.info('banks', __name__, url_prefix='/')
 
 bank_service = BankService()
 

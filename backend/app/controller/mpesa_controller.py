@@ -1,3 +1,4 @@
+import logging
 from flask import Flask,Blueprint, jsonify, request
 from app.service.mpesa_service import MpesaService
 from app.service.payments_service import PaymentService
@@ -9,6 +10,8 @@ from datetime import datetime
 import time
 from app import db
 
+logger = logging.getLogger(__name__)
+
 mpesa_bp = Blueprint('mpesa', __name__)
 app = Flask(__name__)
 
@@ -19,7 +22,7 @@ CORS(app)  # Enable CORS for all routes
 @jwt_required()
 def stkpush():
     user_id = get_jwt_identity()
-    print(f"The logged in user id is {user_id}")
+    logger.info(f"The logged in user id is {user_id}")
     data = request.get_json()
     phone = data.get('phone_number')
     amount = data.get('amount')
@@ -66,7 +69,6 @@ def transaction_status(checkout_id):
 @mpesa_bp.route("/callback", methods=["POST"])
 def mpesa_callback():
     data = request.json
-    print("Callback data:", data)
 
     stk_callback = data["Body"]["stkCallback"]
 
@@ -90,7 +92,7 @@ def mpesa_callback():
     if reference_code ==None:
         reference_code ="PAY_FAILED"
 
-    print(f"he reference code is {reference_code}")
+    logger.info(f"he reference code is {reference_code}")
 
     # Save to DB anyway (even if cancelled/failed)
     payment = Payment(
@@ -127,20 +129,19 @@ def initiate_b2c_payout():
     except ValueError as e:
         return jsonify({"error": str(e)}), 400
     except Exception as e:
-        print(f"B2C payout error: {e}")
+        logger.error(f"B2C payout error: {e}")
         return jsonify({"error": "Failed to initiate payout"}), 500
 
 
 @mpesa_bp.route('/b2c/result', methods=['POST'])
 def b2c_result_callback():
     data = request.json
-    print("B2C Result callback data:", data)
 
     try:
         service = B2CPayoutService()
         service.process_b2c_result(data)
     except Exception as e:
-        print(f"B2C result processing error: {e}")
+        logger.error(f"B2C result processing error: {e}")
 
     return jsonify({"ResultCode": 0, "ResultDesc": "Accepted"}), 200
 
@@ -148,13 +149,12 @@ def b2c_result_callback():
 @mpesa_bp.route('/b2c/timeout', methods=['POST'])
 def b2c_timeout_callback():
     data = request.json
-    print("B2C Timeout callback data:", data)
 
     try:
         service = B2CPayoutService()
         service.process_b2c_timeout(data)
     except Exception as e:
-        print(f"B2C timeout processing error: {e}")
+        logger.error(f"B2C timeout processing error: {e}")
 
     return jsonify({"ResultCode": 0, "ResultDesc": "Accepted"}), 200
 
@@ -167,6 +167,6 @@ def get_swap_payouts(swap_id):
         payouts = service.get_payouts_by_swap(swap_id)
         return jsonify(payouts), 200
     except Exception as e:
-        print(f"Error fetching payouts: {e}")
+        logger.error(f"Error fetching payouts: {e}")
         return jsonify({"error": "Failed to fetch payouts"}), 500
 

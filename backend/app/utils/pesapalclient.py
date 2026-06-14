@@ -1,3 +1,4 @@
+import logging
 import requests
 import json
 from typing import Dict, Optional, Any
@@ -9,6 +10,8 @@ from urllib.parse import urlencode
 from dotenv import load_dotenv
 from app.utils.flaskipnstorage import FlaskIPNStorage
 import os
+
+logger = logging.getLogger(__name__)
 
 # Load environment variables
 load_dotenv()
@@ -87,19 +90,19 @@ class PaymentService:
         
         # Use registered IPN if no notification_id provided
         if not notification_id and self.client.ipn_storage:
-            print("No notification ID provided, checking registered IPNs...")
+            logger.info("No notification ID provided, checking registered IPNs...")
             ipn_configs = self.client.ipn_storage.list_ipn_configs()
             if ipn_configs:
-                print(f"Found {len(ipn_configs)} registered IPN configurations.")
+                logger.info(f"Found {len(ipn_configs)} registered IPN configurations.")
                 for config in ipn_configs:
-                    print(f"Found IPN config: {config}")
-                    print(f"IPN URL: {config.get('ipn_url')}")
-                    print(f"IPN ID: {config.get('notification_id')}")
+                    logger.info(f"Found IPN config: {config}")
+                    logger.info(f"IPN URL: {config.get('ipn_url')}")
+                    logger.info(f"IPN ID: {config.get('notification_id')}")
                 notification_id = ipn_configs[0].get('notification_id')
         
-        print("We are trying to make a payment with the following details:")
-        print(f"The callback URL is: {callback_url}")
-        print(f"The notification id is: {notification_id}")
+        logger.info("We are trying to make a payment with the following details:")
+        logger.info(f"The callback URL is: {callback_url}")
+        logger.info(f"The notification id is: {notification_id}")
         
         order_data = {
             "id": merchant_reference,
@@ -262,11 +265,11 @@ class PesapalClient:
                 if not existing_config:
                     try:
                         self.ipn.register_ipn(ipn_url)
-                        print(f"IPN registered successfully: {ipn_url}")
+                        logger.info(f"IPN registered successfully: {ipn_url}")
                     except Exception as e:
-                        print(f"Failed to register IPN: {e}")
+                        logger.error(f"Failed to register IPN: {e}")
             else:
-                print("No IPN URL provided, skipping registration.")
+                logger.info("No IPN URL provided, skipping registration.")
     
     def _authenticate(self) -> None:
         """Authenticate with Pesapal and get access token"""
@@ -275,7 +278,7 @@ class PesapalClient:
             datetime.utcnow() < self._token_expiry):
             return
         
-        print("Authenticating with Pesapal...")
+        logger.info("Authenticating with Pesapal...")
         
         auth_url = f"{self.config.base_url}/api/Auth/RequestToken"
         
@@ -301,7 +304,7 @@ class PesapalClient:
             })
             
         except requests.exceptions.RequestException as e:
-            print(f"Authentication request failed: {str(e)}")
+            logger.error(f"Authentication request failed: {str(e)}")
             raise Exception(f"Authentication failed: {str(e)}")
     
     def _make_request(self, method: str, endpoint: str, data: Optional[Dict] = None) -> Dict:
@@ -328,10 +331,10 @@ class PesapalClient:
                 response = self.session.post(url, json=data)
             
             response.raise_for_status()
-            print(f"Request to {url} successful with method {method}")
-            print(f"Request data: {data}")
-            print(f"Response status code: {response.status_code}")
-            print(f"Response content: {response.json()}")
+            logger.info(f"Request to {url} successful with method {method}")
+            logger.info(f"Request data: {data}")
+            logger.info(f"Response status code: {response.status_code}")
+            logger.info(f"Response content: {response.json()}")
             return response.json()
             
         except requests.exceptions.HTTPError as e:

@@ -1,6 +1,7 @@
 import resend
 import smtplib
 import os
+import logging
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from email.mime.base import MIMEBase
@@ -8,6 +9,8 @@ from email import encoders
 from flask import render_template
 from datetime import datetime, timezone
 from dotenv import load_dotenv
+
+logger = logging.getLogger(__name__)
 
 load_dotenv()
 
@@ -40,7 +43,7 @@ def get_smtp_settings():
             'from_email': row.sender_email if row.sender_email else EMAIL_ADDRESS,
         }
     except Exception as e:
-        print(f"Failed to read SmtpConfig from DB, using env vars: {e}")
+        logger.warning(f"Failed to read SmtpConfig from DB, using env vars: {e}")
         return {
             'host': SMTP_HOST,
             'port': SMTP_PORT,
@@ -81,10 +84,10 @@ def _send_email_smtp(subject: str, html: str, recipient: str, attachments=None):
             server.login(settings['username'], settings['password'])
             server.sendmail(settings['from_email'], recipient, msg.as_string())
 
-        print(f"Email sent via SMTP: {subject} -> {recipient}")
+        logger.info(f"Email sent via SMTP: {subject} -> {recipient}")
         return True
     except Exception as e:
-        print(f"Failed to send email via SMTP: {e}")
+        logger.warning(f"Failed to send email via SMTP: {e}")
         return False
 
 
@@ -101,10 +104,10 @@ def _send_email_resend(subject: str, html: str, recipient: str, attachments=None
             params["attachments"] = attachments
 
         result = resend.Emails.send(params)
-        print(f"Email sent via Resend: {subject} -> {recipient} (id: {result.get('id', 'unknown')})")
+        logger.info(f"Email sent via Resend: {subject} -> {recipient} (id: {result.get('id', 'unknown')})")
         return True
     except Exception as e:
-        print(f"Failed to send email via Resend: {e}")
+        logger.warning(f"Failed to send email via Resend: {e}")
         return False
 
 
@@ -130,7 +133,7 @@ def send_otp_email(recipient_email, otp):
             recipient_email
         )
     except Exception as e:
-        print(f"Failed to send OTP email: {e}")
+        logger.warning(f"Failed to send OTP email: {e}")
         return False
 
 
@@ -150,7 +153,7 @@ def send_welcome_email(user_email, username):
             user_email
         )
     except Exception as e:
-        print(f"Failed to send welcome email: {str(e)}")
+        logger.warning(f"Failed to send welcome email: {str(e)}")
         return False
 
 
@@ -200,7 +203,7 @@ def send_welcome_pack_email(recipient_email, recipient_name, role, company_data,
             attachments=attachments
         )
     except Exception as e:
-        print(f"Failed to send welcome pack email: {str(e)}")
+        logger.warning(f"Failed to send welcome pack email: {str(e)}")
         return False
 
 
@@ -210,7 +213,7 @@ def send_email_notification(subject, body, recipient_email):
         html = f"<pre>{body}</pre>"
         return _send_email(subject, html, recipient_email)
     except Exception as e:
-        print(f"Error sending email: {e}")
+        logger.warning(f"Error sending email: {e}")
         return False
 
 
@@ -232,7 +235,7 @@ def send_agent_new_clients_email(agent_email, agent_name, newly_assigned_compani
             agent_email
         )
     except Exception as e:
-        print(f"Failed to send agent new clients email: {str(e)}")
+        logger.warning(f"Failed to send agent new clients email: {str(e)}")
         return False
 
 
@@ -294,7 +297,7 @@ def send_scraping_report_email(recipient_email: str, stats_data: dict):
             recipient_email
         )
     except Exception as e:
-        print(f"Failed to send scraping report email: {str(e)}")
+        logger.warning(f"Failed to send scraping report email: {str(e)}")
         return False
 
 
@@ -319,7 +322,7 @@ def send_session_timeout_email(recipient_email: str) -> bool:
         )
         return _send_email(subject, f"<pre>{body}</pre>", recipient_email)
     except Exception as e:
-        print(f"Failed to send session timeout email: {str(e)}")
+        logger.warning(f"Failed to send session timeout email: {str(e)}")
         return False
 
 
@@ -342,7 +345,29 @@ System Administration Team"""
 
         return _send_email(subject, f"<pre>{body}</pre>", recipient_email)
     except Exception as e:
-        print(f"Failed to send notification email: {str(e)}")
+        logger.warning(f"Failed to send notification email: {str(e)}")
+        return False
+
+
+def send_swaps_scraped_email(recipient_email: str, username: str, total_shortcodes: int, skipped_shortcodes: int = 0) -> bool:
+    """Notify the logged-in user that the daily swap scraping run has completed."""
+    try:
+        html_content = render_template(
+            'swaps_scraped_email.html',
+            username=username,
+            scraped_date=datetime.now(timezone.utc).strftime('%d/%m/%Y'),
+            total_shortcodes=total_shortcodes,
+            skipped_shortcodes=skipped_shortcodes,
+            dashboard_url=DASHBOARD_URL or '',
+            current_year=datetime.now(timezone.utc).year,
+        )
+        return _send_email(
+            f"Swap Scraping Complete – {datetime.now(timezone.utc).strftime('%d/%m/%Y')}",
+            html_content,
+            recipient_email,
+        )
+    except Exception as e:
+        logger.warning(f"Failed to send swaps scraped email: {e}")
         return False
 
 
@@ -360,5 +385,5 @@ def send_password_reset_otp_email(recipient_email, otp):
             recipient_email
         )
     except Exception as e:
-        print(f"Failed to send password reset OTP email: {e}")
+        logger.warning(f"Failed to send password reset OTP email: {e}")
         return False

@@ -125,7 +125,7 @@ def check_for_corrupted_data():
         logger.error(f"Error checking corrupted data: {e}")
 
 if __name__ == '__main__':
-    print("Testing database query...")
+    logger.info("Testing database query...")
     test_query_directly()
-    print("\n" + "="*50 + "\n")
+    logger.info("\n" + "="*50 + "\n")
     check_for_corrupted_data()

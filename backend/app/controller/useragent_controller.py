@@ -1,9 +1,12 @@
+import logging
 from flask import Blueprint, jsonify, request
 from flask_jwt_extended import jwt_required, get_jwt_identity
 from flask_cors import cross_origin
 from app.service.user_agent_service import UserAgentService
 
-user_agent_bp = Blueprint('user_agent', __name__, url_prefix='/useragent')
+logger = logging.getLogger(__name__)
+
+user_agent_bp = Bluelogger.info('user_agent', __name__, url_prefix='/useragent')
 
 @user_agent_bp.route('', methods=['POST', 'OPTIONS'])
 @user_agent_bp.route('/', methods=['POST', 'OPTIONS'])

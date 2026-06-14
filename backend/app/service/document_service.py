@@ -1,3 +1,4 @@
+import logging
 # app/services/document_service.py
 import os
 import re
@@ -11,6 +12,8 @@ from app.model.agent_documents import AgentDocuments
 from app.utils.kra_pin_details import extract_taxpayer_details
 from app.utils.company_details import extract_company_number
 from app.utils.police_clearance_details import extract_clearance_details
+
+logger = logging.getLogger(__name__)
 
 class DocumentProcessingService:
     def __init__(self, storage_client=None, bucket_name=None):
@@ -33,7 +36,7 @@ class DocumentProcessingService:
         agent_companies = user_agent.agent_companies
         if len(agent_companies) > 0:
             company = agent_companies[0].company_id
-            print(f"The company id is {company}")
+            logger.info(f"The company id is {company}")
             return company
         else:
             raise ValueError("Agent not associated with any company. Please link the agent to a company first.")
@@ -45,7 +48,7 @@ class DocumentProcessingService:
         blob = bucket.blob(blob_path)
         file_stream.seek(0)  # Reset pointer
         blob.upload_from_file(file_stream, content_type=file_stream.content_type)
-        print(f"The blob is {blob}")
+        logger.info(f"The blob is {blob}")
         return blob.public_url, blob_path
 
     def _save_to_db(self, agent_id, company_id, doc_type, filename, gcp_url, gcp_path, extracted_data):
@@ -71,13 +74,13 @@ class DocumentProcessingService:
         # 1. Resolve company
         company_id = self._get_company_id(agent_id)
         
-        print(f"Processing Mpesa Agreement for Agent ID: {agent_id}, Company ID: {company_id}")
+        logger.info(f"Processing Mpesa Agreement for Agent ID: {agent_id}, Company ID: {company_id}")
 
         # 2. Save temp
         filename = secure_filename(file.filename)
         temp_path = os.path.join('/tmp', f"{agent_id}_mpesa_agreement_{filename}")
         
-        print(f"Saving temporary file to: {temp_path}")
+        logger.info(f"Saving temporary file to: {temp_path}")
         file.save(temp_path)
 
         try:
@@ -113,13 +116,13 @@ class DocumentProcessingService:
         # 1. Resolve company
         company_id = self._get_company_id(agent_id)
         
-        print(f"Processing document for Agent ID: {agent_id}, Company ID: {company_id}, Doc Type: {doc_type}")
+        logger.info(f"Processing document for Agent ID: {agent_id}, Company ID: {company_id}, Doc Type: {doc_type}")
 
         # 2. Save temp
         filename = secure_filename(file.filename)
         temp_path = os.path.join('/tmp', f"{agent_id}_{doc_type}_{filename}")
         
-        print(f"Saving temporary file to: {temp_path}")
+        logger.info(f"Saving temporary file to: {temp_path}")
         file.save(temp_path)
 
         try:

@@ -1,3 +1,4 @@
+import logging
 """
 MinIO Storage Utility
 S3-compatible object storage for file uploads
@@ -11,6 +12,8 @@ from functools import lru_cache
 from minio import Minio
 from minio.error import S3Error
 from werkzeug.utils import secure_filename
+
+logger = logging.getLogger(__name__)
 
 
 class MinioStorage:
@@ -38,7 +41,7 @@ class MinioStorage:
             if not self.client.bucket_exists(self.bucket):
                 self.client.make_bucket(self.bucket)
         except S3Error as e:
-            print(f"Error creating bucket: {e}")
+            logger.error(f"Error creating bucket: {e}")
 
     def _generate_object_name(self, filename: str, folder: str = None) -> str:
         """Generate unique object name with optional folder prefix"""
@@ -141,7 +144,7 @@ class MinioStorage:
             response = self.client.get_object(self.bucket, object_name)
             return response.read()
         except S3Error as e:
-            print(f"Error getting file: {e}")
+            logger.error(f"Error getting file: {e}")
             return None
         finally:
             if 'response' in locals():
@@ -167,7 +170,7 @@ class MinioStorage:
             )
             return url
         except S3Error as e:
-            print(f"Error generating presigned URL: {e}")
+            logger.error(f"Error generating presigned URL: {e}")
             return None
 
     def get_presigned_upload_url(self, object_name: str, expires: int = 3600) -> str:
@@ -189,7 +192,7 @@ class MinioStorage:
             )
             return url
         except S3Error as e:
-            print(f"Error generating presigned upload URL: {e}")
+            logger.error(f"Error generating presigned upload URL: {e}")
             return None
 
     def delete_file(self, object_name: str) -> bool:
@@ -198,7 +201,7 @@ class MinioStorage:
             self.client.remove_object(self.bucket, object_name)
             return True
         except S3Error as e:
-            print(f"Error deleting file: {e}")
+            logger.error(f"Error deleting file: {e}")
             return False
 
     def list_files(self, prefix: str = None, recursive: bool = True) -> list:
@@ -218,7 +221,7 @@ class MinioStorage:
                 for obj in objects
             ]
         except S3Error as e:
-            print(f"Error listing files: {e}")
+            logger.error(f"Error listing files: {e}")
             return []
 
     def file_exists(self, object_name: str) -> bool:

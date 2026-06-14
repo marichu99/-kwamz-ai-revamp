@@ -35,7 +35,7 @@ const StatsCard = ({ stat, index, isLast }) => {
               <span className={`font-medium ${stat.trend === 'up' ? 'text-emerald-600 dark:text-emerald-400' : 'text-red-600 dark:text-red-400'}`}>
                 {stat.change}
               </span>
-              <span className='text-sm text-slate-500 dark:text-slate-400'>vs last month</span>
+              <span className='text-sm text-slate-500 dark:text-slate-400'>{stat.changeLabel ?? 'vs last month'}</span>
             </div>
           </div>
           <div className={`p-3 rounded-xl bg-gradient-to-br ${stat.bgGradient} group-hover:scale-110 transition-transform duration-300`}>

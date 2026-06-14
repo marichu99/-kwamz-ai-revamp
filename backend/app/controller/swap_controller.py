@@ -1,8 +1,11 @@
+import logging
 from flask import Blueprint, request, jsonify, Response
 from flask_jwt_extended import jwt_required, get_jwt_identity
 from app.service.swap_service import SwapService
 
-swap_bp = Blueprint('swap', __name__, url_prefix='/swaps')
+logger = logging.getLogger(__name__)
+
+swap_bp = Bluelogger.info('swap', __name__, url_prefix='/swaps')
 
 
 @swap_bp.route('', methods=['OPTIONS'])

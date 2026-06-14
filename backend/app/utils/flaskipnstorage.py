@@ -1,7 +1,10 @@
+import logging
 from typing import Optional, Dict, List
 from datetime import datetime
 from app import db
 from app.model.pesapalipnconfig import PesapalIPNConfig
+
+logger = logging.getLogger(__name__)
 
 class FlaskIPNStorage:
     """Flask-SQLAlchemy implementation of IPNStorage"""
@@ -24,7 +27,7 @@ class FlaskIPNStorage:
                     'updated_at': config.updated_at.isoformat()
                 }
         except Exception as e:
-            print(f"Error retrieving IPN config: {e}")
+            logger.error(f"Error retrieving IPN config: {e}")
         return None
     
     def save_ipn_config(self, url: str, notification_id: str, response_data: Dict) -> None:

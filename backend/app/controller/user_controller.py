@@ -1,3 +1,4 @@
+import logging
 from flask import Blueprint, jsonify,current_app, request
 from flask_jwt_extended import create_access_token, jwt_required, get_jwt_identity
 from app.model.user import User
@@ -12,8 +13,10 @@ import random
 import os
 import re
 
+logger = logging.getLogger(__name__)
 
-user_bp = Blueprint('users', __name__, url_prefix='/users')
+
+user_bp = Bluelogger.info('users', __name__, url_prefix='/users')
 
 @user_bp.route('', methods=['OPTIONS'])
 @user_bp.route('/', methods=['OPTIONS'])
@@ -26,7 +29,7 @@ def handle_options():
 @jwt_required()
 def get_users():
     current_user_id = get_jwt_identity()
-    print(f"Current user ID: {current_user_id}")
+    logger.info(f"Current user ID: {current_user_id}")
     users = User.query.all()
     return jsonify([{
         'id': user.id,
@@ -55,7 +58,7 @@ def get_user(id):
 @user_bp.route('/', methods=['POST'])
 def create_user():
     form_data = request.get_json()
-    print(f"the data is {form_data}")
+    logger.info(f"the data is {form_data}")
     
     if not form_data:
         return jsonify({'error': 'Missing formData'}), 400
@@ -104,7 +107,7 @@ def create_user():
     try:
         send_welcome_email(user.email, user.username)
     except Exception as e:
-        print(f"Welcome email failed to send: {e}")
+        logger.error(f"Welcome email failed to send: {e}")
 
     # Generate JWT token for auto-login
     access_token = create_access_token(identity=str(user.id))
@@ -189,7 +192,7 @@ def assign_agent_companies(agent_id):
 @user_bp.route('/admin', methods=['POST'])
 def create_admin():
     form_data = request.get_json()
-    print(f"the data is {form_data}")
+    logger.info(f"the data is {form_data}")
     
     if not form_data:
         return jsonify({'error': 'Missing formData'}), 400
@@ -219,7 +222,7 @@ def create_admin():
     try:
         send_welcome_email(user.email, user.username)
     except Exception as e:
-        print(f"Welcome email failed to send: {e}")
+        logger.error(f"Welcome email failed to send: {e}")
 
     # Generate JWT token for auto-login
     access_token = create_access_token(identity=str(user.id))

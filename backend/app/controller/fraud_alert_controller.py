@@ -1,10 +1,13 @@
+import logging
 from flask import Blueprint, request, jsonify
 from flask_jwt_extended import jwt_required, get_jwt_identity
 from sqlalchemy import or_, func
 from app.model.fraud_alert import FraudAlert
 from app.service.agentcompany_service import AgentCompanyService
 
-fraud_alert_bp = Blueprint('fraud_alert', __name__, url_prefix='/alerts')
+logger = logging.getLogger(__name__)
+
+fraud_alert_bp = Bluelogger.info('fraud_alert', __name__, url_prefix='/alerts')
 
 agent_company_service = AgentCompanyService()
 

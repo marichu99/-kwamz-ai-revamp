@@ -1,15 +1,19 @@
+import logging
 from flask import Blueprint, request, jsonify, current_app, send_file, render_template, make_response
 from datetime import datetime
 from app.service.transaction_service import TransactionService
 from app.service.reports.commissions_report_service import CommissionReportService
 from app.service.reports.fraud_report_service import FraudReportService
 from app.service.reports.agent_performance_report_service import AgentPerformanceReportService
+from app.service.reports.monthly_commission_report_service import MonthlyCommissionReportService
 from app.service.export_service import ExportService
 from app.utils.user_service import UserService
 from app.model.company import Company
 from flask_jwt_extended import jwt_required, get_jwt_identity, verify_jwt_in_request
 import io
 import os
+
+logger = logging.getLogger(__name__)
 
 FRAUD_TYPE_LABELS = {
     'split_transaction':          'Split Transaction',
@@ -21,13 +25,14 @@ FRAUD_TYPE_LABELS = {
 
 
 
-transaction_bp = Blueprint('transaction', __name__, url_prefix='/transactions')
+transaction_bp = Bluelogger.info('transaction', __name__, url_prefix='/transactions')
 
 transaction_service = TransactionService()
 
 commission_report_service = CommissionReportService()
 fraud_report_service = FraudReportService()
 agent_performance_report_service = AgentPerformanceReportService()
+monthly_commission_report_service = MonthlyCommissionReportService()
 export_service = ExportService()
 
 @transaction_bp.route('/commissions-report', methods=['GET'])
@@ -59,7 +64,7 @@ def get_commissions_report():
     except ValueError as e:
         return jsonify({'success': False, 'error': str(e)}), 400
     except Exception as e:
-        print(f"Error generating commission report: {str(e)}")
+        current_app.logger.error(f"Error generating commission report: {str(e)}")
         return jsonify({'success': False, 'error': 'Internal server error'}), 500
 
 @transaction_bp.route('/export-commissions-pdf', methods=['GET'])
@@ -103,8 +108,7 @@ def export_commissions_report_pdf():
     except ValueError as e:
         return jsonify({'success': False, 'error': str(e)}), 400
     except Exception as e:
-        print(f"Error generating commissions PDF: {str(e)}")
-        import traceback; traceback.print_exc()
+        current_app.logger.error(f"Error generating commissions PDF: {str(e)}")
         return jsonify({'success': False, 'error': 'Internal server error'}), 500
 
 
@@ -137,7 +141,7 @@ def export_commissions_report():
     except ValueError as e:
         return jsonify({'success': False, 'error': str(e)}), 400
     except Exception as e:
-        print(f"Error exporting commission report: {str(e)}")
+        current_app.logger.error(f"Error exporting commission report: {str(e)}")
         return jsonify({'success': False, 'error': 'Internal server error'}), 500
 
 @transaction_bp.route('/fraud-report', methods=['GET'])
@@ -161,7 +165,7 @@ def get_fraud_report():
     except ValueError as e:
         return jsonify({'success': False, 'error': str(e)}), 400
     except Exception as e:
-        print(f"Error generating fraud report: {str(e)}")
+        current_app.logger.error(f"Error generating fraud report: {str(e)}")
         return jsonify({'success': False, 'error': 'Internal server error'}), 500
 
 
@@ -201,8 +205,7 @@ def export_fraud_report_pdf():
     except ValueError as e:
         return jsonify({'success': False, 'error': str(e)}), 400
     except Exception as e:
-        print(f"Error generating fraud report PDF: {str(e)}")
-        import traceback; traceback.print_exc()
+        current_app.logger.error(f"Error generating fraud report PDF: {str(e)}")
         return jsonify({'success': False, 'error': 'Internal server error'}), 500
 
 
@@ -230,7 +233,7 @@ def get_agent_performance_report():
     except ValueError as e:
         return jsonify({'success': False, 'error': str(e)}), 400
     except Exception as e:
-        print(f"Error generating agent performance report: {str(e)}")
+        current_app.logger.error(f"Error generating agent performance report: {str(e)}")
         return jsonify({'success': False, 'error': 'Internal server error'}), 500
 
 
@@ -278,8 +281,106 @@ def get_agent_performance_report_pdf():
     except ValueError as e:
         return jsonify({'success': False, 'error': str(e)}), 400
     except Exception as e:
-        print(f"Error generating agent performance PDF: {str(e)}")
-        import traceback; traceback.print_exc()
+        current_app.logger.error(f"Error generating agent performance PDF: {str(e)}")
+        return jsonify({'success': False, 'error': 'Internal server error'}), 500
+
+
+@transaction_bp.route('/monthly-commission-report', methods=['GET'])
+@jwt_required()
+def get_monthly_commission_report():
+    try:
+        now = datetime.now()
+        year  = request.args.get('year',  type=int, default=now.year)
+        month = request.args.get('month', type=int, default=now.month)
+        company_id = request.args.get('company_id', type=int)
+
+        if not (1 <= month <= 12):
+            return jsonify({'success': False, 'error': 'month must be 1–12'}), 400
+
+        report = monthly_commission_report_service.generate_report(year, month, company_id)
+        return jsonify({'success': True, 'data': report})
+    except Exception as e:
+        current_app.logger.error(f"Monthly commission report error: {e}")
+        return jsonify({'success': False, 'error': 'Internal server error'}), 500
+
+
+@transaction_bp.route('/monthly-commission-report-pdf', methods=['GET'])
+@jwt_required()
+def get_monthly_commission_report_pdf():
+    try:
+        now = datetime.now()
+        year  = request.args.get('year',  type=int, default=now.year)
+        month = request.args.get('month', type=int, default=now.month)
+        company_id = request.args.get('company_id', type=int)
+
+        report = monthly_commission_report_service.generate_report(year, month, company_id)
+        generated_at = now.strftime('%d %b %Y, %H:%M')
+        html = render_template('monthly_commission_report_pdf.html', report=report, generated_at=generated_at)
+
+        from weasyprint import HTML as WeasyHTML
+        pdf_bytes = WeasyHTML(string=html).write_pdf()
+
+        filename = f"monthly_commission_{report['label'].replace(' ', '_')}_{now.strftime('%Y%m%d%H%M%S')}.pdf"
+        response = make_response(pdf_bytes)
+        response.headers['Content-Type'] = 'application/pdf'
+        response.headers['Content-Disposition'] = f'attachment; filename="{filename}"'
+        return response
+    except Exception as e:
+        current_app.logger.error(f"Monthly commission PDF error: {e}")
+        return jsonify({'success': False, 'error': 'Internal server error'}), 500
+
+
+@transaction_bp.route('/monthly-commission-report-excel', methods=['GET'])
+@jwt_required()
+def get_monthly_commission_report_excel():
+    try:
+        import io
+        import pandas as pd
+        now = datetime.now()
+        year  = request.args.get('year',  type=int, default=now.year)
+        month = request.args.get('month', type=int, default=now.month)
+        company_id = request.args.get('company_id', type=int)
+
+        report = monthly_commission_report_service.generate_report(year, month, company_id)
+        tills = report.get('tills', [])
+
+        rows = [
+            {
+                'Shortcode':        t['shortcode'],
+                'Company Name':     t['company_name'],
+                'Location':         t['location'],
+                'Rolled Up (KES)':  round(t['amount'], 2),
+                'Prev Month (KES)': round(t['prev_amount'], 2),
+                'MoM Change (KES)': round(t['mom_change'], 2),
+                'MoM %':            round(t['mom_pct'], 2) if t['mom_pct'] is not None else '',
+                'Receipt No':       t['receipt_no'],
+                'Rollup Date':      t['completion_time'],
+            }
+            for t in tills
+        ]
+
+        s = report['summary']
+        summary_rows = [
+            {'Metric': 'Commission Month',    'Value': report['label']},
+            {'Metric': 'Total Rolled Up',     'Value': round(s['total_amount'], 2)},
+            {'Metric': 'Prev Month Total',    'Value': round(s['prev_total_amount'], 2)},
+            {'Metric': 'MoM Change (KES)',    'Value': round(s['mom_change'], 2)},
+            {'Metric': 'MoM %',               'Value': round(s['mom_pct'], 2) if s['mom_pct'] is not None else ''},
+            {'Metric': 'Number of Tills',     'Value': s['till_count']},
+            {'Metric': 'Generated At',        'Value': now.strftime('%d %b %Y %H:%M')},
+        ]
+
+        output = io.BytesIO()
+        with pd.ExcelWriter(output, engine='openpyxl') as writer:
+            pd.DataFrame(rows).to_excel(writer, sheet_name='Rollup by Till', index=False)
+            pd.DataFrame(summary_rows).to_excel(writer, sheet_name='Summary', index=False)
+        output.seek(0)
+
+        filename = f"monthly_commission_{report['label'].replace(' ', '_')}_{now.strftime('%Y%m%d%H%M%S')}.xlsx"
+        return send_file(output, mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+                         as_attachment=True, download_name=filename)
+    except Exception as e:
+        current_app.logger.error(f"Monthly commission Excel error: {e}")
         return jsonify({'success': False, 'error': 'Internal server error'}), 500
 
 
@@ -310,7 +411,7 @@ def export_transactions():
     except ValueError as e:
         return jsonify({'success': False, 'error': str(e)}), 400
     except Exception as e:
-        print(f"Error exporting transactions: {str(e)}")
+        current_app.logger.error(f"Error exporting transactions: {str(e)}")
         return jsonify({'success': False, 'error': 'Internal server error'}), 500
 
 
@@ -648,8 +749,7 @@ def get_dashboard_analytics():
             filters['commission_company_ids'] = all_ids
         
 
-        print(f"Dashboard analytics filters: {filters}")
-
+        
         result = transaction_service.get_dashboard_analytics(filters)
 
         if result['success']:
@@ -731,7 +831,6 @@ def export_commission_tills():
 
     except Exception as e:
         current_app.logger.error(f"Error exporting commission tills: {e}")
-        import traceback; traceback.print_exc()
         return jsonify({'error': str(e)}), 500
 
 
@@ -810,6 +909,20 @@ def get_commission_closing_balance():
         if not shortcode:
             return jsonify({'error': 'shortcode is required'}), 400
 
+        # Prefer Company.commission_balance — written directly from portal CSV export.
+        from app.model.company import Company
+        company = Company.query.filter_by(shortcode=shortcode).first()
+        if company and company.commission_balance is not None:
+            return jsonify({
+                'success': True,
+                'data': {
+                    'balance': float(company.commission_balance),
+                    'as_of': company.commission_balance_at.strftime('%Y-%m-%d %H:%M:%S') if company.commission_balance_at else None,
+                    'source': 'portal_snapshot',
+                }
+            }), 200
+
+        # Fallback: latest transaction ledger balance
         row = db.session.execute(
             text("""
                 SELECT t.balance, t.completion_time
@@ -832,7 +945,8 @@ def get_commission_closing_balance():
             'success': True,
             'data': {
                 'balance': float(row.balance),
-                'as_of': row.completion_time.strftime('%Y-%m-%d %H:%M:%S')
+                'as_of': row.completion_time.strftime('%Y-%m-%d %H:%M:%S'),
+                'source': 'transaction_ledger',
             }
         }), 200
     except Exception as e:
@@ -879,28 +993,53 @@ def get_commission_closing_balance_total():
             company_filter = f"WHERE c.id = ANY(:ids) AND {base_type_filter}"
             params = {'ids': ids}
 
-        row = db.session.execute(
-            text(f"""
-                SELECT
-                    COALESCE(SUM(latest.balance), 0) AS total_balance,
-                    COUNT(*) AS company_count
-                FROM (
-                    SELECT DISTINCT ON (c.id)
-                        t.balance
-                    FROM transactions t
-                    JOIN companies c ON t.company_id = c.id
-                    {company_filter}
-                    ORDER BY c.id, t.completion_time DESC, t.id DESC
-                ) latest
-            """),
-            params
-        ).fetchone()
+        # Use portal snapshot (commission_balance) when available per company,
+        # fall back to the latest transaction ledger balance otherwise.
+        if role in ('admin', 'administrator'):
+            companies = Company.query.all()
+        elif role == 'agent':
+            companies = Company.query.filter_by(agent_user_id=current_user_id).all()
+        else:
+            companies = Company.query.filter_by(user_id=current_user_id).all()
+
+        if not companies:
+            return jsonify({'success': True, 'data': {'balance': 0.0, 'company_count': 0}}), 200
+
+        shortcodes_needing_ledger = [
+            c.shortcode for c in companies
+            if c.commission_balance is None and c.shortcode
+        ]
+
+        snapshot_total = sum(
+            float(c.commission_balance)
+            for c in companies
+            if c.commission_balance is not None
+        )
+
+        ledger_total = 0.0
+        if shortcodes_needing_ledger:
+            ledger_row = db.session.execute(
+                text("""
+                    SELECT COALESCE(SUM(latest.balance), 0) AS total
+                    FROM (
+                        SELECT DISTINCT ON (t.business_shortcode)
+                            t.balance
+                        FROM transactions t
+                        WHERE t.transaction_type = 'commission'
+                          AND t.business_shortcode = ANY(:shortcodes)
+                          AND t.receipt_no NOT LIKE 'COMM-%'
+                        ORDER BY t.business_shortcode, t.completion_time DESC, t.id DESC
+                    ) latest
+                """),
+                {'shortcodes': shortcodes_needing_ledger}
+            ).fetchone()
+            ledger_total = float(ledger_row.total) if ledger_row else 0.0
 
         return jsonify({
             'success': True,
             'data': {
-                'balance': float(row.total_balance),
-                'company_count': int(row.company_count)
+                'balance': snapshot_total + ledger_total,
+                'company_count': len(companies),
             }
         }), 200
     except Exception as e:

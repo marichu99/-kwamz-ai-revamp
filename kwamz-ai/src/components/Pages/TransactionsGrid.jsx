@@ -27,6 +27,7 @@ import TransactionStatsModal from './TransactionStatsModal.jsx';
 import CommissionsReportModal from './CommissionsReportModal.jsx';
 import FraudReportModal from './FraudReportModal.jsx';
 import AgentPerformanceReportModal from './AgentPerformanceReportModal.jsx';
+import MonthlyCommissionReportModal from './MonthlyCommissionReportModal.jsx';
 
 function TransactionsGrid() {
     const [transactionsResponse, setTransactionsResponse] = useState({
@@ -41,6 +42,7 @@ function TransactionsGrid() {
     const [isCommissionsReportOpen, setIsCommissionsReportOpen] = useState(false);
     const [isFraudReportOpen, setIsFraudReportOpen] = useState(false);
     const [isAgentPerformanceReportOpen, setIsAgentPerformanceReportOpen] = useState(false);
+    const [isMonthlyCommissionOpen, setIsMonthlyCommissionOpen] = useState(false);
     const [isStatsModalOpen, setIsStatsModalOpen] = useState(false);
     const [isLoading, setIsLoading] = useState(false);
     const [currentPage, setCurrentPage] = useState(1);
@@ -421,6 +423,35 @@ function TransactionsGrid() {
         setIsDropdownOpen(false);
     };
 
+    // Export commission till balances to Excel
+    const handleExportCommissionTillsExcel = async () => {
+        setIsDropdownOpen(false);
+        try {
+            const token = localStorage.getItem('token');
+            const params = {};
+            if (tillUpdatedAfter) params.updated_after = tillUpdatedAfter;
+
+            const response = await axios.get(`${config.API_URL}/transactions/export-commission-tills`, {
+                headers: { Authorization: `Bearer ${token}` },
+                params,
+                responseType: 'blob',
+            });
+
+            const url = window.URL.createObjectURL(new Blob([response.data]));
+            const link = document.createElement('a');
+            link.href = url;
+            link.setAttribute('download', `commission_till_balances_${new Date().toISOString().slice(0, 10)}.xlsx`);
+            document.body.appendChild(link);
+            link.click();
+            link.remove();
+            window.URL.revokeObjectURL(url);
+            showToast('Commission balances exported to Excel', 'success');
+        } catch (error) {
+            console.error('Error exporting commission tills:', error.response?.data || error.message);
+            showToast('Failed to export commission tills', 'error');
+        }
+    };
+
     // Handle export transactions
     const handleExportTransactions = async () => {
         try {
@@ -716,6 +747,16 @@ function TransactionsGrid() {
                                         <Download className="w-4 h-4 mr-3" />
                                         Export to CSV
                                     </button>
+                                    {transactionType === 'commission' && (
+                                        <button
+                                            onClick={handleExportCommissionTillsExcel}
+                                            className="w-full flex items-center px-4 py-2 text-sm text-slate-800 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-600 transition-colors"
+                                            role="menuitem"
+                                        >
+                                            <FileText className="w-4 h-4 mr-3 text-green-600" />
+                                            Export Tills to Excel
+                                        </button>
+                                    )}
                                     <button
                                         onClick={() => setIsCommissionsReportOpen(true)}
                                         disabled={transactionType === 'float' ? true : false}
@@ -742,6 +783,15 @@ function TransactionsGrid() {
                                     >
                                         <TrendingUp className="w-4 h-4 mr-3 text-emerald-500" />
                                         Agent Performance Report
+                                    </button>
+                                    <button
+                                        onClick={() => { setIsMonthlyCommissionOpen(true); setIsDropdownOpen(false); }}
+                                        disabled={transactionType !== 'commission'}
+                                        className="w-full flex items-center px-4 py-2 text-sm text-slate-800 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-600 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                                        role="menuitem"
+                                    >
+                                        <BarChart3 className="w-4 h-4 mr-3 text-purple-500" />
+                                        Monthly Commission Rollup
                                     </button>
                                 </div>
                             </div>
@@ -1337,6 +1387,11 @@ function TransactionsGrid() {
             <AgentPerformanceReportModal
                 isOpen={isAgentPerformanceReportOpen}
                 onClose={() => setIsAgentPerformanceReportOpen(false)}
+            />
+
+            <MonthlyCommissionReportModal
+                isOpen={isMonthlyCommissionOpen}
+                onClose={() => setIsMonthlyCommissionOpen(false)}
             />
         </div>
     );
