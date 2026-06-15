@@ -1,5 +1,5 @@
 import logging
-from playwright.sync_api import sync_playwright,Page,Locator,Download, TimeoutError as PlaywrightTimeoutError
+from playwright.sync_api import sync_playwright, Page, Locator, Download, TimeoutError as PlaywrightTimeoutError, Error as PlaywrightError
 from flask import current_app
 from app.utils.script import fill_login_form, capture_and_solve_captcha
 from app.utils.email_utils import generate_scraping_report_email, send_scraping_report_email,send_session_timeout_email,send_not_active_short_code_,send_swaps_scraped_email
@@ -25,6 +25,8 @@ import base64
 import os
 import time
 import random
+import asyncio
+import threading
 import traceback
 import numpy as np
 
@@ -45,102 +47,183 @@ MAX_SEND_ATTEMPTS=3
 # Load environment variables
 load_dotenv()
 
-def login_to_mpesa(password: str = None, username: str = None, short_code: str = None, user_id_passed: str = None) -> None:
+def _start_cdp_screencast(page, job_id: str):
+    """
+    Open a CDP session on `page` and start streaming JPEG frames into the
+    StreamManager under `job_id`.  Returns the CDPSession so the caller can
+    stop it later.
+
+    IMPORTANT: `_on_frame` is invoked from Playwright's internal asyncio thread.
+    The sync cdp.send() wraps a greenlet switch back to the scraper OS thread,
+    which is blocked waiting for Playwright — deadlock.  We use asyncio.ensure_future()
+    on the async impl directly so the ACK stays entirely inside the asyncio loop.
+    """
+    from app.streaming.stream_manager import stream_manager
+
+    stream_manager.create(job_id)
+    cdp = page.context.new_cdp_session(page)
+
+    async def _ack_async(session_id):
+        try:
+            await cdp._impl_obj.send('Page.screencastFrameAck', {'sessionId': session_id})
+        except Exception:
+            pass
+
+    def _on_frame(event):
+        try:
+            jpeg = base64.b64decode(event['data'])
+            stream_manager.push_frame(job_id, jpeg)
+            logger.debug(f"Screencast frame pushed for job {job_id} ({len(jpeg)} bytes)")
+            # _on_frame is called from Playwright's internal asyncio thread.
+            # We must NOT call the sync cdp.send() here (it would try to
+            # greenlet-switch back to the scraper thread, which is blocked on
+            # a different operation — causing a deadlock or greenlet error).
+            # Instead, schedule the ACK coroutine directly on the running loop.
+            asyncio.ensure_future(_ack_async(event['sessionId']))
+        except Exception as exc:
+            logger.warning(f"Screencast frame drop: {exc}")
+
+    cdp.on('Page.screencastFrame', _on_frame)
+    cdp.send('Page.startScreencast', {
+        'format': 'jpeg',
+        'quality': 75,
+        'maxWidth': 1280,
+        'maxHeight': 720,
+        'everyNthFrame': 1,
+    })
+    logger.info(f"CDP screencast started for job {job_id}")
+    return cdp
+
+
+def login_to_mpesa(password: str = None, username: str = None, short_code: str = None, user_id_passed: str = None, job_id: str = None) -> None:
     global company_shortcode, user_id, user,till_scraping_shortfall,context,browser
-    password = password 
+    password = password
     # or os.getenv("AGENT_COMPANY_PASSWORD")
-    username = username 
+    username = username
     # or os.getenv("AGENT_COMPANY_USERNAME")
     user_id = user_id_passed
     user = User.query.filter_by(id=user_id)
-    
-    short_code = short_code 
+
+    short_code = short_code
     # or os.getenv("AGENT_COMPANY_SHORTCODE")
     company_shortcode = short_code
 
     till_scraping_shortfall = transaction_service.get_last_scraped_per_shortcode()
     url = "https://org.ke.m-pesa.com/#/login?transaction_service=https%3A%2F%2Forg.ke.m-pesa.com%2Forgportal%2Fv1%2Fsso%2Fhome"
 
-    with sync_playwright() as p:
-        browser = p.chromium.launch(
-            headless=False,
-            args=['--start-maximized']  # Use --start-maximized instead
-        )
-        
-        # Create context with no default viewport to use full screen
-        context = browser.new_context(no_viewport=True)
-        page = context.new_page()
-        
-        page.goto(url, timeout=600000)
-        time.sleep(3)
-        wait_after_click = 5  # seconds
-        
-        # Solve captcha initially — ensure solution looks valid (<= 4 chars)
-        captcha_solution = capture_and_solve_captcha(page)
-        fill_login_form(page, short_code, username, password)
-        logger.info("[INFO] Login form filled")
-        logger.info(f"[DEBUG] Initial captcha solution: {captcha_solution}")
+    from app.streaming.stream_manager import stream_manager
+    _cdp = None
 
-        while not _is_valid_captcha(captcha_solution):
-            captcha_solution = retry_captcha_login(page)
-            fill_login_form(page, short_code, username, password)
-            logger.info(f"[DEBUG] Retried captcha solution (validity fix): {captcha_solution}")
+    try:
+        with sync_playwright() as p:
+            browser = p.chromium.launch(
+                headless=False,
+                args=['--start-maximized']
+            )
 
-        # Submit loop: retry captcha if the server says it's wrong
-        MAX_CAPTCHA_RETRIES = 5
-        logged_in = False
+            # Create context with no default viewport to use full screen
+            context = browser.new_context(no_viewport=True)
+            page = context.new_page()
 
-        for attempt in range(1, MAX_CAPTCHA_RETRIES + 1):
-            # Guard: ensure exactly 4 digits before every login click
-            while not _is_valid_captcha(captcha_solution):
-                logger.warning(f"[DEBUG] Invalid captcha '{captcha_solution}' on attempt {attempt}, re-solving...")
-                captcha_solution = retry_captcha_login(page)
+            # Start live screencast if a job_id was provided
+            _cdp = _start_cdp_screencast(page, job_id) if job_id else None
 
-            logger.info(f"[INFO] Login attempt {attempt}/{MAX_CAPTCHA_RETRIES} with captcha: {captcha_solution}")
-
-            page.fill("//input[@id='verifyCode']", captcha_solution)
-            page.click("//button[@id='loginBtn']")
-            logger.info("[INFO] Login button clicked; waiting for response...")
-
-            # Brief pause to let error message appear before checking
+            page.goto(url, timeout=600000)
             time.sleep(3)
+            wait_after_click = 5  # seconds
 
-            if has_verification_error_regex(page):
-                logger.warning(f"[WARN] Captcha wrong on attempt {attempt}, re-solving...")
+            # Solve captcha initially — ensure solution looks valid (<= 4 chars)
+            captcha_solution = capture_and_solve_captcha(page)
+            fill_login_form(page, short_code, username, password)
+            logger.info("[INFO] Login form filled")
+            logger.info(f"[DEBUG] Initial captcha solution: {captcha_solution}")
+
+            while not _is_valid_captcha(captcha_solution):
                 captcha_solution = retry_captcha_login(page)
-                while not _is_valid_captcha(captcha_solution):
-                    captcha_solution = retry_captcha_login(page)
-                    logger.info(f"[DEBUG] Captcha re-solve (validity fix): {captcha_solution}")
-                continue
+                fill_login_form(page, short_code, username, password)
+                logger.info(f"[DEBUG] Retried captcha solution (validity fix): {captcha_solution}")
 
-            # No error shown — wait for the post-login dashboard element
-            try:
-                search = page.wait_for_selector(
-                    "(//i[@class='el-icon el-sub-menu__icon-arrow'])[1]",
-                    timeout=60000
-                )
-                search.click()
-                logger.info("[SUCCESS] Logged in successfully!")
-                logged_in = True
-                break
-            except PlaywrightTimeoutError:
-                # Dashboard didn't appear — check if error crept in after the sleep
+            # Submit loop: retry captcha if the server says it's wrong
+            MAX_CAPTCHA_RETRIES = 5
+            logged_in = False
+
+            for attempt in range(1, MAX_CAPTCHA_RETRIES + 1):
+                # Guard: ensure exactly 4 digits before every login click
+                while not _is_valid_captcha(captcha_solution):
+                    logger.warning(f"[DEBUG] Invalid captcha '{captcha_solution}' on attempt {attempt}, re-solving...")
+                    captcha_solution = retry_captcha_login(page)
+
+                logger.info(f"[INFO] Login attempt {attempt}/{MAX_CAPTCHA_RETRIES} with captcha: {captcha_solution}")
+
+                page.fill("//input[@id='verifyCode']", captcha_solution)
+                page.click("//button[@id='loginBtn']")
+                logger.info("[INFO] Login button clicked; waiting for response...")
+
+                # Brief pause to let error message appear before checking
+                time.sleep(3)
+
                 if has_verification_error_regex(page):
-                    logger.error(f"[WARN] Captcha error detected after waiting (attempt {attempt}), retrying...")
+                    logger.warning(f"[WARN] Captcha wrong on attempt {attempt}, re-solving...")
                     captcha_solution = retry_captcha_login(page)
                     while not _is_valid_captcha(captcha_solution):
                         captcha_solution = retry_captcha_login(page)
-                else:
-                    raise
+                        logger.info(f"[DEBUG] Captcha re-solve (validity fix): {captcha_solution}")
+                    continue
 
-        if not logged_in:
-            raise Exception(f"[ERROR] Failed to log in after {MAX_CAPTCHA_RETRIES} captcha attempts.")
+                # No error shown — wait for the post-login dashboard element.
+                # TargetClosedError means the portal closed/replaced the page during
+                # the post-login navigation; treat it the same as a timeout and retry.
+                try:
+                    search = page.wait_for_selector(
+                        "(//i[@class='el-icon el-sub-menu__icon-arrow'])[1]",
+                        timeout=60000
+                    )
+                    search.click()
+                    logger.info("[SUCCESS] Logged in successfully!")
+                    logged_in = True
+                    break
+                except PlaywrightTimeoutError:
+                    # Dashboard didn't appear — check if error crept in after the sleep
+                    if has_verification_error_regex(page):
+                        logger.error(f"[WARN] Captcha error detected after waiting (attempt {attempt}), retrying...")
+                        captcha_solution = retry_captcha_login(page)
+                        while not _is_valid_captcha(captcha_solution):
+                            captcha_solution = retry_captcha_login(page)
+                    else:
+                        raise
+                except PlaywrightError as exc:
+                    # Page/browser temporarily closed during the post-login navigation.
+                    # Give Playwright a moment to settle, then retry wait_for_selector.
+                    logger.warning(f"[WARN] Browser target closed on attempt {attempt}, waiting for navigation to settle: {exc}")
+                    time.sleep(2)
+                    try:
+                        search = page.wait_for_selector(
+                            "(//i[@class='el-icon el-sub-menu__icon-arrow'])[1]",
+                            timeout=60000
+                        )
+                        search.click()
+                        logger.info("[SUCCESS] Logged in successfully (after navigation settle)!")
+                        logged_in = True
+                        break
+                    except Exception as retry_exc:
+                        logger.error(f"[ERROR] Still failed after navigation settle: {retry_exc}")
+                        raise
 
-        logger.info("[INFO] Navigating to child organization page...")
-        navigate_to_child_organization(page)
+            if not logged_in:
+                raise Exception(f"[ERROR] Failed to log in after {MAX_CAPTCHA_RETRIES} captcha attempts.")
 
-        logger.info("[INFO] Browser will remain open for inspection. Press ENTER to close.")
-        # input()
+            logger.info("[INFO] Navigating to child organization page...")
+            navigate_to_child_organization(page)
+
+    finally:
+        # Always close the stream — regardless of where an exception was raised
+        if _cdp:
+            try:
+                _cdp.send('Page.stopScreencast')
+            except Exception:
+                pass
+        if job_id:
+            stream_manager.close(job_id)
 
 
 
@@ -150,9 +233,14 @@ def _is_valid_captcha(solution: str) -> bool:
 
 def has_verification_error_regex(page) -> bool:
     """Checks if the page contains a verification code error using regex."""
-    body_text = page.locator("body").inner_text()
-    pattern = re.compile(r"verification\s+code\s+is\s+incorrect\s+or\s+has\s+expired", re.IGNORECASE)
-    return bool(pattern.search(body_text))
+    try:
+        body_text = page.locator("body").inner_text()
+        pattern = re.compile(r"verification\s+code\s+is\s+incorrect\s+or\s+has\s+expired", re.IGNORECASE)
+        return bool(pattern.search(body_text))
+    except PlaywrightError:
+        # Page is navigating or the target closed — this means login succeeded
+        # and the portal is redirecting to the dashboard.  No captcha error.
+        return False
 
 def retry_captcha_login(page:Page) -> str:
     """
@@ -2655,11 +2743,7 @@ def scrape_head_office_commission(page: Page) -> bool:
 
         download = dl_info.value
         temp_path = download.path()
-        ext = os.path.splitext(download.suggested_filename)[1] or ".xlsx"
-        debug_path = f"transaction_export_debug_{company_shortcode}{ext}"
-        import shutil as _shutil
-        _shutil.copy2(temp_path, debug_path)
-        logger.info(f"[TIMING] Excel downloaded → {debug_path}: {_elapsed(t)}")
+        logger.info(f"[TIMING] Excel downloaded: {_elapsed(t)}")
 
         # Parse and persist directly from the Playwright temp file
         t = time.time()
@@ -4227,11 +4311,7 @@ def scrape_transaction_tab(page: Page, business_short_code: int) -> bool:
 
         download = dl_info.value
         temp_path = download.path()
-        ext = os.path.splitext(download.suggested_filename)[1] or ".xlsx"
-        debug_path = f"transaction_export_debug_{business_short_code}{ext}"
-        import shutil as _shutil
-        _shutil.copy2(temp_path, debug_path)
-        logger.info(f"[TIMING] Excel downloaded → {debug_path}: {_elapsed(t)}")
+        logger.info(f"[TIMING] Excel downloaded: {_elapsed(t)}")
 
         # Parse and persist directly from the Playwright temp file
         t = time.time()

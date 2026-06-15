@@ -260,19 +260,34 @@ def login_company():
     )
     db.session.add(job)
     db.session.commit()
+    # Capture the ID as a plain value now — after commit the ORM object is
+    # expired, and accessing job.id later (especially from a background thread)
+    # would trigger a lazy-load through the main-thread session, causing a
+    # concurrent-session error.
+    job_id = str(job.id)
 
     if os.getenv('USE_LOCAL_AUTOMATION', '').lower() == 'true':
         from app.utils.mpesa_automation import login_to_mpesa
+        import time as _time
+        from app.streaming.stream_manager import stream_manager
+        _t0 = _time.time()
+        _ts = lambda: _time.strftime('%H:%M:%S', _time.localtime()) + f'.{int((_time.time()%1)*1000):03d}'
+        logger.info(f"[CONTROLLER {_ts()}] pre-creating stream queue for job={job_id}")
+        stream_manager.create(job_id)
+        logger.info(f"[CONTROLLER {_ts()}] queue created, starting scraper thread")
         app = current_app._get_current_object()
         def run_local():
+            logger.info(f"[SCRAPER-THREAD {_ts()}] thread started for job={job_id}")
             with app.app_context():
                 login_to_mpesa(
                     password=password,
                     username=user_name,
                     short_code=short_code,
                     user_id_passed=current_user_id,
+                    job_id=job_id,
                 )
         threading.Thread(target=run_local, daemon=True).start()
+        logger.info(f"[CONTROLLER {_ts()}] returning job_id={job_id} to client")
         message = "Running automation locally on backend."
     else:
         message = "Scraping job queued. The desktop agent will process it shortly."
@@ -280,7 +295,7 @@ def login_company():
     return jsonify({
         "success": True,
         "message": message,
-        "job_id": job.id,
+        "job_id": job_id,
     })
 
 # Alternative route if you want to add company_id to PesapalPayment model

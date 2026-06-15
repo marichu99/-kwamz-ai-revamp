@@ -7,6 +7,7 @@ import { useToast } from './ToastProvider';
 import CompanyDetailsModal from './CompanyDetailsModal.jsx';
 import MpesaAccountLogin from './MpesaAccountLogin.jsx';
 import BatchUploadModal from './BatchUploadModal';
+import LiveScrapeFeed from '../LiveScrapeFeed.jsx';
 
 function CompanyList() {
   const [companies, setCompanies] = useState([]);
@@ -15,6 +16,11 @@ function CompanyList() {
   const [selectedCompanyIds, setSelectedCompanyIds] = useState([]);
   const [isCompanyModalOpen, setIsCompanyModalOpen] = useState(false);
   const [isMpesaLoginModalOpen, setIsMpesaModalLoginOpen] = useState(false);
+  const [liveJobId, setLiveJobId] = useState(null);
+  const [liveShortCode, setLiveShortCode] = useState(null);
+  const [isLiveFeedOpen, setIsLiveFeedOpen] = useState(false);
+  // Map<shortCode, jobId> — tracks every active stream regardless of which modal is open
+  const [activeStreams, setActiveStreams] = useState(new Map());
   const [isLoading, setIsLoading] = useState(false);
   const [currentPage, setCurrentPage] = useState(1);
   const [pageSize, setPageSize] = useState(10);
@@ -333,6 +339,14 @@ function CompanyList() {
   };
   const handleSubmitLoginCompany = async (formData, resetForm) => {
     setIsLoading(true);
+
+    // Close the login modal and open the live feed immediately so users see
+    // the "Starting…" state before the API even returns a job_id
+    setIsMpesaModalLoginOpen(false);
+    setLiveShortCode(formData.shortCode);
+    setLiveJobId(null);
+    setIsLiveFeedOpen(true);
+
     try {
       const token = localStorage.getItem('token');
       const url = `${config.API_URL}/company/login-company`;
@@ -348,6 +362,7 @@ function CompanyList() {
 
       const result = await res.json();
       if (result.error) {
+        setIsLiveFeedOpen(false);
         alert(result.error);
         return;
       }
@@ -356,12 +371,18 @@ function CompanyList() {
         throw new Error(result.error || `Failed to login to company`);
       }
 
-      setIsMpesaModalLoginOpen(false);
       setSelectedCompanyIds([]);
       resetForm();
-      showToast(`Login to company is successful!`, 'success');
+
+      if (result.job_id) {
+        setLiveJobId(result.job_id);
+        setActiveStreams(prev => new Map(prev).set(formData.shortCode, result.job_id));
+        showToast(`Scraping started!`, 'success');
+      }
     } catch (error) {
       console.error(`Error logging in to company:`, error.message);
+      setIsLiveFeedOpen(false);
+      setActiveStreams(prev => { const m = new Map(prev); m.delete(liveShortCode); return m; });
       showToast(error.message, 'error');
     } finally {
       setIsLoading(false);
@@ -536,6 +557,7 @@ function CompanyList() {
               <th className="px-4 py-3 font-semibold">Registration Number</th>
               <th className="px-4 py-3 font-semibold">Primary Owner</th>
               <th className="px-4 py-3 font-semibold">Short Code</th>
+              <th className="px-4 py-3 font-semibold">Live Feed</th>
             </tr>
           </thead>
           <tbody>
@@ -558,6 +580,29 @@ function CompanyList() {
                 <td className="px-4 py-3">{c.company_number}</td>
                 <td className="px-4 py-3">{c.primary_owner_name}</td>
                 <td className="px-4 py-3">{c.shortcode}</td>
+                <td className="px-4 py-3">
+                  {activeStreams.has(c.shortcode) ? (
+                    <button
+                      onClick={() => {
+                        setLiveJobId(activeStreams.get(c.shortcode));
+                        setLiveShortCode(c.shortcode);
+                        setIsLiveFeedOpen(true);
+                      }}
+                      className="flex items-center gap-2 group cursor-pointer"
+                      title="Watch live feed"
+                    >
+                      <span className="w-2.5 h-2.5 rounded-full shrink-0 bg-green-400 animate-pulse shadow-[0_0_6px_2px_rgba(74,222,128,0.55)]" />
+                      <span className="text-xs text-green-500 font-medium group-hover:underline">
+                        Live
+                      </span>
+                    </button>
+                  ) : (
+                    <span className="flex items-center gap-2">
+                      <span className="w-2.5 h-2.5 rounded-full shrink-0 bg-slate-300 dark:bg-slate-600" />
+                      <span className="text-xs text-slate-400">Idle</span>
+                    </span>
+                  )}
+                </td>
               </tr>
             ))}
           </tbody>
@@ -638,6 +683,18 @@ function CompanyList() {
         onSubmit={handleSubmitLoginCompany}
         isLoading={isLoading}
         company={selectedCompanyIds.length === 1 ? companies.find((c) => c.id === selectedCompanyIds[0]) : null}
+      />
+
+      {/* Live Scrape Feed */}
+      <LiveScrapeFeed
+        isOpen={isLiveFeedOpen}
+        jobId={liveJobId}
+        shortCode={liveShortCode}
+        onClose={() => setIsLiveFeedOpen(false)}
+        onStreamEnd={() => {
+          // Stream died — remove from active map so the dot goes grey
+          setActiveStreams(prev => { const m = new Map(prev); m.delete(liveShortCode); return m; });
+        }}
       />
     </div>
   );

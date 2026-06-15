@@ -164,6 +164,7 @@ def create_app():
     from app.controller.swap_controller import swap_bp
     from app.controller.verification_controller import verification_bp
     from app.controller.agent_controller import agent_bp
+    from app.controller.stream_controller import stream_bp
 
     app.register_blueprint(health_bp, url_prefix='/api')
     app.register_blueprint(user_bp, url_prefix='/api/users')
@@ -181,5 +182,6 @@ def create_app():
     app.register_blueprint(swap_bp, url_prefix='/api/swaps')
     app.register_blueprint(verification_bp, url_prefix='/api/verification')
     app.register_blueprint(agent_bp, url_prefix='/api/agent')
+    app.register_blueprint(stream_bp, url_prefix='/api/stream')
 
     return app
