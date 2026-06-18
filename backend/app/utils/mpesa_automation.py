@@ -32,6 +32,24 @@ import numpy as np
 
 logger = logging.getLogger(__name__)
 
+# Dedicated scraper log. Path can be overridden via SCRAPER_LOG_PATH env var
+# so it works both on bare metal and inside Docker.
+_default_log_path = os.path.normpath(
+    os.path.join(os.path.dirname(__file__), '..', '..', '..', 'logs', 'scraper.log')
+)
+_scraper_log_path = os.environ.get('SCRAPER_LOG_PATH', _default_log_path)
+try:
+    os.makedirs(os.path.dirname(_scraper_log_path), exist_ok=True)
+    if not any(isinstance(h, logging.FileHandler) and h.baseFilename == os.path.abspath(_scraper_log_path)
+               for h in logger.handlers):
+        _fh = logging.FileHandler(_scraper_log_path, encoding='utf-8')
+        _fh.setLevel(logging.INFO)
+        _fh.setFormatter(logging.Formatter('%(asctime)s [%(levelname)s] %(message)s', datefmt='%Y-%m-%d %H:%M:%S'))
+        logger.addHandler(_fh)
+except (PermissionError, OSError):
+    pass  # fall back to stdout/Docker logs only
+logger.propagate = True
+
 
 transaction_service = TransactionService()
 agent_company_service = AgentCompanyService()
@@ -80,6 +98,8 @@ def _start_cdp_screencast(page, job_id: str):
             # a different operation — causing a deadlock or greenlet error).
             # Instead, schedule the ACK coroutine directly on the running loop.
             asyncio.ensure_future(_ack_async(event['sessionId']))
+        except PlaywrightError:
+            pass  # browser already closed — frame drop is expected
         except Exception as exc:
             logger.warning(f"Screencast frame drop: {exc}")
 
@@ -118,15 +138,18 @@ def login_to_mpesa(password: str = None, username: str = None, short_code: str =
         with sync_playwright() as p:
             browser = p.chromium.launch(
                 headless=False,
-                args=['--start-maximized']
+                args=['--window-size=1920,1080', '--no-sandbox', '--disable-dev-shm-usage']
             )
 
-            # Create context with no default viewport to use full screen
-            context = browser.new_context(no_viewport=True)
+            # Create context with explicit viewport so it works on Xvfb and real displays
+            context = browser.new_context(viewport={'width': 1920, 'height': 1080})
             page = context.new_page()
 
             # Start live screencast if a job_id was provided
             _cdp = _start_cdp_screencast(page, job_id) if job_id else None
+            if job_id:
+                from app.streaming.stream_manager import otp_mailbox
+                otp_mailbox.register(job_id)
 
             page.goto(url, timeout=600000)
             time.sleep(3)
@@ -169,6 +192,14 @@ def login_to_mpesa(password: str = None, username: str = None, short_code: str =
                         captcha_solution = retry_captcha_login(page)
                         logger.info(f"[DEBUG] Captcha re-solve (validity fix): {captcha_solution}")
                     continue
+
+                # Check for OTP/2FA form — portal may require it after captcha
+                if _has_otp_form(page):
+                    logger.info("[INFO] OTP form detected after login click")
+                    if job_id:
+                        _type_otp_from_mailbox(page, job_id, timeout=120.0)
+                    else:
+                        logger.warning("[WARN] OTP form visible but no job_id — cannot receive OTP from UI")
 
                 # No error shown — wait for the post-login dashboard element.
                 # TargetClosedError means the portal closed/replaced the page during
@@ -217,11 +248,14 @@ def login_to_mpesa(password: str = None, username: str = None, short_code: str =
 
     finally:
         # Always close the stream — regardless of where an exception was raised
+        if job_id:
+            from app.streaming.stream_manager import otp_mailbox
+            otp_mailbox.unregister(job_id)
         if _cdp:
             try:
                 _cdp.send('Page.stopScreencast')
-            except Exception:
-                pass
+            except (PlaywrightError, Exception):
+                pass  # browser already closed — safe to ignore
         if job_id:
             stream_manager.close(job_id)
 
@@ -230,6 +264,45 @@ def login_to_mpesa(password: str = None, username: str = None, short_code: str =
 def _is_valid_captcha(solution: str) -> bool:
     """Return True only when the captcha solution is exactly 4 numeric digits."""
     return bool(re.match(r'^\d{4}$', solution.strip()))
+
+
+def _has_otp_form(page) -> bool:
+    """Return True if the portal's OTP form is currently visible."""
+    try:
+        return page.locator('form#OTP-form').is_visible()
+    except PlaywrightError:
+        return False
+
+
+def _type_otp_from_mailbox(page, job_id: str, timeout: float = 120.0) -> bool:
+    """
+    Block (in the scraper thread) until an OTP arrives on the mailbox for
+    this job, then type it digit-by-digit into the portal's OTP form.
+    Returns True on success, False on timeout or missing form.
+    """
+    from app.streaming.stream_manager import otp_mailbox
+    logger.info(f"[OTP] Waiting for OTP from frontend (job={job_id}, timeout={timeout}s)…")
+    otp = otp_mailbox.get(job_id, timeout=timeout)
+    if not otp:
+        logger.error(f"[OTP] Timed out waiting for OTP (job={job_id})")
+        return False
+    logger.info(f"[OTP] OTP received for job={job_id}, typing into form…")
+    try:
+        for i, digit in enumerate(otp):
+            loc = page.locator(f'form#OTP-form input[data-index="{i}"]')
+            loc.wait_for(state='visible', timeout=5000)
+            loc.click()
+            loc.press_sequentially(digit, delay=50)
+            time.sleep(0.05)
+        logger.info(f"[OTP] OTP typed successfully for job={job_id}, clicking confirm…")
+        confirm = page.locator("//button[@class='el-button el-button--primary']").first
+        confirm.wait_for(state='visible', timeout=5000)
+        confirm.click()
+        logger.info(f"[OTP] Confirm button clicked for job={job_id}")
+        return True
+    except PlaywrightError as exc:
+        logger.error(f"[OTP] Error typing OTP for job={job_id}: {exc}")
+        return False
 
 def has_verification_error_regex(page) -> bool:
     """Checks if the page contains a verification code error using regex."""
@@ -331,9 +404,6 @@ def _scrap_swaps_(page: Page, shortcodes: Set[str]) -> None:
     """
     from app.model.swap_scrape_log import SwapScrapeLog
 
-    debug_dir = os.path.join(os.path.dirname(__file__), "..", "..", "debug_exports", "swaps")
-    os.makedirs(debug_dir, exist_ok=True)
-
     # ── Daily dedup: skip shortcodes already scraped today ───────────────────
     pending_shortcodes = {sc for sc in shortcodes if not SwapScrapeLog.already_scraped_today(sc)}
     skipped_count = len(shortcodes) - len(pending_shortcodes)
@@ -343,19 +413,28 @@ def _scrap_swaps_(page: Page, shortcodes: Set[str]) -> None:
         logger.info("[SWAPS] All shortcodes have been scraped today. Nothing to do.")
         return
 
-    # ── Step 1: hover over the active sub-menu to reveal the search panel ───
-    logger.info("[SWAPS] Hovering over active sub-menu...")
-    sub_menu = page.wait_for_selector(
-        "//li[@class='el-sub-menu is-active']//div[@class='el-sub-menu__title el-tooltip__trigger el-tooltip__trigger']",
+    # ── Step 1: open sidebar flyout, then hover over the active sub-menu ────
+    logger.info("[SWAPS] Opening sidebar flyout...")
+    sidebar_icon = page.wait_for_selector(
+        "(//*[name()='svg'][@class='svg-icon'])[2]",
         timeout=30000,
     )
-    sub_menu.hover()
+    sidebar_icon.hover()
+    page.wait_for_timeout(800)
+
+    logger.info("[SWAPS] Clicking active sub-menu to expand it...")
+    sub_menu = page.wait_for_selector(
+        "//li[contains(@class,'el-sub-menu') and contains(@class,'is-active')]"
+        "//div[contains(@class,'el-sub-menu__title')]",
+        timeout=15000,
+    )
+    sub_menu.click()
     page.wait_for_timeout(1000)
 
     # ── Step 2: click the 'Organization Operator' tab ────────────────────────
     logger.info("[SWAPS] Clicking 'Organization Operator'...")
     org_op_tab = page.wait_for_selector(
-        "//span[@class='number-title el-tooltip__trigger el-tooltip__trigger'][normalize-space()='Organization Operator']",
+        "//span[contains(@class,'number-title')][normalize-space()='Organization Operator']",
         timeout=30000,
     )
     org_op_tab.click()
@@ -433,8 +512,6 @@ def _scrap_swaps_(page: Page, shortcodes: Set[str]) -> None:
                     detail_btn.click()
                     page.wait_for_timeout(3000)
 
-                    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-
                     # Capture Basic Info section
                     basic_info_html = ""
                     try:
@@ -452,13 +529,6 @@ def _scrap_swaps_(page: Page, shortcodes: Set[str]) -> None:
                         if swap_date is None and idx < len(scraped_ops) and scraped_ops[idx]["is_active"] and reg_time:
                             swap_date = reg_time
                             logger.info(f"[SWAPS] Row {idx + 1}: swap_date set → {swap_date.date()}")
-                        # Save debug file
-                        debug_path = os.path.join(debug_dir, f"swaps_{shortcode}_row{idx + 1}_{ts}.html")
-                        with open(debug_path, "w", encoding="utf-8") as f:
-                            f.write(f"<!-- shortcode={shortcode} row={idx + 1} captured={ts} -->\n")
-                            f.write("<section id='basic-info'>\n")
-                            f.write(basic_info_html)
-                            f.write("\n</section>\n")
                     except Exception as bi_err:
                         logger.warning(f"[SWAPS][WARN] Row {idx + 1}: basic-info not found — {bi_err}")
 
@@ -474,12 +544,6 @@ def _scrap_swaps_(page: Page, shortcodes: Set[str]) -> None:
                         kyc_detail = _parse_kyc_details(kyc_html)
                         row_details.setdefault(idx, {}).update(kyc_detail)
                         logger.info(f"[SWAPS] Row {idx + 1}: id={kyc_detail.get('id_number')} phone={kyc_detail.get('phone_number')}")
-                        # Append KYC section to same debug file
-                        debug_path = os.path.join(debug_dir, f"swaps_{shortcode}_row{idx + 1}_{ts}.html")
-                        with open(debug_path, "a", encoding="utf-8") as f:
-                            f.write("<section id='kyc-form'>\n")
-                            f.write(kyc_html)
-                            f.write("\n</section>\n")
                     except Exception as kyc_err:
                         logger.warning(f"[SWAPS][WARN] Row {idx + 1}: KYC panel not found — {kyc_err}")                        
 
@@ -1484,19 +1548,6 @@ def save_table_to_dataframe_download_head_office(
         logger.info(f"[EXPORT] Reading {download.suggested_filename} directly into pandas...")
         temp_path = download.path()
 
-        # Save a debug copy so we can inspect the raw file if parsing fails
-        try:
-            import shutil, datetime as _dt
-            debug_dir = os.path.join(os.path.dirname(__file__), "..", "..", "debug_exports")
-            os.makedirs(debug_dir, exist_ok=True)
-            ext = os.path.splitext(download.suggested_filename)[1] or ".xlsx"
-            ts = _dt.datetime.now().strftime("%Y%m%d_%H%M%S")
-            debug_path = os.path.join(debug_dir, f"head_office_{business_shortcode}_{ts}{ext}")
-            shutil.copy2(temp_path, debug_path)
-            logger.info(f"[DEBUG] Raw export saved to: {debug_path}")
-        except Exception as _e:
-            logger.warning(f"[DEBUG] Could not save debug copy: {_e}")
-
         # M-PESA sometimes returns a JSON error payload instead of a spreadsheet.
         # Detect this before handing the file to pandas.
         try:
@@ -1957,11 +2008,8 @@ def go_forth_on_organization(page: Page, row_count: int):
         if user:
             # send_session_timeout_email(user.email, user.first_name)
             send_session_timeout_email(user.email)
-            # context.close()
-            # browser.close()
-        page.screenshot(path="pagination_error.png")
         return False
-        
+
 def go_previous_on_organisation(page: Page):
     """
     Clicks 'Next Page' if available. Returns True/False indicating if more pages exist.
@@ -1981,9 +2029,8 @@ def go_previous_on_organisation(page: Page):
 
     except Exception as e:
         logger.error(f"[WARNING] Error clicking previous page: {e}")
-        page.screenshot(path="pagination_error.png")
         return False
-    
+
 def rerun_failed_codes(page: Page, failed_codes: List[int], max_retries: int = 2) -> bool:
     """
     Reprocess only the business_short_codes that previously failed.

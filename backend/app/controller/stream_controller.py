@@ -1,5 +1,6 @@
 import logging
-from flask import Blueprint, Response, stream_with_context
+from flask import Blueprint, Response, stream_with_context, request, jsonify
+from flask_jwt_extended import jwt_required
 
 logger = logging.getLogger(__name__)
 
@@ -35,3 +36,26 @@ def mjpeg_stream(job_id: str):
             'X-Accel-Buffering': 'no',
         },
     )
+
+
+@stream_bp.route('/<job_id>/otp', methods=['POST'])
+@jwt_required()
+def submit_otp(job_id: str):
+    """
+    Deposit a 6-digit OTP into the mailbox for this job.
+    The scraper thread (which owns the Playwright page) collects it and
+    types it — this avoids the greenlet cross-thread restriction.
+    """
+    data = request.get_json(silent=True) or {}
+    otp = str(data.get('otp', ''))
+
+    if len(otp) != 6 or not otp.isdigit():
+        return jsonify({'error': 'OTP must be exactly 6 digits'}), 400
+
+    from app.streaming.stream_manager import otp_mailbox
+    ok = otp_mailbox.put(job_id, otp)
+    if not ok:
+        return jsonify({'error': 'No active browser session for this job'}), 404
+
+    logger.info(f"[STREAM-OTP] OTP deposited for job={job_id}")
+    return jsonify({'ok': True})

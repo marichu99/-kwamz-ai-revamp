@@ -6,17 +6,19 @@ export DISPLAY=:99
 # Start Xvfb for headless=False support if not using host display
 if [ "$USE_HOST_DISPLAY" != "true" ]; then
     echo "Starting virtual display on $DISPLAY..."
+    # Clean up any stale lock/socket files from a previous container run
+    rm -f /tmp/.X99-lock /tmp/.X11-unix/X99 2>/dev/null || true
+
     Xvfb $DISPLAY -screen 0 1920x1080x24 -ac +extension GLX +render -noreset &
     XVFB_PID=$!
-    
-    # Wait for Xvfb to be ready
+
     sleep 2
-    
-    # Check if Xvfb started successfully
-    if ! ps -p $XVFB_PID > /dev/null; then
-        echo "Warning: Xvfb failed to start. Headless mode may not work properly."
-    else
+
+    # Use kill -0 instead of ps (ps not available in slim image)
+    if kill -0 $XVFB_PID 2>/dev/null; then
         echo "Xvfb started successfully (PID: $XVFB_PID)"
+    else
+        echo "Warning: Xvfb failed to start. Headless mode may not work properly."
     fi
 else
     echo "Using host display: $DISPLAY"

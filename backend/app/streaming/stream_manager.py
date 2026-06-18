@@ -48,22 +48,25 @@ class StreamManager:
             except (queue.Empty, queue.Full):
                 pass
 
-    def consume(self, job_id: str):
+    def consume(self, job_id: str, wait_timeout: float = 10.0):
         """
         Generator that yields JPEG frames for the given job.
         Exits when the stream is closed (sentinel None) or after a 120 s idle timeout.
+        Waits up to `wait_timeout` seconds for the queue to be created.
         """
-        with self._lock:
-            q = self._streams.get(job_id)
+        deadline = time.time() + wait_timeout
+        q = None
+        while time.time() < deadline:
+            with self._lock:
+                q = self._streams.get(job_id)
+            if q is not None:
+                break
+            time.sleep(0.1)
 
         if q is None:
-            # ── RACE CONDITION PROOF ──────────────────────────────────────────
-            # The browser connected to /api/stream/<job_id> BEFORE the scraper
-            # thread called stream_manager.create().  Without the pre-create in
-            # the controller this path fires every time, causing a blank stream.
             logger.error(
-                f"[STREAM {_ts()}] CONSUMER ARRIVED BUT QUEUE IS MISSING — "
-                f"race condition! job={job_id}"
+                f"[STREAM {_ts()}] CONSUMER ARRIVED BUT QUEUE IS MISSING after "
+                f"{wait_timeout}s — job={job_id}"
             )
             return
 
@@ -101,3 +104,54 @@ class StreamManager:
 
 
 stream_manager = StreamManager()
+
+
+class OtpMailbox:
+    """
+    Per-job OTP channel.  The Flask request thread deposits an OTP via put();
+    the Playwright scraper thread (which owns the page) collects it via get()
+    and does the actual typing.  This avoids the greenlet cross-thread error
+    that occurs when Flask tries to call Playwright's sync API directly.
+    """
+
+    def __init__(self):
+        self._queues: dict = {}
+        self._lock = threading.Lock()
+
+    def register(self, job_id: str) -> None:
+        with self._lock:
+            self._queues[job_id] = queue.Queue(maxsize=1)
+        logger.info(f"[OTP-MAILBOX] registered job={job_id}")
+
+    def put(self, job_id: str, otp: str) -> bool:
+        """Returns False if the job is unknown or the mailbox already has an OTP."""
+        with self._lock:
+            q = self._queues.get(job_id)
+        if q is None:
+            return False
+        try:
+            q.put_nowait(otp)
+            logger.info(f"[OTP-MAILBOX] OTP deposited for job={job_id}")
+            return True
+        except queue.Full:
+            logger.warning(f"[OTP-MAILBOX] mailbox full for job={job_id} — OTP dropped")
+            return False
+
+    def get(self, job_id: str, timeout: float = 120.0) -> str | None:
+        """Block in the scraper thread until an OTP arrives or timeout expires."""
+        with self._lock:
+            q = self._queues.get(job_id)
+        if q is None:
+            return None
+        try:
+            return q.get(timeout=timeout)
+        except queue.Empty:
+            return None
+
+    def unregister(self, job_id: str) -> None:
+        with self._lock:
+            self._queues.pop(job_id, None)
+        logger.info(f"[OTP-MAILBOX] unregistered job={job_id}")
+
+
+otp_mailbox = OtpMailbox()

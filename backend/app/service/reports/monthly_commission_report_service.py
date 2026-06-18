@@ -111,10 +111,13 @@ class MonthlyCommissionReportService:
             return year - 1, 12
         return year, month - 1
 
-    def generate_report(self, year, month, company_id=None):
+    def generate_report(self, year, month, company_id=None, company_ids=None):
         company_shortcodes = None
         if company_id:
             acs = AgentCompany.query.filter_by(company_id=company_id).all()
+            company_shortcodes = {ac.short_code for ac in acs if ac.short_code}
+        elif company_ids is not None:
+            acs = AgentCompany.query.filter(AgentCompany.company_id.in_(company_ids)).all()
             company_shortcodes = {ac.short_code for ac in acs if ac.short_code}
 
         tills = self._rollups_for_month(year, month, company_shortcodes)

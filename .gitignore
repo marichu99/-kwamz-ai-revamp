@@ -1,3 +1,8 @@
 
-# Debug export files generated during scraping
+# Debug/temp files generated during scraping
 backend/debug_exports/
+backend/processed_transactions/
+backend/transaction_export_debug_*.xlsx
+backend/pagination_error.png
+logs/
+.pids

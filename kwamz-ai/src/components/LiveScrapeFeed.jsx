@@ -1,6 +1,116 @@
-import { useState, useRef, useEffect } from 'react';
+import { useState, useRef, useEffect, useCallback } from 'react';
 import { X, Wifi, WifiOff, Maximize2, Minimize2, ChevronUp } from 'lucide-react';
+import axios from 'axios';
 import config from '../Config';
+
+const OTP_LEN = 6;
+
+function OtpDock({ jobId }) {
+  const [digits, setDigits] = useState(Array(OTP_LEN).fill(''));
+  const [state, setState] = useState('idle'); // idle | submitting | ok | error | gone
+  const [errMsg, setErrMsg] = useState('');
+  const inputRefs = useRef(Array.from({ length: OTP_LEN }, () => null));
+
+  const reset = useCallback(() => {
+    setDigits(Array(OTP_LEN).fill(''));
+    setState('idle');
+    setErrMsg('');
+    inputRefs.current[0]?.focus();
+  }, []);
+
+  const submit = useCallback(async (otp) => {
+    setState('submitting');
+    try {
+      const token = localStorage.getItem('token');
+      await axios.post(
+        `${config.API_URL}/stream/${jobId}/otp`,
+        { otp },
+        { headers: { Authorization: `Bearer ${token}` } }
+      );
+      setState('ok');
+      // Fade out then unmount after 1.5 s
+      setTimeout(() => setState('gone'), 1500);
+    } catch (err) {
+      setErrMsg(err?.response?.data?.error || 'Failed to submit OTP');
+      setState('error');
+      setTimeout(reset, 3000);
+    }
+  }, [jobId, reset]);
+
+  if (state === 'gone') return null;
+
+  const handleChange = (idx, val) => {
+    if (!/^\d?$/.test(val)) return;
+    const next = [...digits];
+    next[idx] = val;
+    setDigits(next);
+    if (val && idx < OTP_LEN - 1) inputRefs.current[idx + 1]?.focus();
+    if (next.every(d => d !== '')) submit(next.join(''));
+  };
+
+  const handleKeyDown = (idx, e) => {
+    if (e.key === 'Backspace' && !digits[idx] && idx > 0) {
+      inputRefs.current[idx - 1]?.focus();
+    }
+    if (e.key === 'ArrowLeft' && idx > 0) inputRefs.current[idx - 1]?.focus();
+    if (e.key === 'ArrowRight' && idx < OTP_LEN - 1) inputRefs.current[idx + 1]?.focus();
+  };
+
+  const handlePaste = (e) => {
+    e.preventDefault();
+    const pasted = e.clipboardData.getData('text').replace(/\D/g, '').slice(0, OTP_LEN);
+    if (!pasted) return;
+    const next = Array(OTP_LEN).fill('');
+    [...pasted].forEach((ch, i) => { next[i] = ch; });
+    setDigits(next);
+    const focusIdx = Math.min(pasted.length, OTP_LEN - 1);
+    inputRefs.current[focusIdx]?.focus();
+    if (pasted.length === OTP_LEN) submit(pasted);
+  };
+
+  const statusColor =
+    state === 'ok'         ? 'text-emerald-400' :
+    state === 'error'      ? 'text-red-400' :
+    state === 'submitting' ? 'text-slate-400' : 'text-slate-500';
+
+  const statusText =
+    state === 'ok'         ? 'OTP sent ✓' :
+    state === 'error'      ? errMsg :
+    state === 'submitting' ? 'Sending…' : 'Enter OTP if prompted';
+
+  return (
+    <div
+      className="flex flex-col items-center gap-2 py-3 px-4 bg-slate-900 border-t border-slate-800 transition-opacity duration-700"
+      style={{ opacity: state === 'ok' ? 0 : 1 }}
+    >
+      <p className={`text-xs font-mono ${statusColor} transition-colors`}>{statusText}</p>
+      <div className="flex items-center gap-2">
+        {Array.from({ length: OTP_LEN }).map((_, i) => (
+          <input
+            key={i}
+            ref={el => { inputRefs.current[i] = el; }}
+            type="text"
+            inputMode="numeric"
+            maxLength={1}
+            value={digits[i]}
+            disabled={state === 'submitting' || state === 'ok'}
+            onChange={e => handleChange(i, e.target.value)}
+            onKeyDown={e => handleKeyDown(i, e)}
+            onPaste={handlePaste}
+            className={`
+              w-10 h-12 text-center text-lg font-mono font-bold rounded-lg border
+              bg-slate-800 text-white caret-emerald-400 outline-none
+              transition-all duration-150
+              ${digits[i] ? 'border-emerald-500' : 'border-slate-600'}
+              focus:border-emerald-400 focus:ring-1 focus:ring-emerald-400/40
+              disabled:opacity-40 disabled:cursor-not-allowed
+            `}
+          />
+        ))}
+      </div>
+    </div>
+  );
+}
 
 function LiveScrapeFeed({ jobId, shortCode, isOpen, onClose, onStreamEnd }) {
   const [status, setStatus] = useState('waiting');
@@ -144,9 +254,9 @@ function LiveScrapeFeed({ jobId, shortCode, isOpen, onClose, onStreamEnd }) {
             </button>
 
             <button
-              onClick={onClose}
+              onClick={() => setMinimized(true)}
               className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-700 transition-colors"
-              title="Close"
+              title="Minimise to tray"
             >
               <X className="w-4 h-4" />
             </button>
@@ -195,6 +305,9 @@ function LiveScrapeFeed({ jobId, shortCode, isOpen, onClose, onStreamEnd }) {
             </div>
           )}
         </div>
+
+        {/* ── OTP dock ── */}
+        {jobId && <OtpDock jobId={jobId} />}
 
         {/* ── Footer ── */}
         <div className="flex items-center justify-between px-4 py-2 bg-slate-900 border-t border-slate-800 shrink-0">

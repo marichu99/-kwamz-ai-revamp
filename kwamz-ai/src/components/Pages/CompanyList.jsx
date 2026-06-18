@@ -7,7 +7,7 @@ import { useToast } from './ToastProvider';
 import CompanyDetailsModal from './CompanyDetailsModal.jsx';
 import MpesaAccountLogin from './MpesaAccountLogin.jsx';
 import BatchUploadModal from './BatchUploadModal';
-import LiveScrapeFeed from '../LiveScrapeFeed.jsx';
+import { useLiveFeed } from '../../context/LiveFeedContext.jsx';
 
 function CompanyList() {
   const [companies, setCompanies] = useState([]);
@@ -16,10 +16,7 @@ function CompanyList() {
   const [selectedCompanyIds, setSelectedCompanyIds] = useState([]);
   const [isCompanyModalOpen, setIsCompanyModalOpen] = useState(false);
   const [isMpesaLoginModalOpen, setIsMpesaModalLoginOpen] = useState(false);
-  const [liveJobId, setLiveJobId] = useState(null);
-  const [liveShortCode, setLiveShortCode] = useState(null);
-  const [isLiveFeedOpen, setIsLiveFeedOpen] = useState(false);
-  // Map<shortCode, jobId> — tracks every active stream regardless of which modal is open
+  const { startFeed, closeFeed } = useLiveFeed();
   const [activeStreams, setActiveStreams] = useState(new Map());
   const [isLoading, setIsLoading] = useState(false);
   const [currentPage, setCurrentPage] = useState(1);
@@ -343,9 +340,7 @@ function CompanyList() {
     // Close the login modal and open the live feed immediately so users see
     // the "Starting…" state before the API even returns a job_id
     setIsMpesaModalLoginOpen(false);
-    setLiveShortCode(formData.shortCode);
-    setLiveJobId(null);
-    setIsLiveFeedOpen(true);
+    startFeed(null, formData.shortCode);
 
     try {
       const token = localStorage.getItem('token');
@@ -362,7 +357,7 @@ function CompanyList() {
 
       const result = await res.json();
       if (result.error) {
-        setIsLiveFeedOpen(false);
+        closeFeed();
         alert(result.error);
         return;
       }
@@ -375,14 +370,14 @@ function CompanyList() {
       resetForm();
 
       if (result.job_id) {
-        setLiveJobId(result.job_id);
+        startFeed(result.job_id, formData.shortCode);
         setActiveStreams(prev => new Map(prev).set(formData.shortCode, result.job_id));
         showToast(`Scraping started!`, 'success');
       }
     } catch (error) {
       console.error(`Error logging in to company:`, error.message);
-      setIsLiveFeedOpen(false);
-      setActiveStreams(prev => { const m = new Map(prev); m.delete(liveShortCode); return m; });
+      closeFeed();
+      setActiveStreams(prev => { const m = new Map(prev); m.delete(formData.shortCode); return m; });
       showToast(error.message, 'error');
     } finally {
       setIsLoading(false);
@@ -583,11 +578,7 @@ function CompanyList() {
                 <td className="px-4 py-3">
                   {activeStreams.has(c.shortcode) ? (
                     <button
-                      onClick={() => {
-                        setLiveJobId(activeStreams.get(c.shortcode));
-                        setLiveShortCode(c.shortcode);
-                        setIsLiveFeedOpen(true);
-                      }}
+                      onClick={() => startFeed(activeStreams.get(c.shortcode), c.shortcode)}
                       className="flex items-center gap-2 group cursor-pointer"
                       title="Watch live feed"
                     >
@@ -685,17 +676,6 @@ function CompanyList() {
         company={selectedCompanyIds.length === 1 ? companies.find((c) => c.id === selectedCompanyIds[0]) : null}
       />
 
-      {/* Live Scrape Feed */}
-      <LiveScrapeFeed
-        isOpen={isLiveFeedOpen}
-        jobId={liveJobId}
-        shortCode={liveShortCode}
-        onClose={() => setIsLiveFeedOpen(false)}
-        onStreamEnd={() => {
-          // Stream died — remove from active map so the dot goes grey
-          setActiveStreams(prev => { const m = new Map(prev); m.delete(liveShortCode); return m; });
-        }}
-      />
     </div>
   );
 }

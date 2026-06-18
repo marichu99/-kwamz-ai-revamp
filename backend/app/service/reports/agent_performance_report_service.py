@@ -78,10 +78,12 @@ class AgentPerformanceReportService:
     # Helpers
     # ──────────────────────────────────────────────
 
-    def _get_agent_companies(self, company_id=None):
+    def _get_agent_companies(self, company_id=None, company_ids=None):
         q = AgentCompany.query
         if company_id:
             q = q.filter(AgentCompany.company_id == company_id)
+        elif company_ids is not None:
+            q = q.filter(AgentCompany.company_id.in_(company_ids))
         return q.all()
 
     def _float_balance_map(self):
@@ -186,9 +188,9 @@ class AgentPerformanceReportService:
     # Section 1 – Top commission earners
     # ──────────────────────────────────────────────
 
-    def _top_commission_earners(self, start_dt, end_dt, company_id, limit=10):
+    def _top_commission_earners(self, start_dt, end_dt, company_id, limit=10, company_ids=None):
         try:
-            agent_companies = self._get_agent_companies(company_id)
+            agent_companies = self._get_agent_companies(company_id, company_ids)
             comm_map = self._commission_map(start_dt, end_dt)
             dw_map = self._deposit_withdrawal_map(start_dt, end_dt)
             float_map = self._float_balance_map()
@@ -224,9 +226,9 @@ class AgentPerformanceReportService:
     # ──────────────────────────────────────────────
 
     def _below_threshold_agents(self, start_dt, end_dt, company_id,
-                                 commission_threshold, float_threshold):
+                                 commission_threshold, float_threshold, company_ids=None):
         try:
-            agent_companies = self._get_agent_companies(company_id)
+            agent_companies = self._get_agent_companies(company_id, company_ids)
             comm_map = self._commission_map(start_dt, end_dt)
             float_map = self._float_balance_map()
 
@@ -280,7 +282,7 @@ class AgentPerformanceReportService:
     # ──────────────────────────────────────────────
 
     def _fraud_flagged_agents(self, start_dt, end_dt, company_id,
-                               max_per_category=5, max_findings_per_cat=20):
+                               max_per_category=5, max_findings_per_cat=20, company_ids=None):
         """
         Reuse FraudReportService and filter to our three categories.
         """
@@ -292,6 +294,7 @@ class AgentPerformanceReportService:
                 end_date=end_dt.strftime('%Y-%m-%d'),
                 date_range='custom',
                 company_id=company_id,
+                company_ids=company_ids,
             )
             all_findings = fraud_report.get('findings', [])
 
@@ -328,14 +331,15 @@ class AgentPerformanceReportService:
     def generate_report(self, start_date, end_date, date_range,
                         company_id=None,
                         commission_threshold=5000.0,
-                        float_threshold=50000.0):
+                        float_threshold=50000.0,
+                        company_ids=None):
         start_dt, end_dt, start_d, end_d = self._parse_dates(start_date, end_date, date_range)
 
-        top_earners = self._top_commission_earners(start_dt, end_dt, company_id)
+        top_earners = self._top_commission_earners(start_dt, end_dt, company_id, company_ids=company_ids)
         below_threshold = self._below_threshold_agents(
-            start_dt, end_dt, company_id, commission_threshold, float_threshold
+            start_dt, end_dt, company_id, commission_threshold, float_threshold, company_ids=company_ids
         )
-        fraud_flagged = self._fraud_flagged_agents(start_dt, end_dt, company_id)
+        fraud_flagged = self._fraud_flagged_agents(start_dt, end_dt, company_id, company_ids=company_ids)
 
         return {
             'period': f"{start_d.strftime('%d %b %Y')} — {end_d.strftime('%d %b %Y')}",

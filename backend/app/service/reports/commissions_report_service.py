@@ -13,7 +13,7 @@ class CommissionReportService:
     
     def generate_report(self, start_date=None, end_date=None, date_range='custom',
                        transaction_type='commission', reason_type=None, transaction_status=None,
-                       company_id=None):
+                       company_id=None, company_ids=None):
         """
         Generate comprehensive commission report
         """
@@ -24,7 +24,7 @@ class CommissionReportService:
 
         # Get commission transactions
         commission_transactions = self._get_commission_transactions(
-            start_date_obj, end_date_obj, reason_type, transaction_status, company_id
+            start_date_obj, end_date_obj, reason_type, transaction_status, company_id, company_ids
         )
         
         if not commission_transactions:
@@ -48,7 +48,7 @@ class CommissionReportService:
         return report
     
     def _get_commission_transactions(self, start_date, end_date, reason_type=None,
-                                      transaction_status=None, company_id=None):
+                                      transaction_status=None, company_id=None, company_ids=None):
         """Get commission transactions with filters"""
         query = Transaction.query.filter(
             Transaction.transaction_type == 'commission',
@@ -58,6 +58,8 @@ class CommissionReportService:
 
         if company_id:
             query = query.filter(Transaction.company_id == company_id)
+        elif company_ids is not None:
+            query = query.filter(Transaction.company_id.in_(company_ids))
 
         if reason_type:
             query = query.filter(Transaction.reason_type == reason_type)

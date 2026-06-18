@@ -207,7 +207,7 @@ function TransactionsGrid() {
                 if (!params[key]) delete params[key];
             });
 
-            const response = await axios.get(`${config.API_URL}/transactions`, {
+            const response = await axios.get(`${config.API_URL}/transactions/`, {
                 headers: { Authorization: `Bearer ${token}` },
                 params
             });

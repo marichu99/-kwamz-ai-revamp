@@ -35,60 +35,91 @@ agent_performance_report_service = AgentPerformanceReportService()
 monthly_commission_report_service = MonthlyCommissionReportService()
 export_service = ExportService()
 
+
+def _get_user_company_scope():
+    """
+    Returns (role, company_ids) for the current JWT user.
+    company_ids is None for admins (no restriction), list for everyone else.
+    """
+    current_user_id = get_jwt_identity()
+    current_user = UserService.get_user_by_id(user_id=current_user_id)
+    if not current_user:
+        return None, None
+    role = (current_user.role or 'user').lower()
+    if role in ('admin', 'administrator'):
+        return role, None
+    if role == 'agent':
+        company_ids = [c.id for c in Company.query.filter_by(agent_user_id=current_user_id).all()]
+    else:
+        company_ids = [c.id for c in Company.query.filter_by(user_id=current_user_id).all()]
+    return role, company_ids
+
+
+def _resolve_company_id(requested_id, company_ids):
+    """
+    Validate the requested company_id belongs to the user.
+    Returns (company_id, error_response) — error_response is None on success.
+    """
+    if not requested_id:
+        return None, None
+    if company_ids is not None and requested_id not in company_ids:
+        return None, (jsonify({'error': 'Unauthorized'}), 403)
+    return requested_id, None
+
+
 @transaction_bp.route('/commissions-report', methods=['GET'])
+@jwt_required()
 def get_commissions_report():
     """Get commission report data"""
     try:
-        # Get parameters
-        start_date = request.args.get('start_date')
-        end_date = request.args.get('end_date')
-        date_range = request.args.get('date_range', 'custom')
-        transaction_type = request.args.get('transaction_type', 'commission')
-        reason_type = request.args.get('reason_type')
-        transaction_status = request.args.get('transaction_status')
-        company_id = request.args.get('company_id', type=int)
+        role, company_ids = _get_user_company_scope()
+        if role is None:
+            return jsonify({'success': False, 'error': 'User not found'}), 404
+        company_id, err = _resolve_company_id(request.args.get('company_id', type=int), company_ids)
+        if err:
+            return err
 
-        # Generate report
         report = commission_report_service.generate_report(
-            start_date=start_date,
-            end_date=end_date,
-            date_range=date_range,
-            transaction_type=transaction_type,
-            reason_type=reason_type,
-            transaction_status=transaction_status,
-            company_id=company_id
+            start_date=request.args.get('start_date'),
+            end_date=request.args.get('end_date'),
+            date_range=request.args.get('date_range', 'custom'),
+            transaction_type=request.args.get('transaction_type', 'commission'),
+            reason_type=request.args.get('reason_type'),
+            transaction_status=request.args.get('transaction_status'),
+            company_id=company_id,
+            company_ids=company_ids if not company_id else None,
         )
-        
         return jsonify({'success': True, 'report': report})
-        
+
     except ValueError as e:
         return jsonify({'success': False, 'error': str(e)}), 400
     except Exception as e:
         current_app.logger.error(f"Error generating commission report: {str(e)}")
         return jsonify({'success': False, 'error': 'Internal server error'}), 500
 
+
 @transaction_bp.route('/export-commissions-pdf', methods=['GET'])
+@jwt_required()
 def export_commissions_report_pdf():
     """Generate and stream a WeasyPrint PDF of the commissions report."""
     try:
         from weasyprint import HTML
-
-        start_date       = request.args.get('start_date')
-        end_date         = request.args.get('end_date')
-        date_range       = request.args.get('date_range', 'custom')
-        transaction_type = request.args.get('transaction_type', 'commission')
-        reason_type      = request.args.get('reason_type')
-        transaction_status = request.args.get('transaction_status')
-        company_id       = request.args.get('company_id', type=int)
+        role, company_ids = _get_user_company_scope()
+        if role is None:
+            return jsonify({'success': False, 'error': 'User not found'}), 404
+        company_id, err = _resolve_company_id(request.args.get('company_id', type=int), company_ids)
+        if err:
+            return err
 
         report = commission_report_service.generate_report(
-            start_date=start_date,
-            end_date=end_date,
-            date_range=date_range,
-            transaction_type=transaction_type,
-            reason_type=reason_type,
-            transaction_status=transaction_status,
+            start_date=request.args.get('start_date'),
+            end_date=request.args.get('end_date'),
+            date_range=request.args.get('date_range', 'custom'),
+            transaction_type=request.args.get('transaction_type', 'commission'),
+            reason_type=request.args.get('reason_type'),
+            transaction_status=request.args.get('transaction_status'),
             company_id=company_id,
+            company_ids=company_ids if not company_id else None,
         )
 
         html_string = render_template(
@@ -96,9 +127,7 @@ def export_commissions_report_pdf():
             report=report,
             generated_at=datetime.now().strftime('%d %b %Y %H:%M'),
         )
-
         pdf_bytes = HTML(string=html_string).write_pdf()
-
         filename = f"commissions_report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf"
         response = make_response(pdf_bytes)
         response.headers['Content-Type'] = 'application/pdf'
@@ -113,53 +142,51 @@ def export_commissions_report_pdf():
 
 
 @transaction_bp.route('/export-commissions', methods=['GET'])
+@jwt_required()
 def export_commissions_report():
     """Export commission report in various formats"""
     try:
-        # Get parameters
-        format_type = request.args.get('format', 'csv')
-        start_date = request.args.get('start_date')
-        end_date = request.args.get('end_date')
-        date_range = request.args.get('date_range', 'custom')
-        transaction_type = request.args.get('transaction_type', 'commission')
-        reason_type = request.args.get('reason_type')
-        transaction_status = request.args.get('transaction_status')
-        
-        # Export report
+        role, company_ids = _get_user_company_scope()
+        if role is None:
+            return jsonify({'success': False, 'error': 'User not found'}), 404
+
         export_data = export_service.export_commission_report(
-            format_type=format_type,
-            start_date=start_date,
-            end_date=end_date,
-            date_range=date_range,
-            transaction_type=transaction_type,
-            reason_type=reason_type,
-            transaction_status=transaction_status
+            format_type=request.args.get('format', 'csv'),
+            start_date=request.args.get('start_date'),
+            end_date=request.args.get('end_date'),
+            date_range=request.args.get('date_range', 'custom'),
+            transaction_type=request.args.get('transaction_type', 'commission'),
+            reason_type=request.args.get('reason_type'),
+            transaction_status=request.args.get('transaction_status'),
         )
-        
         return export_data
-        
+
     except ValueError as e:
         return jsonify({'success': False, 'error': str(e)}), 400
     except Exception as e:
         current_app.logger.error(f"Error exporting commission report: {str(e)}")
         return jsonify({'success': False, 'error': 'Internal server error'}), 500
 
+
 @transaction_bp.route('/fraud-report', methods=['GET'])
+@jwt_required()
 def get_fraud_report():
-    """Generate a historical fraud report (split, rollover, rapid back-forth) for a date range."""
+    """Generate a historical fraud report scoped to the current user's companies."""
     try:
-        start_date = request.args.get('start_date')
-        end_date = request.args.get('end_date')
-        date_range = request.args.get('date_range', 'custom')
-        company_id = request.args.get('company_id', type=int)
+        role, company_ids = _get_user_company_scope()
+        if role is None:
+            return jsonify({'success': False, 'error': 'User not found'}), 404
+        company_id, err = _resolve_company_id(request.args.get('company_id', type=int), company_ids)
+        if err:
+            return err
 
         report = fraud_report_service.generate_report(
-            start_date=start_date,
-            end_date=end_date,
-            date_range=date_range,
+            start_date=request.args.get('start_date'),
+            end_date=request.args.get('end_date'),
+            date_range=request.args.get('date_range', 'custom'),
             company_id=company_id,
+            company_ids=company_ids if not company_id else None,
         )
-
         return jsonify({'success': True, 'report': report})
 
     except ValueError as e:
@@ -170,32 +197,32 @@ def get_fraud_report():
 
 
 @transaction_bp.route('/fraud-report-pdf', methods=['GET'])
+@jwt_required()
 def export_fraud_report_pdf():
     """Generate and stream a WeasyPrint PDF of the fraud report."""
     try:
-        from weasyprint import HTML, CSS
-
-        start_date  = request.args.get('start_date')
-        end_date    = request.args.get('end_date')
-        date_range  = request.args.get('date_range', 'custom')
-        company_id  = request.args.get('company_id', type=int)
+        from weasyprint import HTML
+        role, company_ids = _get_user_company_scope()
+        if role is None:
+            return jsonify({'success': False, 'error': 'User not found'}), 404
+        company_id, err = _resolve_company_id(request.args.get('company_id', type=int), company_ids)
+        if err:
+            return err
 
         report = fraud_report_service.generate_report(
-            start_date=start_date,
-            end_date=end_date,
-            date_range=date_range,
+            start_date=request.args.get('start_date'),
+            end_date=request.args.get('end_date'),
+            date_range=request.args.get('date_range', 'custom'),
             company_id=company_id,
+            company_ids=company_ids if not company_id else None,
         )
-
         html_string = render_template(
             'fraud_report_pdf.html',
             report=report,
             generated_at=datetime.now().strftime('%d %b %Y %H:%M'),
             fraud_type_labels=FRAUD_TYPE_LABELS,
         )
-
         pdf_bytes = HTML(string=html_string).write_pdf()
-
         filename = f"fraud_report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf"
         response = make_response(pdf_bytes)
         response.headers['Content-Type'] = 'application/pdf'
@@ -210,23 +237,25 @@ def export_fraud_report_pdf():
 
 
 @transaction_bp.route('/agent-performance-report', methods=['GET'])
+@jwt_required()
 def get_agent_performance_report():
-    """Return JSON agent performance report."""
+    """Return JSON agent performance report scoped to the current user's companies."""
     try:
-        start_date = request.args.get('start_date')
-        end_date = request.args.get('end_date')
-        date_range = request.args.get('date_range', 'custom')
-        company_id = request.args.get('company_id', type=int)
-        commission_threshold = request.args.get('commission_threshold', type=float, default=5000.0)
-        float_threshold = request.args.get('float_threshold', type=float, default=50000.0)
+        role, company_ids = _get_user_company_scope()
+        if role is None:
+            return jsonify({'success': False, 'error': 'User not found'}), 404
+        company_id, err = _resolve_company_id(request.args.get('company_id', type=int), company_ids)
+        if err:
+            return err
 
         report = agent_performance_report_service.generate_report(
-            start_date=start_date,
-            end_date=end_date,
-            date_range=date_range,
+            start_date=request.args.get('start_date'),
+            end_date=request.args.get('end_date'),
+            date_range=request.args.get('date_range', 'custom'),
             company_id=company_id,
-            commission_threshold=commission_threshold,
-            float_threshold=float_threshold,
+            commission_threshold=request.args.get('commission_threshold', type=float, default=5000.0),
+            float_threshold=request.args.get('float_threshold', type=float, default=50000.0),
+            company_ids=company_ids if not company_id else None,
         )
         return jsonify({'success': True, 'report': report})
 
@@ -238,23 +267,25 @@ def get_agent_performance_report():
 
 
 @transaction_bp.route('/agent-performance-report-pdf', methods=['GET'])
+@jwt_required()
 def get_agent_performance_report_pdf():
     """Generate and stream agent performance report as PDF."""
     try:
-        start_date = request.args.get('start_date')
-        end_date = request.args.get('end_date')
-        date_range = request.args.get('date_range', 'custom')
-        company_id = request.args.get('company_id', type=int)
-        commission_threshold = request.args.get('commission_threshold', type=float, default=5000.0)
-        float_threshold = request.args.get('float_threshold', type=float, default=50000.0)
+        role, company_ids = _get_user_company_scope()
+        if role is None:
+            return jsonify({'success': False, 'error': 'User not found'}), 404
+        company_id, err = _resolve_company_id(request.args.get('company_id', type=int), company_ids)
+        if err:
+            return err
 
         report = agent_performance_report_service.generate_report(
-            start_date=start_date,
-            end_date=end_date,
-            date_range=date_range,
+            start_date=request.args.get('start_date'),
+            end_date=request.args.get('end_date'),
+            date_range=request.args.get('date_range', 'custom'),
             company_id=company_id,
-            commission_threshold=commission_threshold,
-            float_threshold=float_threshold,
+            commission_threshold=request.args.get('commission_threshold', type=float, default=5000.0),
+            float_threshold=request.args.get('float_threshold', type=float, default=50000.0),
+            company_ids=company_ids if not company_id else None,
         )
 
         generated_at = datetime.now().strftime('%d %b %Y, %H:%M')
@@ -289,15 +320,21 @@ def get_agent_performance_report_pdf():
 @jwt_required()
 def get_monthly_commission_report():
     try:
+        role, company_ids = _get_user_company_scope()
+        if role is None:
+            return jsonify({'success': False, 'error': 'User not found'}), 404
         now = datetime.now()
         year  = request.args.get('year',  type=int, default=now.year)
         month = request.args.get('month', type=int, default=now.month)
-        company_id = request.args.get('company_id', type=int)
-
         if not (1 <= month <= 12):
             return jsonify({'success': False, 'error': 'month must be 1–12'}), 400
+        company_id, err = _resolve_company_id(request.args.get('company_id', type=int), company_ids)
+        if err:
+            return err
 
-        report = monthly_commission_report_service.generate_report(year, month, company_id)
+        report = monthly_commission_report_service.generate_report(
+            year, month, company_id, company_ids=company_ids if not company_id else None
+        )
         return jsonify({'success': True, 'data': report})
     except Exception as e:
         current_app.logger.error(f"Monthly commission report error: {e}")
@@ -308,12 +345,19 @@ def get_monthly_commission_report():
 @jwt_required()
 def get_monthly_commission_report_pdf():
     try:
+        role, company_ids = _get_user_company_scope()
+        if role is None:
+            return jsonify({'success': False, 'error': 'User not found'}), 404
         now = datetime.now()
         year  = request.args.get('year',  type=int, default=now.year)
         month = request.args.get('month', type=int, default=now.month)
-        company_id = request.args.get('company_id', type=int)
+        company_id, err = _resolve_company_id(request.args.get('company_id', type=int), company_ids)
+        if err:
+            return err
 
-        report = monthly_commission_report_service.generate_report(year, month, company_id)
+        report = monthly_commission_report_service.generate_report(
+            year, month, company_id, company_ids=company_ids if not company_id else None
+        )
         generated_at = now.strftime('%d %b %Y, %H:%M')
         html = render_template('monthly_commission_report_pdf.html', report=report, generated_at=generated_at)
 
@@ -336,12 +380,19 @@ def get_monthly_commission_report_excel():
     try:
         import io
         import pandas as pd
+        role, company_ids = _get_user_company_scope()
+        if role is None:
+            return jsonify({'success': False, 'error': 'User not found'}), 404
         now = datetime.now()
         year  = request.args.get('year',  type=int, default=now.year)
         month = request.args.get('month', type=int, default=now.month)
-        company_id = request.args.get('company_id', type=int)
+        company_id, err = _resolve_company_id(request.args.get('company_id', type=int), company_ids)
+        if err:
+            return err
 
-        report = monthly_commission_report_service.generate_report(year, month, company_id)
+        report = monthly_commission_report_service.generate_report(
+            year, month, company_id, company_ids=company_ids if not company_id else None
+        )
         tills = report.get('tills', [])
 
         rows = [
@@ -421,6 +472,7 @@ def export_transactions():
 def handle_options():
     return jsonify({'message': 'OK'}), 200
 
+@transaction_bp.route('', methods=['GET'])
 @transaction_bp.route('/', methods=['GET'])
 @jwt_required()
 def get_transactions():
@@ -430,11 +482,15 @@ def get_transactions():
     """
     try:
         current_user_id = get_jwt_identity()
+        logger.info(f"[TXN] get_transactions called — user_id={current_user_id} args={dict(request.args)}")
+
         current_user = UserService.get_user_by_id(user_id=current_user_id)
         if not current_user:
+            logger.warning(f"[TXN] user not found: {current_user_id}")
             return jsonify({"error": "User not found"}), 404
 
         role = (current_user.role or 'user').lower()
+        logger.info(f"[TXN] user role={role}")
 
         # Get query parameters
         filters = {
@@ -450,6 +506,7 @@ def get_transactions():
 
         # Remove None values
         filters = {k: v for k, v in filters.items() if v is not None}
+        logger.info(f"[TXN] filters after cleanup: {filters}")
 
         # Scope results to the current user's companies for non-admin roles
         if role not in ('admin', 'administrator'):
@@ -458,30 +515,37 @@ def get_transactions():
                     c.id for c in Company.query.filter_by(agent_user_id=current_user_id).all()
                 ]
             else:
-                # Regular user: companies they own
                 company_ids = [
                     c.id for c in Company.query.filter_by(user_id=current_user_id).all()
                 ]
 
-            # If a specific company_id was requested, ensure it belongs to this user
+            logger.info(f"[TXN] scoped to company_ids={company_ids}")
+
             if filters.get('company_id'):
                 if filters['company_id'] not in company_ids:
+                    logger.warning(f"[TXN] unauthorized company_id={filters['company_id']} for user={current_user_id}")
                     return jsonify({"error": "Unauthorized"}), 403
             else:
                 filters['company_ids'] = company_ids
 
         page = request.args.get('page', 1, type=int)
         per_page = request.args.get('per_page', 10, type=int)
+        logger.info(f"[TXN] querying page={page} per_page={per_page} final_filters={filters}")
 
         result = transaction_service.get_transactions(filters, page, per_page)
 
+        logger.info(f"[TXN] service result success={result.get('success')} "
+                    f"count={len(result.get('data', []))} error={result.get('error')}")
+
         if result['success']:
-            return jsonify(result), 200
+            resp = jsonify(result)
+            resp.headers['Cache-Control'] = 'no-store'
+            return resp, 200
         else:
             return jsonify(result), 400
 
     except Exception as e:
-        current_app.logger.error(f"Error fetching transactions: {str(e)}")
+        logger.exception(f"[TXN] unhandled exception in get_transactions: {e}")
         return jsonify({"error": f"Failed to fetch transactions: {str(e)}"}), 500
 
 
@@ -763,14 +827,30 @@ def get_dashboard_analytics():
 
 
 @transaction_bp.route('/clawbacks', methods=['GET'])
+@jwt_required()
 def get_clawbacks():
-    """Return commission clawback transactions."""
+    """Return commission clawback transactions scoped to the current user's companies."""
     try:
+        current_user_id = get_jwt_identity()
+        current_user = UserService.get_user_by_id(user_id=current_user_id)
+        if not current_user:
+            return jsonify({'error': 'User not found'}), 404
+
+        role = (current_user.role or 'user').lower()
+
         filters = {
             'start_date': request.args.get('start_date'),
             'end_date': request.args.get('end_date'),
         }
         filters = {k: v for k, v in filters.items() if v}
+
+        if role not in ('admin', 'administrator'):
+            if role == 'agent':
+                company_ids = [c.id for c in Company.query.filter_by(agent_user_id=current_user_id).all()]
+            else:
+                company_ids = [c.id for c in Company.query.filter_by(user_id=current_user_id).all()]
+            filters['company_ids'] = company_ids
+
         result = transaction_service.get_clawbacks(filters)
         return jsonify(result), 200 if result['success'] else 400
     except Exception as e:

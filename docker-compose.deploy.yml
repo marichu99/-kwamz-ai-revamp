@@ -4,7 +4,7 @@ services:
       context: ./kwamz-ai
       dockerfile: Dockerfile
     ports:
-      - "3000:80"
+      - "80:80"
     extra_hosts:
       - "host.docker.internal:host-gateway"
     restart: unless-stopped
@@ -45,6 +45,36 @@ services:
     depends_on:
       redis:
         condition: service_healthy
+    restart: unless-stopped
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    # host network so the container reaches the bare-metal PostgreSQL
+    # on localhost and Redis on localhost:6379 without any extra config
+    network_mode: host
+    env_file:
+      - ./backend/.env
+    environment:
+      - FLASK_APP=run.py
+      - FLASK_ENV=production
+      - DISPLAY=:99
+      - SCRAPER_LOG_PATH=/app/logs/scraper.log
+    volumes:
+      # Persist logs to the host so scraper.log / gunicorn logs are accessible
+      - ./logs:/app/logs
+    command: >
+      gunicorn
+      --bind 0.0.0.0:5000
+      --workers 1
+      --threads 8
+      --worker-class gthread
+      --timeout 120
+      --log-level info
+      --access-logfile -
+      --error-logfile -
+      run:app
     restart: unless-stopped
 
 volumes:

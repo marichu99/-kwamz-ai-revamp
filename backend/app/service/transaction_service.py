@@ -106,20 +106,7 @@ class TransactionService:
                 business_shortcode=business_shortcode
             )
             
-            # Save processed file for reference
-            processed_filename = f"{business_shortcode}_{additional_category}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
-            processed_path = os.path.join('processed_transactions', processed_filename)
-            os.makedirs(os.path.dirname(processed_path), exist_ok=True)
-            df.to_excel(processed_path, index=False)
-            
-            # Also save with simple filename for easy access
-            simple_filename = f"{business_shortcode}_{additional_category}.xlsx"
-            simple_path = os.path.join('processed_transactions', simple_filename)
-            df.to_excel(simple_path, index=False)
-            
             results.update({
-                'processed_file': processed_path,
-                'simple_file': simple_path,
                 'business_shortcode': business_shortcode,
                 'transaction_type': additional_category,
                 'total_records': len(transactions_data),
@@ -4684,6 +4671,14 @@ class TransactionService:
                 if 'company_id' in filters and filters['company_id']:
                     conditions.append("company_id = %s")
                     params.append(filters['company_id'])
+                elif filters.get('commission_company_ids') is not None:
+                    ids = filters['commission_company_ids']
+                    if len(ids) == 0:
+                        conditions.append("1 = 0")
+                    else:
+                        placeholders = ', '.join(['%s'] * len(ids))
+                        conditions.append(f"company_id IN ({placeholders})")
+                        params.extend(ids)
 
                 if 'agent_id' in filters and filters['agent_id']:
                     conditions.append("agent_id = %s")
@@ -4713,28 +4708,42 @@ class TransactionService:
                 cursor.execute(kpi_query, params + [prev_start_date, prev_end_date])
                 prev_stats = cursor.fetchone()
 
-                # Active agents: distinct tills that have at least one float transaction
-                # older than 1 month (proves the till has been operational for ≥ 1 month).
+                # Active agents: count agentcompanies records scoped to the user's companies.
+                company_id_filter = filters.get('company_id')
+                commission_company_ids = filters.get('commission_company_ids')
+
+                if company_id_filter:
+                    ac_where = "company_id = %s"
+                    ac_params = [company_id_filter]
+                elif commission_company_ids is not None:
+                    if len(commission_company_ids) == 0:
+                        ac_where = "1 = 0"
+                        ac_params = []
+                    else:
+                        sc_ph = ', '.join(['%s'] * len(commission_company_ids))
+                        ac_where = f"company_id IN ({sc_ph})"
+                        ac_params = list(commission_company_ids)
+                else:
+                    ac_where = "1=1"
+                    ac_params = []
+
                 active_agents_query = f"""
-                    SELECT COUNT(DISTINCT business_shortcode) AS active_agents
-                    FROM transactions
-                    WHERE transaction_type = 'float'
-                      AND completion_time <= NOW() - INTERVAL '1 month'
-                      AND {where_clause}
+                    SELECT COUNT(*) AS active_agents
+                    FROM agentcompanies
+                    WHERE {ac_where}
                 """
-                cursor.execute(active_agents_query, params)
+                cursor.execute(active_agents_query, ac_params)
                 active_agents_row = cursor.fetchone()
                 active_agents_count = int(active_agents_row['active_agents'] or 0)
 
-                # Previous period: tills with a float transaction older than 2 months
+                # Previous period: agents that existed more than 1 month ago
                 prev_active_agents_query = f"""
-                    SELECT COUNT(DISTINCT business_shortcode) AS active_agents
-                    FROM transactions
-                    WHERE transaction_type = 'float'
-                      AND completion_time <= NOW() - INTERVAL '2 months'
-                      AND {where_clause}
+                    SELECT COUNT(*) AS active_agents
+                    FROM agentcompanies
+                    WHERE {ac_where}
+                      AND created_at <= NOW() - INTERVAL '1 month'
                 """
-                cursor.execute(prev_active_agents_query, params)
+                cursor.execute(prev_active_agents_query, ac_params)
                 prev_active_agents_row = cursor.fetchone()
                 prev_active_agents_count = int(prev_active_agents_row['active_agents'] or 0)
 
@@ -5085,6 +5094,8 @@ class TransactionService:
             query = Transaction.query.filter(Transaction.details.ilike('%clawback%'))
 
             if filters:
+                if filters.get('company_ids') is not None:
+                    query = query.filter(Transaction.company_id.in_(filters['company_ids']))
                 if filters.get('start_date'):
                     query = query.filter(Transaction.completion_time >= filters['start_date'])
                 if filters.get('end_date'):

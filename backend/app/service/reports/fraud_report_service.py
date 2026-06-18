@@ -76,11 +76,11 @@ class FraudReportService:
     def __init__(self):
         self.date_service = DateService()
 
-    def generate_report(self, start_date=None, end_date=None, date_range='custom', company_id=None):
+    def generate_report(self, start_date=None, end_date=None, date_range='custom', company_id=None, company_ids=None):
         start_dt, end_dt = self.date_service.calculate_date_range(date_range, start_date, end_date)
         logger.info(f"[FraudReport] Period: {start_dt} → {end_dt}  company_id={company_id}")
 
-        transactions = self._fetch_transactions(start_dt, end_dt, company_id)
+        transactions = self._fetch_transactions(start_dt, end_dt, company_id, company_ids)
         logger.info(f"[FraudReport] Fetched {len(transactions)} transactions from DB")
         if not transactions:
             logger.warning("[FraudReport] No transactions found — returning empty report")
@@ -890,7 +890,7 @@ class FraudReportService:
     # ------------------------------------------------------------------
     # Helpers
     # ------------------------------------------------------------------
-    def _fetch_transactions(self, start_dt, end_dt, company_id):
+    def _fetch_transactions(self, start_dt, end_dt, company_id, company_ids=None):
         query = Transaction.query.filter(
             Transaction.completion_time >= start_dt,
             Transaction.completion_time <= end_dt,
@@ -898,6 +898,8 @@ class FraudReportService:
         )
         if company_id:
             query = query.filter(Transaction.company_id == company_id)
+        elif company_ids is not None:
+            query = query.filter(Transaction.company_id.in_(company_ids))
         return query.order_by(Transaction.completion_time).all()
 
     def _to_dicts(self, transactions):

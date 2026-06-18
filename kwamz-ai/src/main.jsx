@@ -4,12 +4,15 @@ import { BrowserRouter } from 'react-router-dom'
 import './index.css'
 import App from './App.jsx'
 import { ToastProvider } from './components/Pages/ToastProvider.jsx'
+import { LiveFeedProvider } from './context/LiveFeedContext.jsx'
 
 createRoot(document.getElementById('root')).render(
   <StrictMode>
     <BrowserRouter>
-    <ToastProvider>
-      <App />
+      <ToastProvider>
+        <LiveFeedProvider>
+          <App />
+        </LiveFeedProvider>
       </ToastProvider>
     </BrowserRouter>
   </StrictMode>,
