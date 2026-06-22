@@ -1,11 +1,11 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
-import { X, Wifi, WifiOff, Maximize2, Minimize2, ChevronUp } from 'lucide-react';
+import { X, Wifi, WifiOff, Maximize2, Minimize2, ChevronUp, Square } from 'lucide-react';
 import axios from 'axios';
 import config from '../Config';
 
 const OTP_LEN = 6;
 
-function OtpDock({ jobId }) {
+function OtpDock({ jobId, onSent }) {
   const [digits, setDigits] = useState(Array(OTP_LEN).fill(''));
   const [state, setState] = useState('idle'); // idle | submitting | ok | error | gone
   const [errMsg, setErrMsg] = useState('');
@@ -28,14 +28,14 @@ function OtpDock({ jobId }) {
         { headers: { Authorization: `Bearer ${token}` } }
       );
       setState('ok');
-      // Fade out then unmount after 1.5 s
-      setTimeout(() => setState('gone'), 1500);
+      // Fade out then notify parent so it stays gone after minimize/restore
+      setTimeout(() => { setState('gone'); onSent?.(); }, 1500);
     } catch (err) {
       setErrMsg(err?.response?.data?.error || 'Failed to submit OTP');
       setState('error');
       setTimeout(reset, 3000);
     }
-  }, [jobId, reset]);
+  }, [jobId, reset, onSent]);
 
   if (state === 'gone') return null;
 
@@ -112,10 +112,61 @@ function OtpDock({ jobId }) {
   );
 }
 
-function LiveScrapeFeed({ jobId, shortCode, isOpen, onClose, onStreamEnd }) {
+function LoadingOverlay({ status }) {
+  if (status === 'live') return null;
+
+  const isError = status === 'error';
+
+  return (
+    <div className="absolute inset-0 flex flex-col items-center justify-center gap-5 bg-slate-950/95 z-10">
+      {isError ? (
+        <>
+          <WifiOff className="w-14 h-14 text-slate-600 opacity-60" />
+          <div className="text-center">
+            <p className="text-slate-400 text-sm font-medium">Stream unavailable</p>
+            <p className="text-slate-600 text-xs mt-1">
+              The scraping job may have ended or hasn't started yet.
+            </p>
+          </div>
+        </>
+      ) : (
+        <>
+          {/* Outer ring */}
+          <div className="relative w-16 h-16">
+            <div className="absolute inset-0 rounded-full border-2 border-slate-700" />
+            <div className="absolute inset-0 rounded-full border-2 border-t-emerald-400 border-r-emerald-400/40 border-b-transparent border-l-transparent animate-spin" />
+            <div className="absolute inset-2 rounded-full border border-t-emerald-500/50 border-r-transparent border-b-transparent border-l-transparent animate-spin" style={{ animationDuration: '1.5s', animationDirection: 'reverse' }} />
+          </div>
+          <div className="text-center">
+            <p className="text-slate-300 text-sm font-medium">
+              {status === 'waiting' ? 'Starting scraping job…' : 'Connecting to browser…'}
+            </p>
+            <p className="text-slate-600 text-xs mt-1">
+              {status === 'waiting' ? 'Launching Playwright browser' : 'Waiting for first frame'}
+            </p>
+          </div>
+          {/* Pulsing dots */}
+          <div className="flex items-center gap-1.5">
+            {[0, 1, 2].map(i => (
+              <div
+                key={i}
+                className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"
+                style={{ animationDelay: `${i * 200}ms` }}
+              />
+            ))}
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+function LiveScrapeFeed({ jobId, shortCode, isOpen, onClose, onStreamEnd, onKill }) {
   const [status, setStatus] = useState('waiting');
   const [minimized, setMinimized] = useState(false);
   const [fullscreen, setFullscreen] = useState(false);
+  const [otpSent, setOtpSent] = useState(false);
+  const [killing, setKilling] = useState(false);
   const imgRef = useRef(null);
   const containerRef = useRef(null);
 
@@ -123,13 +174,8 @@ function LiveScrapeFeed({ jobId, shortCode, isOpen, onClose, onStreamEnd }) {
 
   useEffect(() => {
     if (!isOpen) return;
-    if (!jobId) {
-      setStatus('waiting');
-      return;
-    }
-    setStatus('connecting');
-    const timer = setTimeout(() => setStatus(s => s === 'connecting' ? 'live' : s), 2000);
-    return () => clearTimeout(timer);
+    setStatus(jobId ? 'connecting' : 'waiting');
+    // No timer — only handleLoad (first MJPEG frame) transitions to 'live'
   }, [isOpen, jobId]);
 
   // Reset minimized state when re-opened
@@ -137,10 +183,21 @@ function LiveScrapeFeed({ jobId, shortCode, isOpen, onClose, onStreamEnd }) {
     if (isOpen) setMinimized(false);
   }, [isOpen]);
 
+  // Reset OTP state when a new job starts
+  useEffect(() => {
+    setOtpSent(false);
+    setKilling(false);
+  }, [jobId]);
+
   const handleLoad = () => setStatus('live');
   const handleError = () => {
     setStatus('error');
     onStreamEnd?.();
+  };
+
+  const handleKill = async () => {
+    setKilling(true);
+    await onKill?.();
   };
 
   const toggleFullscreen = () => {
@@ -174,6 +231,16 @@ function LiveScrapeFeed({ jobId, shortCode, isOpen, onClose, onStreamEnd }) {
         >
           <ChevronUp className="w-3.5 h-3.5" />
         </button>
+        {onKill && (
+          <button
+            onClick={handleKill}
+            disabled={killing}
+            className="p-1 rounded-lg text-red-400 hover:text-red-300 hover:bg-slate-700 transition-colors disabled:opacity-40"
+            title="Stop scraper"
+          >
+            <Square className="w-3.5 h-3.5 fill-current" />
+          </button>
+        )}
         <button
           onClick={onClose}
           className="p-1 rounded-lg text-slate-400 hover:text-red-400 hover:bg-slate-700 transition-colors"
@@ -237,6 +304,19 @@ function LiveScrapeFeed({ jobId, shortCode, isOpen, onClose, onStreamEnd }) {
               : <WifiOff className="w-4 h-4 text-slate-500" />
             }
 
+            {/* Stop scraper */}
+            {onKill && (
+              <button
+                onClick={handleKill}
+                disabled={killing}
+                className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium text-red-400 border border-red-500/30 hover:bg-red-500/10 hover:border-red-500/60 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                title="Stop scraper"
+              >
+                <Square className="w-3 h-3 fill-current" />
+                {killing ? 'Stopping…' : 'Stop'}
+              </button>
+            )}
+
             <button
               onClick={() => setMinimized(true)}
               className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-700 transition-colors"
@@ -273,7 +353,7 @@ function LiveScrapeFeed({ jobId, shortCode, isOpen, onClose, onStreamEnd }) {
               ref={imgRef}
               src={streamUrl}
               alt="Live scrape feed"
-              className={`max-w-full max-h-full object-contain transition-opacity duration-300 ${
+              className={`max-w-full max-h-full object-contain transition-opacity duration-500 ${
                 status === 'live' ? 'opacity-100' : 'opacity-0'
               }`}
               onLoad={handleLoad}
@@ -281,33 +361,11 @@ function LiveScrapeFeed({ jobId, shortCode, isOpen, onClose, onStreamEnd }) {
             />
           )}
 
-          {status === 'waiting' && (
-            <div className="absolute inset-0 flex flex-col items-center justify-center gap-4">
-              <div className="w-10 h-10 border-2 border-slate-600 border-t-transparent rounded-full animate-spin" />
-              <p className="text-slate-400 text-sm">Starting scraping job…</p>
-            </div>
-          )}
-
-          {status === 'connecting' && (
-            <div className="absolute inset-0 flex flex-col items-center justify-center gap-4">
-              <div className="w-10 h-10 border-2 border-emerald-500 border-t-transparent rounded-full animate-spin" />
-              <p className="text-slate-400 text-sm">Waiting for browser stream…</p>
-            </div>
-          )}
-
-          {status === 'error' && (
-            <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 text-slate-500">
-              <WifiOff className="w-14 h-14 opacity-40" />
-              <p className="text-sm">Stream unavailable</p>
-              <p className="text-xs text-slate-600">
-                The scraping job may have ended or hasn't started yet.
-              </p>
-            </div>
-          )}
+          <LoadingOverlay status={status} />
         </div>
 
         {/* ── OTP dock ── */}
-        {jobId && <OtpDock jobId={jobId} />}
+        {jobId && !otpSent && <OtpDock jobId={jobId} onSent={() => setOtpSent(true)} />}
 
         {/* ── Footer ── */}
         <div className="flex items-center justify-between px-4 py-2 bg-slate-900 border-t border-slate-800 shrink-0">

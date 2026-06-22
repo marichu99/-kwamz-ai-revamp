@@ -16,8 +16,7 @@ function CompanyList() {
   const [selectedCompanyIds, setSelectedCompanyIds] = useState([]);
   const [isCompanyModalOpen, setIsCompanyModalOpen] = useState(false);
   const [isMpesaLoginModalOpen, setIsMpesaModalLoginOpen] = useState(false);
-  const { startFeed, closeFeed } = useLiveFeed();
-  const [activeStreams, setActiveStreams] = useState(new Map());
+  const { startFeed, closeFeed, activeStreams } = useLiveFeed();
   const [isLoading, setIsLoading] = useState(false);
   const [currentPage, setCurrentPage] = useState(1);
   const [pageSize, setPageSize] = useState(10);
@@ -371,13 +370,11 @@ function CompanyList() {
 
       if (result.job_id) {
         startFeed(result.job_id, formData.shortCode);
-        setActiveStreams(prev => new Map(prev).set(formData.shortCode, result.job_id));
         showToast(`Scraping started!`, 'success');
       }
     } catch (error) {
       console.error(`Error logging in to company:`, error.message);
-      closeFeed();
-      setActiveStreams(prev => { const m = new Map(prev); m.delete(formData.shortCode); return m; });
+      closeFeed(formData.shortCode);
       showToast(error.message, 'error');
     } finally {
       setIsLoading(false);

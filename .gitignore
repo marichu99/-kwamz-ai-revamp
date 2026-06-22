@@ -1,4 +1,7 @@
 
+# JetBrains IDE
+.idea/
+
 # Debug/temp files generated during scraping
 backend/debug_exports/
 backend/processed_transactions/

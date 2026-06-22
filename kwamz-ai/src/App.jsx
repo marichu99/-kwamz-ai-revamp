@@ -10,7 +10,7 @@ import LiveScrapeFeed from './components/LiveScrapeFeed';
 import { useLiveFeed } from './context/LiveFeedContext';
 
 function App() {
-  const { jobId, shortCode, isOpen, closeFeed } = useLiveFeed();
+  const { jobId, shortCode, isOpen, closeFeed, killFeed } = useLiveFeed();
   const [sideBarCollapsed, setSideBarCollapsed] = useState(window.innerWidth < 768);
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [currentPage, setCurrentPage] = useState('dashboard');
@@ -168,6 +168,7 @@ function App() {
       shortCode={shortCode}
       onClose={closeFeed}
       onStreamEnd={closeFeed}
+      onKill={killFeed}
     />
     </>
   );

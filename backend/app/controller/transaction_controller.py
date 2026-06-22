@@ -806,11 +806,14 @@ def get_dashboard_analytics():
         # Collect all companies the user is linked to as owner (user_id) or agent (agent_user_id).
         if role in ('admin', 'administrator'):
             filters['commission_company_ids'] = None  # all companies
-        else:
-            owned = Company.query.filter_by(user_id=current_user_id).all()
+        elif role == 'agent':
+            # Mirror transactions page: agents see only their agented companies
             agented = Company.query.filter_by(agent_user_id=current_user_id).all()
-            all_ids = list({c.id for c in owned + agented})
-            filters['commission_company_ids'] = all_ids
+            filters['commission_company_ids'] = list({c.id for c in agented})
+        else:
+            # Mirror transactions page: owners see only their owned companies
+            owned = Company.query.filter_by(user_id=current_user_id).all()
+            filters['commission_company_ids'] = list({c.id for c in owned})
         
 
         

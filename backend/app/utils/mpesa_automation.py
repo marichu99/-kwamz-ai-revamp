@@ -122,7 +122,7 @@ def login_to_mpesa(password: str = None, username: str = None, short_code: str =
     username = username
     # or os.getenv("AGENT_COMPANY_USERNAME")
     user_id = user_id_passed
-    user = User.query.filter_by(id=user_id)
+    user = User.query.filter_by(id=user_id).first()
 
     short_code = short_code
     # or os.getenv("AGENT_COMPANY_SHORTCODE")
@@ -245,6 +245,18 @@ def login_to_mpesa(password: str = None, username: str = None, short_code: str =
 
             logger.info("[INFO] Navigating to child organization page...")
             navigate_to_child_organization(page)
+
+            # ── Continuous scraping cycle ─────────────────────────────────────
+            # After each full pass (float + swaps + retries), refresh the
+            # shortfall cache and immediately start the next cycle.
+            cycle = 1
+            while True:
+                cycle += 1
+                logger.info(f"[CYCLE] Cycle {cycle} starting — refreshing shortfall data...")
+                till_scraping_shortfall = transaction_service.get_last_scraped_per_shortcode()
+                # process_organization_rows ends with the child org list loaded,
+                # so we can call it again without re-navigating.
+                process_organization_rows(page)
 
     finally:
         # Always close the stream — regardless of where an exception was raised
@@ -422,20 +434,34 @@ def _scrap_swaps_(page: Page, shortcodes: Set[str]) -> None:
     sidebar_icon.hover()
     page.wait_for_timeout(800)
 
-    logger.info("[SWAPS] Clicking active sub-menu to expand it...")
-    sub_menu = page.wait_for_selector(
-        "//li[contains(@class,'el-sub-menu') and contains(@class,'is-active')]"
-        "//div[contains(@class,'el-sub-menu__title')]",
-        timeout=15000,
-    )
-    sub_menu.click()
-    page.wait_for_timeout(1000)
+    # Only expand the sub-menu if 'Organization Operator' isn't already visible.
+    # Clicking an already-expanded sub-menu collapses it, hiding its children.
+    org_op_visible = page.evaluate("""() => {
+        const spans = Array.from(document.querySelectorAll('span.number-title'));
+        const el = spans.find(s => s.textContent.trim() === 'Organization Operator');
+        if (!el) return false;
+        const rect = el.getBoundingClientRect();
+        return rect.width > 0 && rect.height > 0;
+    }""")
+
+    if org_op_visible:
+        logger.info("[SWAPS] Sub-menu already open — 'Organization Operator' visible, skipping click.")
+    else:
+        logger.info("[SWAPS] Sub-menu not open — clicking to expand...")
+        sub_menu = page.wait_for_selector(
+            "//li[contains(@class,'el-sub-menu') and contains(@class,'is-active')]"
+            "//div[contains(@class,'el-sub-menu__title')]",
+            timeout=15000,
+        )
+        sub_menu.click()
+        page.wait_for_timeout(1000)
 
     # ── Step 2: click the 'Organization Operator' tab ────────────────────────
     logger.info("[SWAPS] Clicking 'Organization Operator'...")
     org_op_tab = page.wait_for_selector(
         "//span[contains(@class,'number-title')][normalize-space()='Organization Operator']",
         timeout=30000,
+        state="visible",
     )
     org_op_tab.click()
     page.wait_for_timeout(1500)
@@ -986,7 +1012,7 @@ def extract_extra_till_info(page: Page, extra_info: dict) -> Dict[str, Any]:
             
             for key, value in extracted_data.items():
                 if(key == "status" and value !="Active"):
-                    send_alert_on_non_active_("martinmaati31@gmail.com",
+                    send_alert_on_non_active_(user.email,
                                               business_name=extra_info.get('company_name'),
                                               business_short_code=extra_info.get("short_code"),
                                               status=value)
@@ -1401,7 +1427,7 @@ def save_table_to_dataframe_download(page: Page, business_shortcode: int, additi
         logger.error(f"[ERROR] An error has occurred {e}")
         if _retry_count + 1 >= max_retries:
             logger.error(f"[ERROR] Export failed after {max_retries} attempts — sending session timeout email")
-            send_session_timeout_email("martinmaati31@gmail.com")
+            send_session_timeout_email(user.email)
             return pd.DataFrame(), False
         return save_table_to_dataframe_download(page=page, business_shortcode=business_shortcode, additional_category=additional_category, _retry_count=_retry_count + 1)
 
@@ -2043,7 +2069,7 @@ def rerun_failed_codes(page: Page, failed_codes: List[int], max_retries: int = 2
     for business_short_code in original_failed:
         retry_count[business_short_code] = 0
 
-    remaining = original_failed.copy()
+    remaining = set(original_failed)
 
     while remaining and max(retry_count.values()) < max_retries:
         logger.info(f"\n[RETRY] Retry attempt #{max(retry_count.values()) + 1} for {len(remaining)} items...")
@@ -2053,13 +2079,13 @@ def rerun_failed_codes(page: Page, failed_codes: List[int], max_retries: int = 2
 
         current_page = 1
         total_in_list = get_total_from_pagination(page)
+        # Track which codes were actually encountered during this pass
+        seen_this_pass: set = set()
 
         while True:
             wait_for_table_load(page)
             time.sleep(1)
 
-            # Look for any remaining failed code on this page
-            found_any = False
             rows_locator = page.locator("//tbody//tr[@class='el-table__row childTableRow']")
 
             for i in range(rows_locator.count()):
@@ -2067,44 +2093,55 @@ def rerun_failed_codes(page: Page, failed_codes: List[int], max_retries: int = 2
                 if not row.is_visible():
                     continue
 
+                current_code = None
                 try:
                     row_text = row.text_content(timeout=3000) or ""
                     match = re.search(r'^(\d+)', row_text.strip())
                     if not match:
                         continue
-                    code = int(match.group(1))
+                    current_code = int(match.group(1))
 
-                    if code in remaining:
-                        logger.error(f"[RETRY] Found failed row: {code} — reprocessing...")
-                        found_any = True
-                        
-                        row.click(timeout=15000)
-                        page.wait_for_timeout(1000)
+                    if current_code not in remaining:
+                        continue
 
-                        success = process_single_row(page, code, row_number=f"RETRY-{code}")
+                    seen_this_pass.add(current_code)
+                    logger.error(f"[RETRY] Found failed row: {current_code} — reprocessing...")
 
-                        if success:
-                            remaining.remove(code)
-                            logger.info(f"[SUCCESS] Retry succeeded for {code}")
+                    row.click(timeout=15000)
+                    page.wait_for_timeout(1000)
+
+                    # Retried rows always come from _run_float_pass, so pass_value is "first"
+                    success = process_single_row(page, current_code, row_number=f"RETRY-{current_code}", pass_value="first")
+
+                    if success:
+                        remaining.discard(current_code)
+                        logger.info(f"[SUCCESS] Retry succeeded for {current_code}")
+                    else:
+                        retry_count[current_code] += 1
+                        if retry_count[current_code] >= max_retries:
+                            logger.error(f"[FAILED] Max retries reached for {current_code}")
+                            remaining.discard(current_code)
                         else:
-                            retry_count[code] += 1
-                            if retry_count[code] >= max_retries:
-                                logger.error(f"[FAILED] Max retries reached for {code}")
-                                remaining.remove(code)
-                            else:
-                                logger.info(f"[RETRY] Will retry {code} later (attempt {retry_count[code] + 1})")
+                            logger.info(f"[RETRY] Will retry {current_code} later (attempt {retry_count[current_code] + 1})")
 
-                        time.sleep(1)
+                    time.sleep(1)
 
                 except Exception as e:
                     logger.error(f"[ERROR] Error during retry scan of row: {e}")
+                    # Count the exception as a failed attempt to prevent an infinite loop
+                    if current_code is not None and current_code in remaining:
+                        seen_this_pass.add(current_code)
+                        retry_count[current_code] += 1
+                        if retry_count[current_code] >= max_retries:
+                            logger.error(f"[FAILED] Max retries reached for {current_code} (exception path)")
+                            remaining.discard(current_code)
                     continue
 
             if not remaining:
                 logger.error("[SUCCESS] All failed items successfully retried!")
                 break
 
-            # Go to next page if we didn't find everything
+            # Go to next page if we haven't scanned everything yet
             if go_forth_on_organization(page, total_in_list):
                 current_page += 1
                 logger.info(f"[INFO] Moving to page {current_page} for retry...")
@@ -2112,6 +2149,17 @@ def rerun_failed_codes(page: Page, failed_codes: List[int], max_retries: int = 2
             else:
                 logger.info("[INFO] Reached last page during retry pass.")
                 break
+
+        # Any codes still in `remaining` that were never seen on any page are
+        # not in the table — count them as a failed attempt so the outer while
+        # loop eventually terminates instead of spinning forever.
+        not_found = remaining - seen_this_pass
+        for code in list(not_found):
+            retry_count[code] += 1
+            logger.warning(f"[RETRY] Code {code} not found in table (attempt {retry_count[code]})")
+            if retry_count[code] >= max_retries:
+                logger.error(f"[FAILED] Giving up on {code} — not found after {max_retries} passes")
+                remaining.discard(code)
 
         if not remaining:
             break
@@ -2839,7 +2887,7 @@ def select_dates_and_submit_monthly(page: Page, month_offset: int = 0) -> bool:
         logger.error(f"[ERROR] Could not find date picker inputs: {e}")
         user = User.query.filter_by(id=user_id).first()
         if user:
-            send_session_timeout_email("martinmaati31@gmail.com")
+            send_session_timeout_email(user.email)
             # context.close()
             # browser.close()
         return False
@@ -2964,8 +3012,13 @@ def _get_total_months_by_shortcode_shortfall(business_shortcode: str, till_scrap
         # Nested format: {'float': [days, receipt_no], 'commission': [days, receipt_no]}
         if transaction_type and transaction_type in shortcode_data:
             days = float(shortcode_data[transaction_type][0])
+        elif transaction_type:
+            # Requested type has never been scraped — treat as full 6-month backfill.
+            # Do NOT fall back to another type's days (e.g. commission=0 would
+            # incorrectly suppress a float scrape that hasn't happened yet).
+            return 6, 180
         else:
-            # If no transaction_type specified or not found, get the max days from all types
+            # No specific type requested — use the max days across all types
             days_list = [float(v[0]) for v in shortcode_data.values() if isinstance(v, list)]
             days = max(days_list) if days_list else 180
     else:
@@ -3163,7 +3216,7 @@ def select_dates_and_submit_(page: Page) -> bool:
             user = User.query.filter_by(id=user_id).first()
             if user:
                 # send_session_timeout_email(user.email)
-                send_session_timeout_email("martinmaati31@gmail.com")
+                send_session_timeout_email(user.email)
                 # context.close()
                 # browser.close()
                 
@@ -3766,7 +3819,7 @@ def _run_float_pass(page: Page, active_short_codes: Set[str], to_be_rerun: list)
             wait_for_table_load(page)
 
         total_in_list = get_total_from_pagination(page)
-        if total_in_list == 0:
+        if not total_in_list:
             break
 
         processed = process_page_rows(
@@ -3804,52 +3857,76 @@ def process_organization_rows(page: Page) -> None:
     while go_previous_on_organisation(page):
         pass  # Go back to first page
 
+    def _do_swaps_then_return(label: str) -> None:
+        """Scrape swaps (dedup skips already-done shortcodes), then navigate back to child org list."""
+        logger.info(f"[INFO] [{label}] Starting swaps scrape...")
+        _scrap_swaps_(page, all_shortcodes)
+        logger.info(f"[INFO] [{label}] Swaps done. Navigating back to Child Organisation list...")
+        _navigate_to_child_org_list(page)
+        wait_for_table_load(page)
+
+    def _do_retries(label: str) -> None:
+        """Run retry pass if anything failed, then scrape swaps and return to child org list."""
+        if not to_be_rerun:
+            return
+        logger.info(f"[WARN] [{label}] {len(to_be_rerun)} organizations need reprocessing: {to_be_rerun}")
+        _navigate_to_child_org_list(page)
+        wait_for_table_load(page)
+        if rerun_failed_codes(page, to_be_rerun):
+            logger.info(f"[SUCCESS] [{label}] All retries succeeded.")
+        else:
+            logger.error(f"[ERROR] [{label}] Some organizations still failed after retries.")
+        to_be_rerun.clear()
+        _do_swaps_then_return(f"{label} post-retry")
+
     if not has_priority_codes:
         # ── Case 1: no priority shortcodes ──────────────────────────────────
-        # Scrape head office + children commission first, then float all children.
-        logger.info("[INFO] No priority shortcodes. Scraping Head Office Commission and Children Commission first...")
+        logger.info("[INFO] No priority shortcodes — scraping Head Office Commission first...")
         _scrape_head_office(page)
         logger.info("[INFO] Navigating back to Child Organisation list for float scraping...")
         _navigate_to_child_org_list(page)
         wait_for_table_load(page)
+
         total_processed = _run_float_pass(page, all_shortcodes, to_be_rerun)
-        _scrap_swaps_(page, all_shortcodes)
         logger.info(f"[SUCCESS] Float pass complete — {total_processed} organizations processed.")
+
+        # After pass: swaps → back to child list
+        _do_swaps_then_return("Case1 pass1")
+        # Retries → swaps → back to child list
+        _do_retries("Case1")
     else:
         # ── Case 2: priority shortcodes exist ───────────────────────────────
-        
-        # Scrape head office + children commission after the priority float pass.
-        logger.info("[INFO] Priority float pass complete. Scraping Head Office Commission and Children Commission...")
+        logger.info("[INFO] Scraping Head Office Commission and Children Commission...")
         _scrape_head_office(page)
-        
-        # Pass 1: float transactions for priority children only.
+
+        # Pass 1: priority children float
         logger.info("[INFO] Starting priority float pass...")
+        _navigate_to_child_org_list(page)
+        wait_for_table_load(page)
         total_processed = _run_float_pass(page, priority_short_codes, to_be_rerun)
+        logger.info("[INFO] Priority float pass complete.")
+
+        # After pass 1: swaps → back to child list
+        _do_swaps_then_return("Case2 pass1")
+        # Retries for pass 1 failures → swaps → back to child list
+        _do_retries("Case2 pass1")
+
+        # Pass 2: all children float
+        logger.info("[INFO] Starting all-children float pass...")
+        all_pass_total = _run_float_pass(page, all_shortcodes, to_be_rerun)
+        logger.info(f"[SUCCESS] All-children float pass complete — {all_pass_total} organizations processed.")
+
+        # After pass 2: swaps → back to child list
+        _do_swaps_then_return("Case2 pass2")
+        # Retries for pass 2 failures → swaps → back to child list
+        _do_retries("Case2 pass2")
 
         stats = transaction_service.gather_scraping_statistics(
             start_date=datetime.now() - timedelta(days=180),
             end_date=datetime.now(),
             company_shortcode=company_shortcode,
         )
-        send_scraping_report_email("martinmaati31@gmail.com", stats)
-
-        # Pass 2: float transactions for every child.
-        logger.info("[INFO] Navigating back to Child Organisation list for all-children float pass...")
-        _navigate_to_child_org_list(page)
-        wait_for_table_load(page)
-        all_pass_total = _run_float_pass(page, all_shortcodes, to_be_rerun)
-        logger.info(f"[SUCCESS] All-children float pass complete — {all_pass_total} organizations processed.")
-
-        # Scrape head office + children commission again after the all-children float pass.
-        logger.info("[INFO] All-children float pass complete. Scraping Head Office Commission and Children Commission...")
-        _scrap_swaps_(page, all_shortcodes)
-
-    if to_be_rerun:
-        logger.error(f"[WARN] {len(to_be_rerun)} organizations failed and need reprocessing: {to_be_rerun}")
-        if rerun_failed_codes(page, to_be_rerun):
-            logger.error("[SUCCESS] All failed organizations reprocessed successfully!")
-        else:
-            logger.error("[ERROR] Some organizations still failed after retries.")
+        send_scraping_report_email(user.email, stats)
 
 def scrape_child_org_commission(page:Page,business_shortcode:str=""):
     try:
@@ -4177,7 +4254,7 @@ def process_page_rows(
         processed_on_page += 1
 
     # Scroll to load more rows if needed
-    if processed_on_page < total_in_list:
+    if total_in_list and processed_on_page < total_in_list:
         page.mouse.wheel(0, 1200)
         time.sleep(0.5)
 

@@ -38,6 +38,29 @@ def mjpeg_stream(job_id: str):
     )
 
 
+@stream_bp.route('/<job_id>', methods=['DELETE'])
+@jwt_required()
+def kill_stream(job_id: str):
+    """
+    Kill the running scraper for this job.
+    Closes the Playwright browser (which crashes the scraper thread naturally)
+    and sends a sentinel to the MJPEG queue so connected consumers disconnect.
+    """
+    import app.utils.mpesa_automation as auto
+    from app.streaming.stream_manager import stream_manager
+
+    try:
+        if auto.browser:
+            auto.browser.close()
+            logger.info(f"[STREAM-KILL] Browser closed for job={job_id}")
+    except Exception as e:
+        logger.warning(f"[STREAM-KILL] Could not close browser for job={job_id}: {e}")
+
+    stream_manager.close(job_id)
+    logger.info(f"[STREAM-KILL] Stream queue closed for job={job_id}")
+    return jsonify({'ok': True})
+
+
 @stream_bp.route('/<job_id>/otp', methods=['POST'])
 @jwt_required()
 def submit_otp(job_id: str):
