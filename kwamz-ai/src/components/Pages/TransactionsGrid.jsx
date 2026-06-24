@@ -24,7 +24,6 @@ import config from '../../Config';
 import { useToast } from './ToastProvider';
 import TransactionDetailsModal from './TransactionDetailsModal.jsx';
 import TransactionStatsModal from './TransactionStatsModal.jsx';
-import CommissionsReportModal from './CommissionsReportModal.jsx';
 import FraudReportModal from './FraudReportModal.jsx';
 import AgentPerformanceReportModal from './AgentPerformanceReportModal.jsx';
 import MonthlyCommissionReportModal from './MonthlyCommissionReportModal.jsx';
@@ -39,7 +38,6 @@ function TransactionsGrid() {
     const [searchTerm, setSearchTerm] = useState('');
     const [selectedTransactionIds, setSelectedTransactionIds] = useState([]);
     const [isTransactionModalOpen, setIsTransactionModalOpen] = useState(false);
-    const [isCommissionsReportOpen, setIsCommissionsReportOpen] = useState(false);
     const [isFraudReportOpen, setIsFraudReportOpen] = useState(false);
     const [isAgentPerformanceReportOpen, setIsAgentPerformanceReportOpen] = useState(false);
     const [isMonthlyCommissionOpen, setIsMonthlyCommissionOpen] = useState(false);
@@ -62,12 +60,15 @@ function TransactionsGrid() {
 
     // Commission till balances (latest per till, for commission view)
     const [tillBalances, setTillBalances] = useState([]);
+    const [noCommissionTills, setNoCommissionTills] = useState([]);
     const [isTillBalancesLoading, setIsTillBalancesLoading] = useState(false);
     const [tillPage, setTillPage] = useState(1);
     const [tillPageSize, setTillPageSize] = useState(10);
     const [tillPagination, setTillPagination] = useState({ total: 0, pages: 1, has_next: false, has_prev: false });
     const [tillUpdatedAfter, setTillUpdatedAfter] = useState('');
+    const [tillSortField, setTillSortField] = useState('last_updated');
     const [tillSortDir, setTillSortDir] = useState('desc');
+    const [tillShortcodeSearch, setTillShortcodeSearch] = useState('');
 
     // Transaction type toggle: 'float' | 'commission'
     const [transactionType, setTransactionType] = useState('float');
@@ -84,11 +85,17 @@ function TransactionsGrid() {
     const sortedTillBalances = useMemo(() => {
         if (!tillBalances.length) return tillBalances;
         return [...tillBalances].sort((a, b) => {
-            const ta = a.last_updated ? new Date(a.last_updated).getTime() : 0;
-            const tb = b.last_updated ? new Date(b.last_updated).getTime() : 0;
-            return tillSortDir === 'asc' ? ta - tb : tb - ta;
+            let va, vb;
+            if (tillSortField === 'last_updated') {
+                va = a.last_updated ? new Date(a.last_updated).getTime() : 0;
+                vb = b.last_updated ? new Date(b.last_updated).getTime() : 0;
+            } else {
+                va = parseFloat(a[tillSortField] || 0);
+                vb = parseFloat(b[tillSortField] || 0);
+            }
+            return tillSortDir === 'asc' ? va - vb : vb - va;
         });
-    }, [tillBalances, tillSortDir]);
+    }, [tillBalances, tillSortField, tillSortDir]);
 
     // Group transactions by company and business
     const groupedData = useMemo(() => {
@@ -249,18 +256,25 @@ function TransactionsGrid() {
     };
 
     // Fetch latest commission balance per till
-    const fetchTillBalances = async (page = tillPage, perPage = tillPageSize) => {
+    const fetchTillBalances = async (page = tillPage, perPage = tillPageSize, shortcode = tillShortcodeSearch) => {
         setIsTillBalancesLoading(true);
         try {
             const token = localStorage.getItem('token');
+            // Sync commission account balances on the main grid from the latest
+            // COMM- snapshots so both views stay in agreement.
+            axios.post(`${config.API_URL}/transactions/sync-commission-balances`, {}, {
+                headers: { Authorization: `Bearer ${token}` },
+            }).catch(() => {}); // fire-and-forget; don't block the fetch
             const params = { page, per_page: perPage };
             if (tillUpdatedAfter) params.updated_after = tillUpdatedAfter;
+            if (shortcode.trim()) params.shortcode = shortcode.trim();
             const response = await axios.get(`${config.API_URL}/transactions/commission-till-balances`, {
                 headers: { Authorization: `Bearer ${token}` },
                 params
             });
             if (response.data.success) {
                 setTillBalances(response.data.data || []);
+                setNoCommissionTills(response.data.no_commission_tills || []);
                 setTillPagination(response.data.pagination || { total: 0, pages: 1, has_next: false, has_prev: false });
             } else {
                 showToast(response.data.error || 'Failed to load till balances', 'error');
@@ -308,6 +322,15 @@ function TransactionsGrid() {
             fetchStats();
         }
     }, [currentPage, pageSize, filters, transactionType, tillPage, tillPageSize, tillUpdatedAfter]);
+
+    useEffect(() => {
+        if (transactionType !== 'commission') return;
+        const timer = setTimeout(() => {
+            setTillPage(1);
+            fetchTillBalances(1, tillPageSize, tillShortcodeSearch);
+        }, 400);
+        return () => clearTimeout(timer);
+    }, [tillShortcodeSearch]);
 
     useEffect(() => {
         if (searchTerm !== '') {
@@ -522,6 +545,7 @@ function TransactionsGrid() {
         setSearchTerm('');
         setExpandedCompanies(new Set());
         setExpandedBusinesses(new Set());
+        if (newType === 'float') setNoCommissionTills([]);
     };
 
     // Format currency
@@ -758,15 +782,6 @@ function TransactionsGrid() {
                                         </button>
                                     )}
                                     <button
-                                        onClick={() => setIsCommissionsReportOpen(true)}
-                                        disabled={transactionType === 'float' ? true : false}
-                                        className="w-full flex items-center px-4 py-2 text-sm text-slate-800 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-600 transition-colors"
-                                        role="menuitem"
-                                    >
-                                        <DollarSign className="w-4 h-4 mr-3" />
-                                        Commissions Report
-                                    </button>
-                                    <button
                                         onClick={() => { setIsFraudReportOpen(true); setIsDropdownOpen(false); }}
                                         disabled={transactionType !== 'commission'}
                                         className="w-full flex items-center px-4 py-2 text-sm text-slate-800 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-600 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
@@ -897,7 +912,7 @@ function TransactionsGrid() {
             {/* Commission Till Balances (one row per till, latest balance) */}
             {transactionType === 'commission' && (
                 <div>
-                <div className="flex items-center gap-3 mb-4">
+                <div className="flex flex-wrap items-center gap-3 mb-4">
                     <Calendar className="w-4 h-4 text-amber-500 shrink-0" />
                     <label className="text-sm font-medium text-slate-600 dark:text-slate-300 shrink-0">Updated after</label>
                     <input
@@ -914,6 +929,24 @@ function TransactionsGrid() {
                             Clear
                         </button>
                     )}
+                    <div className="relative ml-auto">
+                        <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" />
+                        <input
+                            type="text"
+                            placeholder="Search shortcode..."
+                            value={tillShortcodeSearch}
+                            onChange={e => setTillShortcodeSearch(e.target.value)}
+                            className="pl-9 pr-8 py-1.5 bg-slate-100 dark:bg-slate-700 border border-slate-200 dark:border-slate-600 rounded-lg text-sm text-slate-800 dark:text-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-amber-500 w-48"
+                        />
+                        {tillShortcodeSearch && (
+                            <button
+                                onClick={() => setTillShortcodeSearch('')}
+                                className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-400 hover:text-red-500 transition-colors text-xs"
+                            >
+                                ✕
+                            </button>
+                        )}
+                    </div>
                 </div>
                 <div className="overflow-x-auto">
                     <table className="w-full text-sm">
@@ -921,20 +954,31 @@ function TransactionsGrid() {
                             <tr className="bg-slate-100 dark:bg-slate-700 text-left text-slate-600 dark:text-slate-300">
                                 <th className="px-4 py-3 font-semibold rounded-l-xl">Till Name</th>
                                 <th className="px-4 py-3 font-semibold">Shortcode</th>
-                                <th className="px-4 py-3 font-semibold">Current Balance</th>
-                                <th className="px-4 py-3 font-semibold">Available Balance</th>
-                                <th className="px-4 py-3 font-semibold rounded-r-xl">
-                                    <button
-                                        onClick={() => setTillSortDir(d => d === 'asc' ? 'desc' : 'asc')}
-                                        className="flex items-center gap-1 hover:text-amber-600 dark:hover:text-amber-400 transition-colors"
-                                    >
-                                        Last Updated
-                                        <span className="flex flex-col leading-none">
-                                            <span className={`text-[10px] ${tillSortDir === 'asc' ? 'text-amber-500' : 'text-slate-400'}`}>▲</span>
-                                            <span className={`text-[10px] ${tillSortDir === 'desc' ? 'text-amber-500' : 'text-slate-400'}`}>▼</span>
-                                        </span>
-                                    </button>
-                                </th>
+                                {['current_balance', 'available_balance', 'last_updated'].map(field => {
+                                    const labels = { current_balance: 'Current Balance', available_balance: 'Available Balance', last_updated: 'Last Updated' };
+                                    const active = tillSortField === field;
+                                    return (
+                                        <th key={field} className={`px-4 py-3 font-semibold${field === 'last_updated' ? ' rounded-r-xl' : ''}`}>
+                                            <button
+                                                onClick={() => {
+                                                    if (active) {
+                                                        setTillSortDir(d => d === 'asc' ? 'desc' : 'asc');
+                                                    } else {
+                                                        setTillSortField(field);
+                                                        setTillSortDir('desc');
+                                                    }
+                                                }}
+                                                className="flex items-center gap-1 hover:text-amber-600 dark:hover:text-amber-400 transition-colors"
+                                            >
+                                                {labels[field]}
+                                                <span className="flex flex-col leading-none">
+                                                    <span className={`text-[10px] ${active && tillSortDir === 'asc' ? 'text-amber-500' : 'text-slate-400'}`}>▲</span>
+                                                    <span className={`text-[10px] ${active && tillSortDir === 'desc' ? 'text-amber-500' : 'text-slate-400'}`}>▼</span>
+                                                </span>
+                                            </button>
+                                        </th>
+                                    );
+                                })}
                             </tr>
                         </thead>
                         <tbody>
@@ -945,37 +989,64 @@ function TransactionsGrid() {
                                         <div className="mt-2 text-slate-500 dark:text-slate-400">Loading commission balances...</div>
                                     </td>
                                 </tr>
-                            ) : tillBalances.length === 0 ? (
+                            ) : tillBalances.length === 0 && noCommissionTills.length === 0 ? (
                                 <tr>
                                     <td colSpan={5} className="text-center py-8 text-slate-500 dark:text-slate-400">
                                         No commission till balances found
                                     </td>
                                 </tr>
                             ) : (
-                                sortedTillBalances.map((till, index) => (
-                                    <tr
-                                        key={till.id}
-                                        className={`border-b border-slate-200 dark:border-slate-600 ${
-                                            index % 2 === 0 ? 'bg-white dark:bg-slate-800' : 'bg-slate-50 dark:bg-slate-700/50'
-                                        } hover:bg-amber-50 dark:hover:bg-slate-700 transition-colors`}
-                                    >
-                                        <td className="px-4 py-3 font-medium text-slate-800 dark:text-white">
-                                            {till.till_name}
-                                        </td>
-                                        <td className="px-4 py-3 font-mono text-amber-600 dark:text-amber-400">
-                                            {till.shortcode}
-                                        </td>
-                                        <td className="px-4 py-3 font-bold text-slate-800 dark:text-white">
-                                            {formatCurrency(till.current_balance)}
-                                        </td>
-                                        <td className="px-4 py-3 font-bold text-green-600 dark:text-green-400">
-                                            {formatCurrency(till.available_balance)}
-                                        </td>
-                                        <td className="px-4 py-3 text-slate-500 dark:text-slate-400 text-xs">
-                                            {formatDate(till.last_updated)}
-                                        </td>
-                                    </tr>
-                                ))
+                                <>
+                                    {noCommissionTills.map((till, index) => (
+                                        <tr
+                                            key={till.id}
+                                            className="border-b border-red-100 dark:border-red-900/30 bg-red-50 dark:bg-red-950/20 hover:bg-red-100 dark:hover:bg-red-900/30 transition-colors"
+                                        >
+                                            <td className="px-4 py-3 font-medium text-slate-700 dark:text-slate-300">
+                                                <span>{till.till_name}</span>
+                                                <span className="ml-2 text-xs font-semibold text-red-600 dark:text-red-400 bg-red-100 dark:bg-red-900/50 px-2 py-0.5 rounded-full">
+                                                    No commission data
+                                                </span>
+                                            </td>
+                                            <td className="px-4 py-3 font-mono text-amber-600 dark:text-amber-400">
+                                                {till.shortcode}
+                                            </td>
+                                            <td className="px-4 py-3 text-slate-400 dark:text-slate-500 italic text-sm">
+                                                —
+                                            </td>
+                                            <td className="px-4 py-3 text-slate-400 dark:text-slate-500 italic text-sm">
+                                                —
+                                            </td>
+                                            <td className="px-4 py-3 text-slate-400 dark:text-slate-500 italic text-sm">
+                                                —
+                                            </td>
+                                        </tr>
+                                    ))}
+                                    {sortedTillBalances.map((till, index) => (
+                                        <tr
+                                            key={till.id}
+                                            className={`border-b border-slate-200 dark:border-slate-600 ${
+                                                index % 2 === 0 ? 'bg-white dark:bg-slate-800' : 'bg-slate-50 dark:bg-slate-700/50'
+                                            } hover:bg-amber-50 dark:hover:bg-slate-700 transition-colors`}
+                                        >
+                                            <td className="px-4 py-3 font-medium text-slate-800 dark:text-white">
+                                                {till.till_name}
+                                            </td>
+                                            <td className="px-4 py-3 font-mono text-amber-600 dark:text-amber-400">
+                                                {till.shortcode}
+                                            </td>
+                                            <td className="px-4 py-3 font-bold text-slate-800 dark:text-white">
+                                                {formatCurrency(till.current_balance)}
+                                            </td>
+                                            <td className="px-4 py-3 font-bold text-green-600 dark:text-green-400">
+                                                {formatCurrency(till.available_balance)}
+                                            </td>
+                                            <td className="px-4 py-3 text-slate-500 dark:text-slate-400 text-xs">
+                                                {formatDate(till.last_updated)}
+                                            </td>
+                                        </tr>
+                                    ))}
+                                </>
                             )}
                         </tbody>
                     </table>
@@ -1372,12 +1443,6 @@ function TransactionsGrid() {
                 transactionType={transactionType}
             />
 
-            <CommissionsReportModal
-                isOpen={isCommissionsReportOpen}
-                onClose={() => setIsCommissionsReportOpen(false)}
-                filters={filters}
-                transactionType={transactionType}
-            />
 
             <FraudReportModal
                 isOpen={isFraudReportOpen}

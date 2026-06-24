@@ -41,6 +41,11 @@ function AgentCompanyList() {
     setIsLoading(true);
     try {
       const token = localStorage.getItem('token');
+      // Sync commission account balances from latest COMM- snapshots first so
+      // the grid shows the same figures as the Commission Transactions tab.
+      await axios.post(`${config.API_URL}/transactions/sync-commission-balances`, {}, {
+        headers: { Authorization: `Bearer ${token}` },
+      }).catch(() => {});
       const response = await axios.get(`${config.API_URL}/agentcompany`, {
         headers: { Authorization: `Bearer ${token}` },
       });

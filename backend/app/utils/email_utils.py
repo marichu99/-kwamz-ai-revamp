@@ -280,6 +280,7 @@ def generate_scraping_report_email(stats_data: dict):
         'total_commission': comm['total_commission'],
         'commission_transactions': comm['commission_transactions'],
         'average_commission_rate': comm['average_commission_rate'],
+        'tills': stats_data.get('tills', []),
         'current_year': datetime.now().year,
     }
 

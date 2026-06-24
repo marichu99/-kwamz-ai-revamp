@@ -268,6 +268,36 @@ h2 {
     </p>
 </div>
 
+{% if tills %}
+<h2>📋 Till Balances (Highest Float First)</h2>
+<table class="data-table">
+<tr>
+    <th>#</th>
+    <th>Till</th>
+    <th>Shortcode</th>
+    <th>User Agent</th>
+    <th style="text-align:right;">Float (KES)</th>
+    <th style="text-align:right;">Commission (KES)</th>
+</tr>
+{% for till in tills %}
+<tr style="{% if till.float_balance < 1000 %}background-color:#ffebee;{% elif till.float_balance < 5000 %}background-color:#fff8e1;{% endif %}">
+    <td>{{ loop.index }}</td>
+    <td style="font-size:12px;">{{ till.till_name }}</td>
+    <td style="color:#2e5b4f;font-weight:bold;">{{ till.shortcode }}</td>
+    <td style="font-size:12px;">{{ till.user_agent }}</td>
+    <td style="text-align:right;font-weight:bold;{% if till.float_balance < 1000 %}color:#c62828;{% elif till.float_balance < 5000 %}color:#856404;{% else %}color:#2e7d32;{% endif %}">
+        {{ "{:,.2f}".format(till.float_balance) }}
+    </td>
+    <td style="text-align:right;">{{ "{:,.2f}".format(till.commission_balance) }}</td>
+</tr>
+{% endfor %}
+</table>
+
+<p style="font-size:11px;color:#888;margin-top:6px;">
+    🔴 Red rows = float below KES 1,000 &nbsp;|&nbsp; 🟡 Yellow rows = below KES 5,000
+</p>
+{% endif %}
+
 </div>
 
 <div class="footer">

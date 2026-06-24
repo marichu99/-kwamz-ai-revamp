@@ -995,13 +995,40 @@ def get_commission_till_balances():
         page = request.args.get('page', 1, type=int)
         per_page = request.args.get('per_page', 10, type=int)
         updated_after = request.args.get('updated_after', None)
+        shortcode = request.args.get('shortcode', None)
 
         result = transaction_service.get_commission_till_balances(
-            company_ids=company_ids, page=page, per_page=per_page, updated_after=updated_after
+            company_ids=company_ids, page=page, per_page=per_page,
+            updated_after=updated_after, shortcode=shortcode
         )
         return jsonify(result), 200 if result['success'] else 400
     except Exception as e:
         current_app.logger.error(f"Error fetching commission till balances: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
+@transaction_bp.route('/sync-commission-balances', methods=['POST'])
+@jwt_required()
+def sync_commission_balances():
+    """Bulk-sync AgentAccountBalance from the latest COMM- snapshots."""
+    try:
+        current_user_id = get_jwt_identity()
+        current_user = UserService.get_user_by_id(user_id=current_user_id)
+        if not current_user:
+            return jsonify({'error': 'User not found'}), 404
+
+        role = (current_user.role or 'user').lower()
+        if role in ('admin', 'administrator'):
+            company_ids = None
+        elif role == 'agent':
+            company_ids = [c.id for c in Company.query.filter_by(agent_user_id=current_user_id).all()]
+        else:
+            company_ids = [c.id for c in Company.query.filter_by(user_id=current_user_id).all()]
+
+        result = transaction_service.sync_all_commission_balances(company_ids=company_ids)
+        return jsonify({'success': True, **result}), 200
+    except Exception as e:
+        current_app.logger.error(f"Error syncing commission balances: {e}")
         return jsonify({'error': str(e)}), 500
 
 

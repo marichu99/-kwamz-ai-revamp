@@ -359,20 +359,24 @@ class TransactionService:
 
     def _sync_commission_account_balance(self, business_shortcode: str) -> None:
         """
-        After commission transactions are scraped, push the latest balance into
-        AgentAccountBalance so the Agent Companies grid stays in sync without
-        waiting for the next head-office CSV export.
+        Push the latest COMM- snapshot balance into AgentAccountBalance for
+        every commission-type account linked to this shortcode's AgentCompany.
+        We target ALL accounts whose account_type contains 'commission' (case-
+        insensitive) so that both the real scraped account ('Agency Commission
+        Account') and any synthetic COMM- account stay in agreement with what
+        the Commission Transactions tab shows.
         """
         latest_txn = (
             Transaction.query
             .filter(
                 Transaction.business_shortcode == business_shortcode,
                 Transaction.transaction_type == 'commission',
+                Transaction.receipt_no.like('COMM-%'),
             )
             .order_by(Transaction.completion_time.desc(), Transaction.id.desc())
             .first()
         )
-        if not latest_txn or latest_txn.balance is None:
+        if not latest_txn or latest_txn.paid_in is None:
             return
 
         agent_company = AgentCompany.query.filter(
@@ -385,12 +389,16 @@ class TransactionService:
         if not agent_company:
             return
 
-        commission_account = AgentAccount.query.filter_by(
-            agent_company_id=agent_company.id,
-            account_type='COMMISSION',
-        ).first()
-        if not commission_account:
-            commission_account = AgentAccount(
+        # Find ALL commission-type accounts for this company (real scraped +
+        # any synthetic COMM- accounts).
+        commission_accounts = AgentAccount.query.filter(
+            AgentAccount.agent_company_id == agent_company.id,
+            AgentAccount.account_type.ilike('%commission%'),
+        ).all()
+
+        if not commission_accounts:
+            # No commission account exists yet — create a synthetic one.
+            new_acc = AgentAccount(
                 agent_company_id=agent_company.id,
                 account_number=f'COMM-{business_shortcode}',
                 account_type='COMMISSION',
@@ -399,37 +407,71 @@ class TransactionService:
                 relationship='Owned',
                 status='ACTIVE',
             )
-            db.session.add(commission_account)
+            db.session.add(new_acc)
             db.session.flush()
+            commission_accounts = [new_acc]
 
-        commission_account.last_scraped_at = datetime.now()
-
-        now = datetime.now()
+        # Mirror exactly what get_commission_till_balances exposes:
+        # paid_in = current balance scraped from M-Pesa statement
+        # commission_amount = available balance
+        current_bal   = latest_txn.paid_in
+        available_bal = latest_txn.commission_amount if latest_txn.commission_amount is not None else latest_txn.paid_in
+        now       = datetime.now()
         day_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
         day_end   = now.replace(hour=23, minute=59, second=59, microsecond=999999)
-        existing = AgentAccountBalance.query.filter(
-            AgentAccountBalance.agent_account_id == commission_account.id,
-            AgentAccountBalance.snapshot_at >= day_start,
-            AgentAccountBalance.snapshot_at <= day_end,
-        ).first()
 
-        current_bal   = latest_txn.balance
-        available_bal = latest_txn.commission_amount if latest_txn.commission_amount is not None else latest_txn.balance
-
-        if existing:
-            existing.current_balance   = current_bal
-            existing.available_balance = available_bal
-            existing.snapshot_at       = now
-        else:
-            db.session.add(AgentAccountBalance(
-                agent_account_id=commission_account.id,
-                current_balance=current_bal,
-                available_balance=available_bal,
-                snapshot_at=now,
-            ))
+        for account in commission_accounts:
+            account.last_scraped_at = now
+            existing = AgentAccountBalance.query.filter(
+                AgentAccountBalance.agent_account_id == account.id,
+                AgentAccountBalance.snapshot_at >= day_start,
+                AgentAccountBalance.snapshot_at <= day_end,
+            ).first()
+            if existing:
+                existing.current_balance   = current_bal
+                existing.available_balance = available_bal
+                existing.snapshot_at       = now
+            else:
+                db.session.add(AgentAccountBalance(
+                    agent_account_id=account.id,
+                    current_balance=current_bal,
+                    available_balance=available_bal,
+                    snapshot_at=now,
+                ))
 
         db.session.commit()
-        logger.info(f"AgentAccountBalance synced for {business_shortcode}: balance={current_bal}")
+        logger.info(
+            f"AgentAccountBalance synced for {business_shortcode}: "
+            f"balance={current_bal} across {len(commission_accounts)} account(s)"
+        )
+
+    def sync_all_commission_balances(self, company_ids: list = None) -> dict:
+        """
+        Bulk-sync AgentAccountBalance for every commission till that has a
+        COMM- snapshot. Useful for a one-off reconciliation after the fix.
+        """
+        q = (
+            db.session.query(Transaction.business_shortcode)
+            .filter(
+                Transaction.transaction_type == 'commission',
+                Transaction.receipt_no.like('COMM-%'),
+                Transaction.business_shortcode.isnot(None),
+            )
+        )
+        if company_ids:
+            q = q.filter(Transaction.company_id.in_(company_ids))
+        shortcodes = [r[0] for r in q.distinct().all()]
+
+        synced, skipped = 0, 0
+        for sc in shortcodes:
+            try:
+                self._sync_commission_account_balance(sc)
+                synced += 1
+            except Exception as e:
+                logger.warning(f"sync_all_commission_balances skipped {sc}: {e}")
+                skipped += 1
+
+        return {'synced': synced, 'skipped': skipped, 'total': len(shortcodes)}
 
     def _update_transactions_batch(self, transactions_data: List[Dict],
                                   transaction_type: str, company_shortcode: str, 
@@ -788,10 +830,11 @@ class TransactionService:
             logger.error(f'[COMM-BALANCE] Failed: {e}')
             return {'success': False, 'error': str(e)}
 
-    def get_commission_till_balances(self, company_ids: list = None, page: int = 1, per_page: int = 10, updated_after: str = None) -> dict:
+    def get_commission_till_balances(self, company_ids: list = None, page: int = 1, per_page: int = 10, updated_after: str = None, shortcode: str = None) -> dict:
         """
         Return the latest COMM-{shortcode} snapshot per till, paginated.
         One row per business_shortcode, ordered by shortcode.
+        Also returns tills with no commission data at all.
         """
         try:
             latest_sub = (
@@ -806,6 +849,8 @@ class TransactionService:
             )
             if company_ids is not None:
                 latest_sub = latest_sub.filter(Transaction.company_id.in_(company_ids))
+            if shortcode:
+                latest_sub = latest_sub.filter(Transaction.business_shortcode.ilike(f'%{shortcode}%'))
             latest_sub = latest_sub.group_by(Transaction.business_shortcode).subquery()
 
             base_query = (
@@ -845,11 +890,48 @@ class TransactionService:
                     'available_balance': str(t.commission_amount or '0.00'),
                     'last_updated': t.completion_time.isoformat() if t.completion_time else None,
                     'receipt_no': t.receipt_no,
+                    'no_commission_data': False,
                 })
+
+            # Find AgentCompany tills that have no commission data at all
+            shortcodes_with_data_q = (
+                db.session.query(Transaction.business_shortcode)
+                .filter(
+                    Transaction.transaction_type == 'commission',
+                    Transaction.receipt_no.like('COMM-%'),
+                )
+            )
+            if company_ids is not None:
+                shortcodes_with_data_q = shortcodes_with_data_q.filter(Transaction.company_id.in_(company_ids))
+            shortcodes_with_data = {r[0] for r in shortcodes_with_data_q.distinct().all()}
+
+            agent_query = db.session.query(AgentCompany).filter(
+                AgentCompany.business_short_code.isnot(None),
+            )
+            if company_ids is not None:
+                agent_query = agent_query.filter(AgentCompany.company_id.in_(company_ids))
+            if shortcode:
+                agent_query = agent_query.filter(AgentCompany.business_short_code.ilike(f'%{shortcode}%'))
+
+            no_data_tills = []
+            for ac in agent_query.order_by(AgentCompany.business_short_code).all():
+                sc = ac.business_short_code
+                if sc and sc not in shortcodes_with_data:
+                    no_data_tills.append({
+                        'id': f'nd-{ac.id}',
+                        'shortcode': sc,
+                        'till_name': ac.company_name or sc,
+                        'current_balance': None,
+                        'available_balance': None,
+                        'last_updated': None,
+                        'receipt_no': None,
+                        'no_commission_data': True,
+                    })
 
             return {
                 'success': True,
                 'data': data,
+                'no_commission_tills': no_data_tills,
                 'pagination': {
                     'page': page,
                     'per_page': per_page,
@@ -4539,13 +4621,103 @@ class TransactionService:
         
         return {"rank": len(period_amounts) + 1, "total": len(period_amounts), "percentile": 0}
 
+    def _build_till_list(self, company_shortcode: str) -> list:
+        """
+        Return all tills under company_shortcode with user agent, float balance,
+        and commission balance, sorted by float descending.
+        Uses batch queries to avoid N+1.
+        """
+        agent_companies = AgentCompany.query.filter_by(
+            parent_short_code=company_shortcode
+        ).all()
+        if not agent_companies:
+            return []
+
+        ac_ids = [ac.id for ac in agent_companies]
+
+        # Latest float balance per agent_company_id
+        float_sub = (
+            db.session.query(
+                AgentAccount.agent_company_id,
+                func.max(AgentAccountBalance.snapshot_at).label('latest'),
+            )
+            .join(AgentAccountBalance, AgentAccountBalance.agent_account_id == AgentAccount.id)
+            .filter(
+                AgentAccount.agent_company_id.in_(ac_ids),
+                AgentAccount.account_type.ilike('%float%'),
+            )
+            .group_by(AgentAccount.agent_company_id)
+            .subquery()
+        )
+        float_rows = (
+            db.session.query(AgentAccount.agent_company_id, AgentAccountBalance.current_balance)
+            .join(AgentAccountBalance, AgentAccountBalance.agent_account_id == AgentAccount.id)
+            .join(float_sub, and_(
+                AgentAccount.agent_company_id == float_sub.c.agent_company_id,
+                AgentAccountBalance.snapshot_at == float_sub.c.latest,
+            ))
+            .filter(AgentAccount.account_type.ilike('%float%'))
+            .all()
+        )
+        float_map = {ac_id: float(bal or 0) for ac_id, bal in float_rows}
+
+        # Latest commission balance per agent_company_id (prefer COMM- snapshot)
+        comm_sub = (
+            db.session.query(
+                Transaction.business_shortcode,
+                func.max(Transaction.completion_time).label('latest'),
+            )
+            .filter(
+                Transaction.transaction_type == 'commission',
+                Transaction.receipt_no.like('COMM-%'),
+            )
+            .group_by(Transaction.business_shortcode)
+            .subquery()
+        )
+        comm_rows = (
+            db.session.query(Transaction.business_shortcode, Transaction.paid_in)
+            .join(comm_sub, and_(
+                Transaction.business_shortcode == comm_sub.c.business_shortcode,
+                Transaction.completion_time == comm_sub.c.latest,
+            ))
+            .filter(
+                Transaction.transaction_type == 'commission',
+                Transaction.receipt_no.like('COMM-%'),
+            )
+            .all()
+        )
+        comm_map = {sc: float(bal or 0) for sc, bal in comm_rows if sc}
+
+        tills = []
+        for ac in agent_companies:
+            sc = ac.short_code or ac.business_short_code or ''
+            try:
+                agents = list(ac.user_agents.limit(1).all())
+                user_agent = (
+                    f"{agents[0].firstname} {agents[0].lastname} ({agents[0].phone_number})"
+                    if agents else '—'
+                )
+            except Exception:
+                user_agent = '—'
+
+            tills.append({
+                'till_name': ac.company_name or sc,
+                'shortcode': sc,
+                'user_agent': user_agent,
+                'float_balance': float_map.get(ac.id, 0.0),
+                'commission_balance': comm_map.get(sc, 0.0),
+            })
+
+        tills.sort(key=lambda x: x['float_balance'], reverse=True)
+        return tills
+
     def gather_scraping_statistics(self,start_date, end_date, company_shortcode):
         """
         Gather statistics from the database for the email report.
-        """    
+        """
         # Agent statistics
         total_agents = AgentCompany.query.count()
-                
+
         active_agents = AgentCompany.query.filter_by(
             parent_short_code=company_shortcode,
             is_active_on_portal=True
@@ -4643,7 +4815,8 @@ class TransactionService:
                 'total_commission': total_commission,
                 'commission_transactions': commission_transaction_count,
                 'average_commission_rate': avg_commission_rate
-            }
+            },
+            'tills': self._build_till_list(company_shortcode),
         }
 
     def get_dashboard_analytics(self, filters: Dict = None) -> Dict:

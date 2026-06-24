@@ -124,8 +124,12 @@ class AgentPerformanceReportService:
 
     def _commission_map(self, start_dt, end_dt):
         """
-        Sum commission earned per business_shortcode within the date range.
-        Excludes COMM-% synthetic snapshot records (child shortcode rollups).
+        Sum commission rolled up to head office per business_shortcode within
+        the date range. Uses only 'Aggregator Commission roll-up' transactions
+        (same source as the Monthly Commission Rollup report) so figures are
+        in tandem with that report.
+        Rollup transactions are posted on the 1st of the month after the
+        commission month, so a Jun 1-24 period captures the May rollup.
         """
         rows = (
             db.session.query(
@@ -135,6 +139,7 @@ class AgentPerformanceReportService:
             .filter(
                 Transaction.transaction_type == 'commission',
                 Transaction.receipt_no.notlike('COMM-%'),
+                Transaction.reason_type.ilike('%roll%'),
                 Transaction.completion_time >= start_dt,
                 Transaction.completion_time <= end_dt,
             )
@@ -144,7 +149,8 @@ class AgentPerformanceReportService:
         return {sc: float(total) for sc, total in rows if sc}
 
     def _deposit_withdrawal_map(self, start_dt, end_dt):
-        """Sum paid_in and withdrawn per business_shortcode in the period."""
+        """Sum paid_in and withdrawn per business_shortcode in the period.
+        Excludes rollup accounting entries so only real float transactions count."""
         rows = (
             db.session.query(
                 Transaction.business_shortcode,
@@ -155,6 +161,7 @@ class AgentPerformanceReportService:
             .filter(
                 Transaction.completion_time >= start_dt,
                 Transaction.completion_time <= end_dt,
+                Transaction.transaction_type == 'float',
             )
             .group_by(Transaction.business_shortcode)
             .all()
@@ -343,6 +350,7 @@ class AgentPerformanceReportService:
 
         return {
             'period': f"{start_d.strftime('%d %b %Y')} — {end_d.strftime('%d %b %Y')}",
+            'commission_source': 'Aggregator roll-up to head office (in tandem with Monthly Commission Rollup)',
             'thresholds': {
                 'commission': commission_threshold,
                 'float': float_threshold,

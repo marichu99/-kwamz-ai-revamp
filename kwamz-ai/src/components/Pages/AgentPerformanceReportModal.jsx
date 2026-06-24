@@ -278,7 +278,12 @@ export default function AgentPerformanceReportModal({ isOpen, onClose, companyId
                         <div>
                             <h2 className="text-xl font-bold text-slate-800 dark:text-white">Agent Performance Report</h2>
                             {report && (
-                                <p className="text-sm text-slate-500 dark:text-slate-400">{report.period}</p>
+                                <>
+                                    <p className="text-sm text-slate-500 dark:text-slate-400">{report.period}</p>
+                                    {report.commission_source && (
+                                        <p className="text-xs text-emerald-600 dark:text-emerald-400 mt-0.5">{report.commission_source}</p>
+                                    )}
+                                </>
                             )}
                         </div>
                     </div>
