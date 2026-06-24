@@ -200,14 +200,16 @@ def login_to_mpesa(password: str = None, username: str = None, short_code: str =
             page.goto(url, timeout=600000)
             time.sleep(3)
 
-            # Capture captcha BEFORE filling the form — filling credentials can
-            # trigger Vue reactivity on the portal that regenerates the captcha image.
-            captcha_b64 = _capture_captcha_image(page)
-
             fill_login_form(page, short_code, username, password)
             logger.info("[INFO] Login form filled")
 
-            # Show the user the captured captcha image and wait for their input
+            # Wait 1 s so the MJPEG stream delivers the fully-filled-form frame to
+            # the frontend before the captcha dock appears.  Then re-capture the
+            # captcha — img.complete waits for any portal-side refresh that the
+            # form fill may have triggered.
+            time.sleep(1)
+            captcha_b64 = _capture_captcha_image(page)
+
             captcha_solution = _get_captcha_from_user(job_id, captcha_b64=captcha_b64)
             logger.info(f"[INFO] Initial captcha received from user: {captcha_solution}")
 
