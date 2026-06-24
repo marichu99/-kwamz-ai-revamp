@@ -82,3 +82,41 @@ def submit_otp(job_id: str):
 
     logger.info(f"[STREAM-OTP] OTP deposited for job={job_id}")
     return jsonify({'ok': True})
+
+
+@stream_bp.route('/<job_id>/captcha', methods=['POST'])
+@jwt_required()
+def submit_captcha(job_id: str):
+    """Deposit a 4-digit captcha code from the user into the captcha mailbox."""
+    data = request.get_json(silent=True) or {}
+    code = str(data.get('captcha', ''))
+
+    if len(code) != 4 or not code.isdigit():
+        return jsonify({'error': 'Captcha must be exactly 4 digits'}), 400
+
+    from app.streaming.stream_manager import captcha_mailbox
+    ok = captcha_mailbox.put(job_id, code)
+    if not ok:
+        return jsonify({'error': 'No active browser session for this job'}), 404
+
+    logger.info(f"[STREAM-CAPTCHA] code deposited for job={job_id}")
+    return jsonify({'ok': True})
+
+
+@stream_bp.route('/<job_id>/prompt', methods=['GET'])
+@jwt_required()
+def get_prompt(job_id: str):
+    """
+    Return the current input prompt the frontend should show for this job.
+    Response: { prompt: 'captcha'|'otp'|null, captcha_b64: '<png>'|null }
+    captcha_b64 is set when the scraper has captured the captcha element so
+    the frontend can display it directly instead of reading it from the stream.
+    """
+    from app.streaming.stream_manager import prompt_manager
+    data = prompt_manager.get(job_id)
+    if data is None:
+        return jsonify({'prompt': None, 'captcha_b64': None})
+    return jsonify({
+        'prompt': data['type'],
+        'captcha_b64': data.get('captcha_b64'),
+    })

@@ -1,7 +1,7 @@
 import logging
 from playwright.sync_api import sync_playwright, Page, Locator, Download, TimeoutError as PlaywrightTimeoutError, Error as PlaywrightError
 from flask import current_app
-from app.utils.script import fill_login_form, capture_and_solve_captcha
+from app.utils.script import fill_login_form
 from app.utils.email_utils import generate_scraping_report_email, send_scraping_report_email,send_session_timeout_email,send_not_active_short_code_,send_swaps_scraped_email
 from app.tasks.fraud_detection_tasks import run_fraud_detection_for_user
 from app.service.transaction_service import TransactionService
@@ -115,6 +115,36 @@ def _start_cdp_screencast(page, job_id: str):
     return cdp
 
 
+def _get_captcha_from_user(job_id: str, page=None, timeout: float = 120.0) -> str:
+    """
+    Wait for the captcha element to load, capture a screenshot of it, then
+    signal the frontend (via PromptManager) to show the captcha dock with the
+    image embedded.  Blocks until the user submits the 4-digit code.
+    """
+    from app.streaming.stream_manager import captcha_mailbox, prompt_manager
+
+    captcha_b64 = None
+    if page is not None:
+        try:
+            captcha_selector = "//img[@class='verifyCode-img-item']"
+            page.wait_for_selector(captcha_selector, state="visible", timeout=10000)
+            time.sleep(0.5)  # let the image content fully render
+            captcha_bytes = page.locator(captcha_selector).first.screenshot()
+            captcha_b64 = base64.b64encode(captcha_bytes).decode()
+            logger.info(f"[CAPTCHA] Captured captcha element ({len(captcha_bytes)} bytes) for job={job_id}")
+        except Exception as e:
+            logger.warning(f"[CAPTCHA] Could not capture captcha image: {e}")
+
+    prompt_manager.set(job_id, 'captcha', captcha_b64=captcha_b64)
+    logger.info(f"[CAPTCHA] Waiting for user input (job={job_id}, timeout={timeout}s)…")
+    code = captcha_mailbox.get(job_id, timeout=timeout)
+    prompt_manager.clear(job_id)
+    if not code:
+        raise Exception(f"[CAPTCHA] Timed out waiting for user captcha input (job={job_id})")
+    logger.info(f"[CAPTCHA] Received captcha from user for job={job_id}")
+    return code
+
+
 def login_to_mpesa(password: str = None, username: str = None, short_code: str = None, user_id_passed: str = None, job_id: str = None) -> None:
     global company_shortcode, user_id, user,till_scraping_shortfall,context,browser
     password = password
@@ -148,62 +178,51 @@ def login_to_mpesa(password: str = None, username: str = None, short_code: str =
             # Start live screencast if a job_id was provided
             _cdp = _start_cdp_screencast(page, job_id) if job_id else None
             if job_id:
-                from app.streaming.stream_manager import otp_mailbox
+                from app.streaming.stream_manager import otp_mailbox, captcha_mailbox
                 otp_mailbox.register(job_id)
+                captcha_mailbox.register(job_id)
 
             page.goto(url, timeout=600000)
             time.sleep(3)
-            wait_after_click = 5  # seconds
 
-            # Solve captcha initially — ensure solution looks valid (<= 4 chars)
-            captcha_solution = capture_and_solve_captcha(page)
             fill_login_form(page, short_code, username, password)
             logger.info("[INFO] Login form filled")
-            logger.info(f"[DEBUG] Initial captcha solution: {captcha_solution}")
 
-            while not _is_valid_captcha(captcha_solution):
-                captcha_solution = retry_captcha_login(page)
-                fill_login_form(page, short_code, username, password)
-                logger.info(f"[DEBUG] Retried captcha solution (validity fix): {captcha_solution}")
+            # Capture the captcha image and ask the user to type it
+            captcha_solution = _get_captcha_from_user(job_id, page=page)
+            logger.info(f"[INFO] Initial captcha received from user: {captcha_solution}")
 
-            # Submit loop: retry captcha if the server says it's wrong
+            # Submit loop: re-ask the user if the captcha is rejected by the portal
             MAX_CAPTCHA_RETRIES = 5
             logged_in = False
 
             for attempt in range(1, MAX_CAPTCHA_RETRIES + 1):
-                # Guard: ensure exactly 4 digits before every login click
-                while not _is_valid_captcha(captcha_solution):
-                    logger.warning(f"[DEBUG] Invalid captcha '{captcha_solution}' on attempt {attempt}, re-solving...")
-                    captcha_solution = retry_captcha_login(page)
-
                 logger.info(f"[INFO] Login attempt {attempt}/{MAX_CAPTCHA_RETRIES} with captcha: {captcha_solution}")
 
                 page.fill("//input[@id='verifyCode']", captcha_solution)
                 page.click("//button[@id='loginBtn']")
                 logger.info("[INFO] Login button clicked; waiting for response...")
 
-                # Brief pause to let error message appear before checking
+                # Brief pause to let the error message appear before checking
                 time.sleep(3)
 
                 if has_verification_error_regex(page):
-                    logger.warning(f"[WARN] Captcha wrong on attempt {attempt}, re-solving...")
-                    captcha_solution = retry_captcha_login(page)
-                    while not _is_valid_captcha(captcha_solution):
-                        captcha_solution = retry_captcha_login(page)
-                        logger.info(f"[DEBUG] Captcha re-solve (validity fix): {captcha_solution}")
+                    logger.warning(f"[WARN] Captcha wrong on attempt {attempt}, asking user for new captcha…")
+                    captcha_solution = retry_captcha_login(page, job_id)
                     continue
 
-                # Check for OTP/2FA form — portal may require it after captcha
+                # Check for OTP/2FA form — portal may require it after a correct captcha
                 if _has_otp_form(page):
                     logger.info("[INFO] OTP form detected after login click")
                     if job_id:
+                        from app.streaming.stream_manager import prompt_manager
+                        prompt_manager.set(job_id, 'otp')
                         _type_otp_from_mailbox(page, job_id, timeout=120.0)
+                        prompt_manager.clear(job_id)
                     else:
                         logger.warning("[WARN] OTP form visible but no job_id — cannot receive OTP from UI")
 
                 # No error shown — wait for the post-login dashboard element.
-                # TargetClosedError means the portal closed/replaced the page during
-                # the post-login navigation; treat it the same as a timeout and retry.
                 try:
                     search = page.wait_for_selector(
                         "(//i[@class='el-icon el-sub-menu__icon-arrow'])[1]",
@@ -214,17 +233,12 @@ def login_to_mpesa(password: str = None, username: str = None, short_code: str =
                     logged_in = True
                     break
                 except PlaywrightTimeoutError:
-                    # Dashboard didn't appear — check if error crept in after the sleep
                     if has_verification_error_regex(page):
-                        logger.error(f"[WARN] Captcha error detected after waiting (attempt {attempt}), retrying...")
-                        captcha_solution = retry_captcha_login(page)
-                        while not _is_valid_captcha(captcha_solution):
-                            captcha_solution = retry_captcha_login(page)
+                        logger.error(f"[WARN] Captcha error detected after waiting (attempt {attempt}), retrying…")
+                        captcha_solution = retry_captcha_login(page, job_id)
                     else:
                         raise
                 except PlaywrightError as exc:
-                    # Page/browser temporarily closed during the post-login navigation.
-                    # Give Playwright a moment to settle, then retry wait_for_selector.
                     logger.warning(f"[WARN] Browser target closed on attempt {attempt}, waiting for navigation to settle: {exc}")
                     time.sleep(2)
                     try:
@@ -261,8 +275,10 @@ def login_to_mpesa(password: str = None, username: str = None, short_code: str =
     finally:
         # Always close the stream — regardless of where an exception was raised
         if job_id:
-            from app.streaming.stream_manager import otp_mailbox
+            from app.streaming.stream_manager import otp_mailbox, captcha_mailbox, prompt_manager
             otp_mailbox.unregister(job_id)
+            captcha_mailbox.unregister(job_id)
+            prompt_manager.clear(job_id)
         if _cdp:
             try:
                 _cdp.send('Page.stopScreencast')
@@ -327,33 +343,23 @@ def has_verification_error_regex(page) -> bool:
         # and the portal is redirecting to the dashboard.  No captcha error.
         return False
 
-def retry_captcha_login(page:Page) -> str:
+def retry_captcha_login(page: Page, job_id: str = None) -> str:
     """
-    Retries the captcha login process until successful or max attempts reached.
-    
-    Args:
-        page: Playwright Page object
+    Refresh the captcha image on the portal page, then wait for the user to
+    type the new 4-digit code through the live-feed captcha dock.
     """
-    # Predict the captcha that is currently displayed before refreshing
-    captcha_solution = capture_and_solve_captcha(page)
-    logger.info(f"[DEBUG] Captcha predicted (pre-refresh): {captcha_solution}")
-
-    if _is_valid_captcha(captcha_solution):
-        return captcha_solution
-
-    # Prediction invalid — refresh the captcha image, then solve the new one
     svg_element = page.query_selector("//div[@class='img-part']//*[name()='svg']")
     if svg_element:
         svg_element.click()
         logger.info("[INFO] Clicked SVG element to refresh captcha")
-        time.sleep(1)  # wait for new image to render
-        captcha_solution = capture_and_solve_captcha(page)
-        logger.info(f"[DEBUG] Captcha predicted (post-refresh): {captcha_solution}")
+        time.sleep(1)
     else:
-        logger.error("[ERROR] SVG element not found")
-        raise Exception("Failed to locate SVG element for captcha refresh")
+        logger.warning("[WARN] SVG element not found — captcha image may not have refreshed")
 
-    return captcha_solution
+    if not job_id:
+        raise Exception("[CAPTCHA] Cannot prompt for captcha without a job_id (no live feed)")
+
+    return _get_captcha_from_user(job_id, page=page)
     
 def maximize_page(page: Page) -> None:
     """

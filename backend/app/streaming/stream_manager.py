@@ -155,3 +155,91 @@ class OtpMailbox:
 
 
 otp_mailbox = OtpMailbox()
+
+
+class CaptchaMailbox:
+    """
+    Per-job captcha channel.  Works the same way as OtpMailbox but carries
+    the 4-digit code the user types in the frontend CAPTCHA dock.
+    The mailbox is drained before each new deposit so a stale value from
+    a previous failed attempt is never re-used.
+    """
+
+    def __init__(self):
+        self._queues: dict = {}
+        self._lock = threading.Lock()
+
+    def register(self, job_id: str) -> None:
+        with self._lock:
+            self._queues[job_id] = queue.Queue(maxsize=1)
+        logger.info(f"[CAPTCHA-MAILBOX] registered job={job_id}")
+
+    def put(self, job_id: str, code: str) -> bool:
+        with self._lock:
+            q = self._queues.get(job_id)
+        if q is None:
+            return False
+        # Drain any stale entry so the scraper always sees the latest code.
+        try:
+            q.get_nowait()
+        except queue.Empty:
+            pass
+        try:
+            q.put_nowait(code)
+            logger.info(f"[CAPTCHA-MAILBOX] code deposited for job={job_id}")
+            return True
+        except queue.Full:
+            logger.warning(f"[CAPTCHA-MAILBOX] mailbox full for job={job_id} — dropped")
+            return False
+
+    def get(self, job_id: str, timeout: float = 120.0) -> str | None:
+        with self._lock:
+            q = self._queues.get(job_id)
+        if q is None:
+            return None
+        try:
+            return q.get(timeout=timeout)
+        except queue.Empty:
+            return None
+
+    def unregister(self, job_id: str) -> None:
+        with self._lock:
+            self._queues.pop(job_id, None)
+        logger.info(f"[CAPTCHA-MAILBOX] unregistered job={job_id}")
+
+
+captcha_mailbox = CaptchaMailbox()
+
+
+class PromptManager:
+    """
+    Tracks what the frontend should currently be asking the user for.
+    The scraper sets 'captcha' or 'otp' before blocking on the relevant
+    mailbox, and clears it once input is received.  The frontend polls
+    GET /stream/<job_id>/prompt to know which input dock to show.
+
+    For captcha prompts an optional base64-encoded PNG of the captcha
+    element can be stored so the frontend can render it directly — this
+    avoids depending on the MJPEG stream to display the captcha image.
+    """
+
+    def __init__(self):
+        self._data: dict = {}
+        self._lock = threading.Lock()
+
+    def set(self, job_id: str, prompt_type: str, captcha_b64: str = None) -> None:
+        with self._lock:
+            self._data[job_id] = {'type': prompt_type, 'captcha_b64': captcha_b64}
+        logger.info(f"[PROMPT] job={job_id} prompt={prompt_type}")
+
+    def get(self, job_id: str) -> dict | None:
+        with self._lock:
+            return self._data.get(job_id)
+
+    def clear(self, job_id: str) -> None:
+        with self._lock:
+            self._data.pop(job_id, None)
+        logger.info(f"[PROMPT] job={job_id} prompt cleared")
+
+
+prompt_manager = PromptManager()

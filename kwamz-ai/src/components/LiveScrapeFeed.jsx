@@ -3,91 +3,115 @@ import { X, Wifi, WifiOff, Maximize2, Minimize2, ChevronUp, Square } from 'lucid
 import axios from 'axios';
 import config from '../Config';
 
-const OTP_LEN = 6;
+// Unified input dock — handles both 4-digit captcha and 6-digit OTP in the same spot.
+// `mode` is 'captcha' | 'otp'.  The parent controls which is shown by polling /prompt.
+// `captchaImage` is an optional base64 PNG of the captcha element (only for captcha mode).
+function InputDock({ mode, jobId, captchaImage, onSubmitted }) {
+  const len = mode === 'captcha' ? 4 : 6;
+  const isCaptcha = mode === 'captcha';
 
-function OtpDock({ jobId, onSent }) {
-  const [digits, setDigits] = useState(Array(OTP_LEN).fill(''));
-  const [state, setState] = useState('idle'); // idle | submitting | ok | error | gone
+  const [digits, setDigits] = useState(Array(len).fill(''));
+  const [state, setState] = useState('idle'); // idle | submitting | ok | error
   const [errMsg, setErrMsg] = useState('');
-  const inputRefs = useRef(Array.from({ length: OTP_LEN }, () => null));
+  const inputRefs = useRef([]);
+
+  // Reset boxes whenever the mode switches (captcha → otp)
+  useEffect(() => {
+    setDigits(Array(len).fill(''));
+    setState('idle');
+    setErrMsg('');
+    setTimeout(() => inputRefs.current[0]?.focus(), 50);
+  }, [mode, len]);
 
   const reset = useCallback(() => {
-    setDigits(Array(OTP_LEN).fill(''));
+    setDigits(Array(len).fill(''));
     setState('idle');
     setErrMsg('');
     inputRefs.current[0]?.focus();
-  }, []);
+  }, [len]);
 
-  const submit = useCallback(async (otp) => {
+  const submit = useCallback(async (value) => {
     setState('submitting');
     try {
       const token = localStorage.getItem('token');
-      await axios.post(
-        `${config.API_URL}/stream/${jobId}/otp`,
-        { otp },
-        { headers: { Authorization: `Bearer ${token}` } }
-      );
+      const url = isCaptcha
+        ? `${config.API_URL}/stream/${jobId}/captcha`
+        : `${config.API_URL}/stream/${jobId}/otp`;
+      const body = isCaptcha ? { captcha: value } : { otp: value };
+      await axios.post(url, body, { headers: { Authorization: `Bearer ${token}` } });
       setState('ok');
-      // Fade out then notify parent so it stays gone after minimize/restore
-      setTimeout(() => { setState('gone'); onSent?.(); }, 1500);
+      setTimeout(() => onSubmitted?.(), 800);
     } catch (err) {
-      setErrMsg(err?.response?.data?.error || 'Failed to submit OTP');
+      setErrMsg(err?.response?.data?.error || 'Submission failed');
       setState('error');
-      setTimeout(reset, 3000);
+      setTimeout(reset, 2500);
     }
-  }, [jobId, reset, onSent]);
-
-  if (state === 'gone') return null;
+  }, [isCaptcha, jobId, onSubmitted, reset]);
 
   const handleChange = (idx, val) => {
     if (!/^\d?$/.test(val)) return;
     const next = [...digits];
     next[idx] = val;
     setDigits(next);
-    if (val && idx < OTP_LEN - 1) inputRefs.current[idx + 1]?.focus();
+    if (val && idx < len - 1) inputRefs.current[idx + 1]?.focus();
     if (next.every(d => d !== '')) submit(next.join(''));
   };
 
   const handleKeyDown = (idx, e) => {
-    if (e.key === 'Backspace' && !digits[idx] && idx > 0) {
-      inputRefs.current[idx - 1]?.focus();
-    }
+    if (e.key === 'Backspace' && !digits[idx] && idx > 0) inputRefs.current[idx - 1]?.focus();
     if (e.key === 'ArrowLeft' && idx > 0) inputRefs.current[idx - 1]?.focus();
-    if (e.key === 'ArrowRight' && idx < OTP_LEN - 1) inputRefs.current[idx + 1]?.focus();
+    if (e.key === 'ArrowRight' && idx < len - 1) inputRefs.current[idx + 1]?.focus();
   };
 
   const handlePaste = (e) => {
     e.preventDefault();
-    const pasted = e.clipboardData.getData('text').replace(/\D/g, '').slice(0, OTP_LEN);
+    const pasted = e.clipboardData.getData('text').replace(/\D/g, '').slice(0, len);
     if (!pasted) return;
-    const next = Array(OTP_LEN).fill('');
+    const next = Array(len).fill('');
     [...pasted].forEach((ch, i) => { next[i] = ch; });
     setDigits(next);
-    const focusIdx = Math.min(pasted.length, OTP_LEN - 1);
-    inputRefs.current[focusIdx]?.focus();
-    if (pasted.length === OTP_LEN) submit(pasted);
+    inputRefs.current[Math.min(pasted.length, len - 1)]?.focus();
+    if (pasted.length === len) submit(pasted);
   };
 
-  const statusColor =
-    state === 'ok'         ? 'text-emerald-400' :
-    state === 'error'      ? 'text-red-400' :
-    state === 'submitting' ? 'text-slate-400' : 'text-slate-500';
-
   const statusText =
-    state === 'ok'         ? 'OTP sent ✓' :
+    state === 'ok'         ? (isCaptcha ? 'Captcha submitted ✓' : 'OTP sent ✓') :
     state === 'error'      ? errMsg :
-    state === 'submitting' ? 'Sending…' : 'Enter OTP if prompted';
+    state === 'submitting' ? 'Submitting…' :
+    isCaptcha              ? 'Type the 4-digit captcha shown on screen' :
+                             'Enter the OTP sent to your phone';
+
+  const statusColor =
+    state === 'ok'    ? (isCaptcha ? 'text-amber-400'   : 'text-emerald-400') :
+    state === 'error' ? 'text-red-400' :
+    state === 'submitting' ? 'text-slate-400' :
+                        'text-slate-400';
 
   return (
     <div
-      className="flex flex-col items-center gap-2 py-3 px-4 bg-slate-900 border-t border-slate-800 transition-opacity duration-700"
+      className={`flex flex-col items-center gap-2 py-3 px-4 bg-slate-900 border-t transition-opacity duration-500 ${
+        isCaptcha ? 'border-amber-700/40' : 'border-slate-800'
+      }`}
       style={{ opacity: state === 'ok' ? 0 : 1 }}
     >
+      {isCaptcha && (
+        <span className="text-xs font-semibold uppercase tracking-widest text-amber-500">
+          Captcha Required
+        </span>
+      )}
+      {isCaptcha && captchaImage && (
+        <img
+          src={`data:image/png;base64,${captchaImage}`}
+          alt="captcha"
+          className="h-12 rounded border border-amber-700/50 bg-white px-2 py-1"
+          style={{ imageRendering: 'crisp-edges' }}
+        />
+      )}
       <p className={`text-xs font-mono ${statusColor} transition-colors`}>{statusText}</p>
       <div className="flex items-center gap-2">
-        {Array.from({ length: OTP_LEN }).map((_, i) => (
+        {Array.from({ length: len }).map((_, i) => (
           <input
-            key={i}
+            key={`${mode}-${i}`}
             ref={el => { inputRefs.current[i] = el; }}
             type="text"
             inputMode="numeric"
@@ -99,11 +123,16 @@ function OtpDock({ jobId, onSent }) {
             onPaste={handlePaste}
             className={`
               w-10 h-12 text-center text-lg font-mono font-bold rounded-lg border
-              bg-slate-800 text-white caret-emerald-400 outline-none
-              transition-all duration-150
-              ${digits[i] ? 'border-emerald-500' : 'border-slate-600'}
-              focus:border-emerald-400 focus:ring-1 focus:ring-emerald-400/40
+              bg-slate-800 text-white outline-none transition-all duration-150
               disabled:opacity-40 disabled:cursor-not-allowed
+              ${digits[i]
+                ? (isCaptcha ? 'border-amber-500' : 'border-emerald-500')
+                : 'border-slate-600'
+              }
+              ${isCaptcha
+                ? 'caret-amber-400 focus:border-amber-400 focus:ring-1 focus:ring-amber-400/40'
+                : 'caret-emerald-400 focus:border-emerald-400 focus:ring-1 focus:ring-emerald-400/40'
+              }
             `}
           />
         ))}
@@ -165,8 +194,13 @@ function LiveScrapeFeed({ jobId, shortCode, isOpen, onClose, onStreamEnd, onKill
   const [status, setStatus] = useState('waiting');
   const [minimized, setMinimized] = useState(false);
   const [fullscreen, setFullscreen] = useState(false);
-  const [otpSent, setOtpSent] = useState(false);
   const [killing, setKilling] = useState(false);
+  // prompt: 'captcha' | 'otp' | null — driven by polling GET /stream/:id/prompt
+  const [prompt, setPrompt] = useState(null);
+  const [captchaImage, setCaptchaImage] = useState(null); // base64 PNG from backend
+  // Hide the dock right after the user submits; re-show if the prompt changes again
+  const [dockHidden, setDockHidden] = useState(false);
+  const prevPromptRef = useRef(null);
   const imgRef = useRef(null);
   const containerRef = useRef(null);
 
@@ -175,7 +209,6 @@ function LiveScrapeFeed({ jobId, shortCode, isOpen, onClose, onStreamEnd, onKill
   useEffect(() => {
     if (!isOpen) return;
     setStatus(jobId ? 'connecting' : 'waiting');
-    // No timer — only handleLoad (first MJPEG frame) transitions to 'live'
   }, [isOpen, jobId]);
 
   // Reset minimized state when re-opened
@@ -183,11 +216,39 @@ function LiveScrapeFeed({ jobId, shortCode, isOpen, onClose, onStreamEnd, onKill
     if (isOpen) setMinimized(false);
   }, [isOpen]);
 
-  // Reset OTP state when a new job starts
+  // Reset input state when a new job starts
   useEffect(() => {
-    setOtpSent(false);
     setKilling(false);
+    setPrompt(null);
+    setCaptchaImage(null);
+    setDockHidden(false);
+    prevPromptRef.current = null;
   }, [jobId]);
+
+  // Poll backend for which input the user should fill in right now
+  useEffect(() => {
+    if (!jobId || !isOpen) return;
+    const poll = async () => {
+      try {
+        const token = localStorage.getItem('token');
+        const { data } = await axios.get(`${config.API_URL}/stream/${jobId}/prompt`, {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        const next = data.prompt ?? null;
+        if (next !== prevPromptRef.current) {
+          prevPromptRef.current = next;
+          setPrompt(next);
+          setCaptchaImage(data.captcha_b64 ?? null);
+          if (next) setDockHidden(false); // a new prompt appeared — always show dock
+        }
+      } catch {
+        // network hiccup — just skip this tick
+      }
+    };
+    poll();
+    const id = setInterval(poll, 2000);
+    return () => clearInterval(id);
+  }, [jobId, isOpen]);
 
   const handleLoad = () => setStatus('live');
   const handleError = () => {
@@ -364,8 +425,15 @@ function LiveScrapeFeed({ jobId, shortCode, isOpen, onClose, onStreamEnd, onKill
           <LoadingOverlay status={status} />
         </div>
 
-        {/* ── OTP dock ── */}
-        {jobId && !otpSent && <OtpDock jobId={jobId} onSent={() => setOtpSent(true)} />}
+        {/* ── Input dock (captcha or OTP, same spot) ── */}
+        {jobId && prompt && !dockHidden && (
+          <InputDock
+            mode={prompt}
+            jobId={jobId}
+            captchaImage={captchaImage}
+            onSubmitted={() => setDockHidden(true)}
+          />
+        )}
 
         {/* ── Footer ── */}
         <div className="flex items-center justify-between px-4 py-2 bg-slate-900 border-t border-slate-800 shrink-0">
