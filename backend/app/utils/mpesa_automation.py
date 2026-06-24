@@ -200,25 +200,27 @@ def login_to_mpesa(password: str = None, username: str = None, short_code: str =
             page.goto(url, timeout=600000)
             time.sleep(3)
 
-            fill_login_form(page, short_code, username, password)
-            logger.info("[INFO] Login form filled")
-
-            # Wait 1 s so the MJPEG stream delivers the fully-filled-form frame to
-            # the frontend before the captcha dock appears.  Then re-capture the
-            # captcha — img.complete waits for any portal-side refresh that the
-            # form fill may have triggered.
-            time.sleep(1)
+            # Capture the captcha on the clean page (no form interaction yet) so
+            # nothing we do can trigger a portal-side captcha refresh before the
+            # user sees the image.  Credentials are filled later, immediately before
+            # clicking Login, to avoid the portal's Vue state resetting them while
+            # the user is busy reading and typing the captcha.
             captcha_b64 = _capture_captcha_image(page)
-
             captcha_solution = _get_captcha_from_user(job_id, captcha_b64=captcha_b64)
-            logger.info(f"[INFO] Initial captcha received from user: {captcha_solution}")
+            logger.info(f"[INFO] Captcha received from user: {captcha_solution}")
 
-            # Submit loop: re-ask the user if the captcha is rejected by the portal
+            # Submit loop: fill credentials fresh on every attempt (the portal can
+            # reset Vue-bound fields during the captcha wait), then enter the captcha
+            # and click Login.
             MAX_CAPTCHA_RETRIES = 5
             logged_in = False
 
             for attempt in range(1, MAX_CAPTCHA_RETRIES + 1):
-                logger.info(f"[INFO] Login attempt {attempt}/{MAX_CAPTCHA_RETRIES} with captcha: {captcha_solution}")
+                logger.info(f"[INFO] Login attempt {attempt}/{MAX_CAPTCHA_RETRIES}")
+
+                # Always fill credentials right before submitting
+                fill_login_form(page, short_code, username, password)
+                logger.info("[INFO] Login form filled")
 
                 page.fill("//input[@id='verifyCode']", captcha_solution)
                 page.click("//button[@id='loginBtn']")
