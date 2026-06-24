@@ -8,7 +8,7 @@ class Company(db.Model):
 
     id = db.Column(db.Integer, primary_key=True)
     company_name = db.Column(db.String(100), nullable=False)
-    registration_number = db.Column(db.String(50), unique=False, nullable=False)
+    registration_number = db.Column(db.String(50), unique=False, nullable=True)
     registration_date = db.Column(db.Date, nullable=True)
     address = db.Column(db.String(200), nullable=False)
     primary_owner_name = db.Column(db.Text, nullable=True)

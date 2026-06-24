@@ -332,8 +332,8 @@ function CompanyDetailsModal({ isOpen, onClose, onSubmit, isLoading, company }) 
     } else if (!/^\d{5,10}$/.test(formData.shortcode)) {
       newErrors.shortcode = 'Shortcode must be 5-10 digits';
     }
-    if (!formData.company_number.trim()) {
-      newErrors.company_number = 'Company number is required (upload CR12 document)';
+    if (formData.company_number.trim() && !/^[A-Za-z0-9\-\/]+$/.test(formData.company_number.trim())) {
+      newErrors.company_number = 'Company number format is invalid';
     }
     if (!formData.address.trim()) {
       newErrors.address = 'Address is required';
@@ -980,7 +980,7 @@ function CompanyDetailsModal({ isOpen, onClose, onSubmit, isLoading, company }) 
             <button
               type="button"
               onClick={handleSubmit}
-              disabled={isLoading || sharesInvalid || isUploadingCR12 || isDeletingCR12 || (!isCR12Valid && !existingCR12)}
+              disabled={isLoading || sharesInvalid || isUploadingCR12 || isDeletingCR12}
               className="flex-1 py-3 px-4 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-700 hover:to-teal-700 text-white font-semibold rounded-xl transition-all focus:outline-none focus:ring-2 focus:ring-emerald-500 disabled:opacity-50 disabled:cursor-not-allowed shadow-lg shadow-emerald-500/30"
             >
               {isLoading ? (

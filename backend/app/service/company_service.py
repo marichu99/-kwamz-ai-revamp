@@ -379,8 +379,7 @@ class CompanyService:
             required_fields = ['company_name', 'address', 'shortcode']
             if not all(field in company_data and company_data[field] for field in required_fields):
                 raise ValueError("Company name, address, and shortcode are required.")
-            if not company_data.get('company_number'):
-                raise ValueError("Company number is required.")
+            # company_number (registration number) is optional — omit the check
             if not isinstance(company_data.get('shortcode'), str) or not company_data['shortcode'].strip():
                 raise ValueError("Shortcode must be a non-empty string.")
             if not 5 <= len(company_data['shortcode']) <= 10 or not company_data['shortcode'].isdigit():
@@ -467,7 +466,7 @@ class CompanyService:
                 company = Company(
                     id=company_data.get('id') or None,
                     company_name=company_data['company_name'],
-                    registration_number=company_data['company_number'],
+                    registration_number=company_data.get('company_number') or None,
                     registration_date=registration_date,
                     primary_owner_name=company_data['primary_owner_name'],
                     primary_owner_email=company_data['primary_owner_email'],
