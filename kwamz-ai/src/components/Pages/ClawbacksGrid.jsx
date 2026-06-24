@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo } from 'react';
-import { Search, Calendar, AlertTriangle, Loader2, X, RefreshCw, ChevronDown, ChevronRight, Building, Store, Download } from 'lucide-react';
+import { Search, Calendar, AlertTriangle, Loader2, X, RefreshCw, ChevronDown, ChevronRight, Building, Store, Download, FileText } from 'lucide-react';
 import axios from 'axios';
 import config from '../../Config';
 import { useToast } from './ToastProvider';
@@ -13,6 +13,8 @@ function ClawbacksGrid() {
   const [isLoading, setIsLoading] = useState(false);
   const [expandedGroups, setExpandedGroups] = useState(new Set());
   const [expandedSubGroups, setExpandedSubGroups] = useState(new Set());
+  const [exportConfirm, setExportConfirm] = useState(null); // 'pdf' | 'csv'
+  const [isExportingPDF, setIsExportingPDF] = useState(false);
   const { showToast } = useToast();
 
   const fetchClawbacks = async () => {
@@ -127,6 +129,29 @@ function ClawbacksGrid() {
   const fmtAmt = (v) =>
     `KES ${Math.abs(v || 0).toLocaleString(undefined, { minimumFractionDigits: 2 })}`;
 
+  const handleExportPDF = async () => {
+    try {
+      const token = localStorage.getItem('token');
+      const params = new URLSearchParams();
+      if (startDate) params.append('start_date', startDate);
+      if (endDate) params.append('end_date', endDate);
+      const response = await axios.get(`${config.API_URL}/transactions/export-clawbacks-pdf?${params}`, {
+        headers: { Authorization: `Bearer ${token}` },
+        responseType: 'blob',
+      });
+      const url = window.URL.createObjectURL(new Blob([response.data], { type: 'application/pdf' }));
+      const link = document.createElement('a');
+      link.href = url;
+      link.setAttribute('download', `clawback_report_${new Date().toISOString().slice(0, 10)}.pdf`);
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      window.URL.revokeObjectURL(url);
+    } catch {
+      showToast('Failed to generate PDF', 'error');
+    }
+  };
+
   const handleExport = () => {
     const headers = [
       'Company Name', 'Company Shortcode', 'Agent Company Name', 'Business Shortcode',
@@ -159,6 +184,17 @@ function ClawbacksGrid() {
     URL.revokeObjectURL(url);
   };
 
+  const handleConfirmExport = async () => {
+    if (exportConfirm === 'pdf') {
+      setIsExportingPDF(true);
+      await handleExportPDF();
+      setIsExportingPDF(false);
+    } else {
+      handleExport();
+    }
+    setExportConfirm(null);
+  };
+
   return (
     <div className="bg-white dark:bg-slate-800 rounded-xl shadow-lg p-6">
 
@@ -177,7 +213,15 @@ function ClawbacksGrid() {
 
         <div className="flex items-center gap-2">
           <button
-            onClick={handleExport}
+            onClick={() => setExportConfirm('pdf')}
+            disabled={filtered.length === 0}
+            className="flex items-center gap-2 py-2 px-4 bg-red-600 text-white rounded-xl hover:bg-red-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            <FileText className="w-4 h-4" />
+            <span>Export PDF</span>
+          </button>
+          <button
+            onClick={() => setExportConfirm('csv')}
             disabled={filtered.length === 0}
             className="flex items-center gap-2 py-2 px-4 bg-blue-500 text-white rounded-xl hover:bg-blue-600 transition-colors disabled:bg-blue-300 disabled:cursor-not-allowed"
           >
@@ -379,6 +423,50 @@ function ClawbacksGrid() {
             </div>
           )}
         </>
+      )}
+
+      {/* Export Confirmation Modal */}
+      {exportConfirm && (
+        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+          <div className="bg-white dark:bg-slate-800 rounded-2xl shadow-2xl w-full max-w-md">
+            <div className="p-6">
+              <div className="flex items-center gap-3 mb-4">
+                <div className={`w-10 h-10 rounded-xl flex items-center justify-center ${exportConfirm === 'pdf' ? 'bg-red-100 dark:bg-red-900/30' : 'bg-blue-100 dark:bg-blue-900/30'}`}>
+                  {exportConfirm === 'pdf'
+                    ? <FileText className="w-5 h-5 text-red-600 dark:text-red-400" />
+                    : <Download className="w-5 h-5 text-blue-600 dark:text-blue-400" />}
+                </div>
+                <h3 className="text-lg font-semibold text-slate-800 dark:text-white">
+                  Export {exportConfirm === 'pdf' ? 'PDF' : 'CSV'} Report
+                </h3>
+              </div>
+              <p className="text-sm text-slate-600 dark:text-slate-400 mb-6">
+                {exportConfirm === 'pdf'
+                  ? 'Generate and download a PDF clawback report for the current data. This may take a few seconds to compile.'
+                  : `Download the ${filtered.length} visible clawback record${filtered.length !== 1 ? 's' : ''} as a CSV file.`}
+              </p>
+              <div className="flex items-center justify-end gap-3">
+                <button
+                  onClick={() => setExportConfirm(null)}
+                  disabled={isExportingPDF}
+                  className="px-4 py-2 text-sm text-slate-700 dark:text-slate-300 bg-slate-100 dark:bg-slate-700 rounded-xl hover:bg-slate-200 dark:hover:bg-slate-600 transition-colors disabled:opacity-50"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={handleConfirmExport}
+                  disabled={isExportingPDF}
+                  className={`px-4 py-2 text-sm text-white rounded-xl transition-colors flex items-center gap-2 disabled:opacity-60 ${exportConfirm === 'pdf' ? 'bg-red-600 hover:bg-red-700' : 'bg-blue-500 hover:bg-blue-600'}`}
+                >
+                  {isExportingPDF
+                    ? <Loader2 className="w-4 h-4 animate-spin" />
+                    : exportConfirm === 'pdf' ? <FileText className="w-4 h-4" /> : <Download className="w-4 h-4" />}
+                  {isExportingPDF ? 'Generating...' : `Export ${exportConfirm === 'pdf' ? 'PDF' : 'CSV'}`}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );

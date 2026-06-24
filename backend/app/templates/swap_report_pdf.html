@@ -1,0 +1,142 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Swap Report</title>
+<style>
+  @page {
+    size: A4;
+    margin: 18mm 15mm 18mm 15mm;
+    @bottom-center {
+      content: "Page " counter(page) " of " counter(pages);
+      font-size: 9px;
+      color: #888;
+    }
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: "DejaVu Sans", Arial, sans-serif; font-size: 11px; color: #1e293b; line-height: 1.5; }
+
+  .cover {
+    background: #1e3a5f;
+    color: #fff;
+    padding: 28px 24px 22px;
+    border-radius: 6px;
+    margin-bottom: 20px;
+  }
+  .cover h1 { font-size: 22px; font-weight: 700; }
+  .cover .subtitle { font-size: 12px; color: #93c5fd; margin-top: 4px; }
+  .cover .meta { margin-top: 14px; display: flex; gap: 28px; flex-wrap: wrap; }
+  .cover .meta-item .label { font-size: 9px; text-transform: uppercase; color: #93c5fd; letter-spacing: 0.5px; }
+  .cover .meta-item .value { font-size: 13px; font-weight: 600; color: #e2e8f0; }
+
+  .summary-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-bottom: 20px; }
+  .summary-card { border: 1px solid #e2e8f0; border-radius: 6px; padding: 12px 14px; }
+  .summary-card .card-label { font-size: 9px; color: #64748b; text-transform: uppercase; letter-spacing: 0.4px; }
+  .summary-card .card-value { font-size: 17px; font-weight: 700; color: #1e293b; margin-top: 2px; }
+  .summary-card .card-sub   { font-size: 9.5px; color: #64748b; margin-top: 2px; }
+  .card-blue   { border-color: #93c5fd; background: #eff6ff; }
+  .card-green  { border-color: #86efac; background: #f0fdf4; }
+  .card-purple { border-color: #c4b5fd; background: #faf5ff; }
+  .card-amber  { border-color: #fcd34d; background: #fffbeb; }
+  .card-slate  { border-color: #e2e8f0; background: #f8fafc; }
+
+  .section-heading {
+    font-size: 13px; font-weight: 700; color: #0f172a;
+    border-bottom: 2px solid #1e3a5f;
+    padding-bottom: 4px; margin-bottom: 12px; margin-top: 22px;
+  }
+
+  .data-table { width: 100%; border-collapse: collapse; font-size: 9.5px; margin-bottom: 6px; }
+  .data-table th {
+    background: #1e3a5f; color: #fff;
+    padding: 6px 8px; text-align: left; font-weight: 600; letter-spacing: 0.2px;
+  }
+  .data-table th.right { text-align: right; }
+  .data-table td { padding: 5px 8px; border-bottom: 1px solid #f1f5f9; vertical-align: middle; }
+  .data-table tr:nth-child(even) td { background: #f8fafc; }
+  .data-table td.right { text-align: right; font-weight: 600; }
+  .data-table td.mono  { font-family: monospace; font-size: 9px; }
+
+  .footer { margin-top: 30px; border-top: 1px solid #e2e8f0; padding-top: 10px; text-align: center; font-size: 9px; color: #94a3b8; }
+</style>
+</head>
+<body>
+
+<div class="cover">
+  <h1>Agent Swap Report</h1>
+  <div class="subtitle">Kwamz AI — Operator Swap Analytics</div>
+  <div class="meta">
+    {% if report.period and (report.period.start_date or report.period.end_date) %}
+    <div class="meta-item">
+      <div class="label">Period</div>
+      <div class="value">{{ report.period.start_date or '—' }} → {{ report.period.end_date or '—' }}</div>
+    </div>
+    {% endif %}
+    <div class="meta-item">
+      <div class="label">Generated</div>
+      <div class="value">{{ generated_at }}</div>
+    </div>
+    <div class="meta-item">
+      <div class="label">Total Swaps</div>
+      <div class="value">{{ report.summary.total_swaps }}</div>
+    </div>
+    <div class="meta-item">
+      <div class="label">Companies</div>
+      <div class="value">{{ report.summary.companies_involved }}</div>
+    </div>
+  </div>
+</div>
+
+<div class="summary-grid">
+  <div class="summary-card card-blue">
+    <div class="card-label">Total Swaps</div>
+    <div class="card-value">{{ report.summary.total_swaps }}</div>
+    <div class="card-sub">{{ report.summary.companies_involved }} companies involved</div>
+  </div>
+  <div class="summary-card card-green">
+    <div class="card-label">Total Float at Swaps</div>
+    <div class="card-value" style="font-size:13px;">KES {{ "{:,.2f}".format(report.summary.total_float_at_swaps | float) }}</div>
+    <div class="card-sub">Avg KES {{ "{:,.2f}".format(report.summary.avg_float_at_swap | float) }}</div>
+  </div>
+  <div class="summary-card card-purple">
+    <div class="card-label">Total Commission at Swaps</div>
+    <div class="card-value" style="font-size:13px;">KES {{ "{:,.2f}".format(report.summary.total_commission_at_swaps | float) }}</div>
+    <div class="card-sub">Avg KES {{ "{:,.2f}".format(report.summary.avg_commission_at_swap | float) }}</div>
+  </div>
+</div>
+
+{% if report.companies %}
+<div class="section-heading">Per-Company Breakdown</div>
+<table class="data-table">
+  <thead>
+    <tr>
+      <th>#</th>
+      <th>Company</th>
+      <th>Till</th>
+      <th class="right">Swaps</th>
+      <th class="right">Total Float (KES)</th>
+      <th class="right">Total Commission (KES)</th>
+      <th>First Swap</th>
+      <th>Last Swap</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for c in report.companies %}
+    <tr>
+      <td>{{ loop.index }}</td>
+      <td style="font-weight:600;">{{ c.company_name or '—' }}</td>
+      <td>{{ c.till_name or '—' }} {% if c.till_number %}<span style="color:#64748b;font-size:8.5px;">({{ c.till_number }})</span>{% endif %}</td>
+      <td class="right">{{ c.swap_count }}</td>
+      <td class="right">{{ "{:,.2f}".format(c.total_float_at_swaps | float) }}</td>
+      <td class="right">{{ "{:,.2f}".format(c.total_commission_at_swaps | float) }}</td>
+      <td>{{ c.first_swap[:10] if c.first_swap else '—' }}</td>
+      <td>{{ c.last_swap[:10] if c.last_swap else '—' }}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endif %}
+
+<div class="footer">Generated by Kwamz AI · {{ generated_at }} · Confidential</div>
+</body>
+</html>

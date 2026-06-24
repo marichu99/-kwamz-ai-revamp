@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import axios from 'axios';
+import { AlertTriangle, X } from 'lucide-react';
 import './App.css';
 import Sidebar from './components/Layout/Sidebar';
 import Header from './components/Layout/Header';
@@ -16,6 +17,7 @@ function App() {
   const [currentPage, setCurrentPage] = useState('dashboard');
   const [isLoading, setIsLoading] = useState(true);
   const [billingStatus, setBillingStatus] = useState(null);
+  const [showStreamEndAlert, setShowStreamEndAlert] = useState(false);
   const navigate = useNavigate();
   const location = useLocation();
 
@@ -113,7 +115,6 @@ function App() {
     verifyToken();
   }, [navigate, location.pathname]);
 
-
   if (isLoading) {
     return (
       <div className="min-h-screen bg-gradient-to-br from-slate-50 via-blue-50 to-indigo-50 dark:from-slate-900 dark:via-slate-800 dark:to-slate-900 flex items-center justify-center">
@@ -167,9 +168,56 @@ function App() {
       jobId={jobId}
       shortCode={shortCode}
       onClose={closeFeed}
-      onStreamEnd={closeFeed}
+      onStreamEnd={() => { closeFeed(); setShowStreamEndAlert(true); }}
       onKill={killFeed}
     />
+
+    {/* Stream ended — re-login prompt */}
+    {showStreamEndAlert && (
+      <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-[9999] p-4">
+        <div className="bg-white dark:bg-slate-800 rounded-2xl shadow-2xl w-full max-w-md">
+          <div className="p-6">
+            <div className="flex items-start justify-between mb-4">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-xl bg-amber-100 dark:bg-amber-900/30 flex items-center justify-center flex-shrink-0">
+                  <AlertTriangle className="w-5 h-5 text-amber-600 dark:text-amber-400" />
+                </div>
+                <div>
+                  <h3 className="text-lg font-semibold text-slate-800 dark:text-white">Scraper Session Ended</h3>
+                  <p className="text-xs text-slate-500 dark:text-slate-400">Action required</p>
+                </div>
+              </div>
+              <button
+                onClick={() => setShowStreamEndAlert(false)}
+                className="p-1.5 hover:bg-slate-100 dark:hover:bg-slate-700 rounded-lg transition-colors"
+              >
+                <X className="w-4 h-4 text-slate-400" />
+              </button>
+            </div>
+
+            <p className="text-sm text-slate-700 dark:text-slate-300 mb-4 leading-relaxed">
+              The live scraper feed has ended. This may be due to a session timeout on the M-Pesa portal.
+              Please re-login to allow the scraper to continue gathering information.
+            </p>
+
+            <div className="bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 rounded-xl p-3 mb-5">
+              <p className="text-xs text-amber-800 dark:text-amber-300">
+                Log in to the M-Pesa portal, then start a new scraping session from the Company List page.
+              </p>
+            </div>
+
+            <div className="flex justify-end">
+              <button
+                onClick={() => setShowStreamEndAlert(false)}
+                className="px-4 py-2 text-sm text-white bg-amber-500 rounded-xl hover:bg-amber-600 transition-colors"
+              >
+                Got it
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+    )}
     </>
   );
 }

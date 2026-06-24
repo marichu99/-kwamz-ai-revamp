@@ -1,5 +1,6 @@
 import logging
-from flask import Blueprint, request, jsonify, Response
+from datetime import datetime
+from flask import Blueprint, request, jsonify, Response, render_template, make_response
 from flask_jwt_extended import jwt_required, get_jwt_identity
 from app.service.swap_service import SwapService
 
@@ -161,6 +162,41 @@ def export_swap_report():
         mimetype='text/csv',
         headers={'Content-Disposition': 'attachment; filename=swap_report.csv'}
     )
+
+
+@swap_bp.route('/report/export-pdf', methods=['GET'])
+@jwt_required()
+def export_swap_report_pdf():
+    """Generate and stream a WeasyPrint PDF of the swap report."""
+    try:
+        from weasyprint import HTML
+        current_user_id = get_jwt_identity()
+        filters = {
+            'agent_company_id': request.args.get('agent_company_id'),
+            'start_date': request.args.get('start_date'),
+            'end_date': request.args.get('end_date'),
+        }
+        filters = {k: v for k, v in filters.items() if v}
+
+        service = SwapService()
+        result, error = service.generate_swap_report(current_user_id, filters)
+        if error:
+            return jsonify({'error': error}), 500
+
+        html_string = render_template(
+            'swap_report_pdf.html',
+            report=result,
+            generated_at=datetime.now().strftime('%d %b %Y %H:%M'),
+        )
+        pdf_bytes = HTML(string=html_string).write_pdf()
+        filename = f"swap_report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf"
+        response = make_response(pdf_bytes)
+        response.headers['Content-Type'] = 'application/pdf'
+        response.headers['Content-Disposition'] = f'attachment; filename="{filename}"'
+        return response
+    except Exception as e:
+        logger.error(f"Error generating swap PDF: {e}")
+        return jsonify({'error': 'Internal server error'}), 500
 
 
 @swap_bp.route('/by-shortcode/<string:shortcode>', methods=['DELETE'])

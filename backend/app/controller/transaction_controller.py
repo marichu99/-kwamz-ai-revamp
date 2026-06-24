@@ -861,6 +861,62 @@ def get_clawbacks():
         return jsonify({'error': str(e)}), 500
 
 
+@transaction_bp.route('/export-clawbacks-pdf', methods=['GET'])
+@jwt_required()
+def export_clawbacks_pdf():
+    """Generate and stream a WeasyPrint PDF of commission clawback records."""
+    try:
+        from weasyprint import HTML
+        current_user_id = get_jwt_identity()
+        current_user = UserService.get_user_by_id(user_id=current_user_id)
+        if not current_user:
+            return jsonify({'error': 'User not found'}), 404
+
+        role = (current_user.role or 'user').lower()
+        filters = {
+            'start_date': request.args.get('start_date'),
+            'end_date': request.args.get('end_date'),
+        }
+        filters = {k: v for k, v in filters.items() if v}
+
+        if role not in ('admin', 'administrator'):
+            if role == 'agent':
+                company_ids = [c.id for c in Company.query.filter_by(agent_user_id=current_user_id).all()]
+            else:
+                company_ids = [c.id for c in Company.query.filter_by(user_id=current_user_id).all()]
+            filters['company_ids'] = company_ids
+
+        result = transaction_service.get_clawbacks(filters)
+        data = result.get('data', [])
+
+        total_amount = sum(abs(r.get('withdrawn') or 0) for r in data)
+        companies_affected = len({r.get('company_name') for r in data if r.get('company_name')})
+        unique_shortcodes = len({r.get('business_shortcode') for r in data if r.get('business_shortcode')})
+        avg_amount = total_amount / len(data) if data else 0
+
+        html_string = render_template(
+            'clawback_report_pdf.html',
+            data=data,
+            total=len(data),
+            total_amount=total_amount,
+            companies_affected=companies_affected,
+            unique_shortcodes=unique_shortcodes,
+            avg_amount=avg_amount,
+            period_start=filters.get('start_date', ''),
+            period_end=filters.get('end_date', ''),
+            generated_at=datetime.now().strftime('%d %b %Y %H:%M'),
+        )
+        pdf_bytes = HTML(string=html_string).write_pdf()
+        filename = f"clawback_report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf"
+        response = make_response(pdf_bytes)
+        response.headers['Content-Type'] = 'application/pdf'
+        response.headers['Content-Disposition'] = f'attachment; filename="{filename}"'
+        return response
+    except Exception as e:
+        current_app.logger.error(f"Error generating clawbacks PDF: {e}")
+        return jsonify({'error': 'Internal server error'}), 500
+
+
 @transaction_bp.route('/export-commission-tills', methods=['GET'])
 @jwt_required()
 def export_commission_tills():

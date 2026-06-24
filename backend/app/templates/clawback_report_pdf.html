@@ -1,0 +1,159 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Commission Clawback Report</title>
+<style>
+  @page {
+    size: A4;
+    margin: 18mm 15mm 18mm 15mm;
+    @bottom-center {
+      content: "Page " counter(page) " of " counter(pages);
+      font-size: 9px;
+      color: #888;
+    }
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: "DejaVu Sans", Arial, sans-serif; font-size: 11px; color: #1e293b; line-height: 1.5; }
+
+  .cover {
+    background: #7c2d12;
+    color: #fff;
+    padding: 28px 24px 22px;
+    border-radius: 6px;
+    margin-bottom: 20px;
+  }
+  .cover h1 { font-size: 22px; font-weight: 700; }
+  .cover .subtitle { font-size: 12px; color: #fca5a5; margin-top: 4px; }
+  .cover .meta { margin-top: 14px; display: flex; gap: 28px; flex-wrap: wrap; }
+  .cover .meta-item .label { font-size: 9px; text-transform: uppercase; color: #fca5a5; letter-spacing: 0.5px; }
+  .cover .meta-item .value { font-size: 13px; font-weight: 600; color: #fee2e2; }
+
+  .summary-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-bottom: 20px; }
+  .summary-card { border: 1px solid #e2e8f0; border-radius: 6px; padding: 12px 14px; }
+  .summary-card .card-label { font-size: 9px; color: #64748b; text-transform: uppercase; letter-spacing: 0.4px; }
+  .summary-card .card-value { font-size: 17px; font-weight: 700; color: #1e293b; margin-top: 2px; }
+  .summary-card .card-sub   { font-size: 9.5px; color: #64748b; margin-top: 2px; }
+  .card-red    { border-color: #fca5a5; background: #fff1f2; }
+  .card-amber  { border-color: #fcd34d; background: #fffbeb; }
+  .card-slate  { border-color: #e2e8f0; background: #f8fafc; }
+
+  .section-heading {
+    font-size: 13px; font-weight: 700; color: #0f172a;
+    border-bottom: 2px solid #7c2d12;
+    padding-bottom: 4px; margin-bottom: 12px; margin-top: 22px;
+  }
+
+  .data-table { width: 100%; border-collapse: collapse; font-size: 9.5px; margin-bottom: 6px; }
+  .data-table th {
+    background: #7c2d12; color: #fff;
+    padding: 6px 8px; text-align: left; font-weight: 600; letter-spacing: 0.2px;
+  }
+  .data-table th.right { text-align: right; }
+  .data-table td { padding: 5px 8px; border-bottom: 1px solid #f1f5f9; vertical-align: middle; }
+  .data-table tr:nth-child(even) td { background: #fef2f2; }
+  .data-table td.right { text-align: right; font-weight: 600; }
+  .data-table td.mono  { font-family: monospace; font-size: 9px; }
+  .badge {
+    display: inline-block; padding: 2px 6px; border-radius: 4px; font-size: 8.5px; font-weight: 600;
+  }
+  .badge-completed { background: #dcfce7; color: #15803d; }
+  .badge-pending   { background: #fef3c7; color: #92400e; }
+  .badge-failed    { background: #fee2e2; color: #b91c1c; }
+
+  .footer { margin-top: 30px; border-top: 1px solid #e2e8f0; padding-top: 10px; text-align: center; font-size: 9px; color: #94a3b8; }
+</style>
+</head>
+<body>
+
+<div class="cover">
+  <h1>Commission Clawback Report</h1>
+  <div class="subtitle">Kwamz AI — Commission Recovery Analysis</div>
+  <div class="meta">
+    {% if period_start or period_end %}
+    <div class="meta-item">
+      <div class="label">Period</div>
+      <div class="value">{{ period_start or '—' }} → {{ period_end or '—' }}</div>
+    </div>
+    {% endif %}
+    <div class="meta-item">
+      <div class="label">Generated</div>
+      <div class="value">{{ generated_at }}</div>
+    </div>
+    <div class="meta-item">
+      <div class="label">Total Clawbacks</div>
+      <div class="value">{{ "{:,}".format(total) }}</div>
+    </div>
+    <div class="meta-item">
+      <div class="label">Total Recovered</div>
+      <div class="value">KES {{ "{:,.2f}".format(total_amount) }}</div>
+    </div>
+  </div>
+</div>
+
+<div class="summary-grid">
+  <div class="summary-card card-red">
+    <div class="card-label">Total Recovered</div>
+    <div class="card-value">KES {{ "{:,.2f}".format(total_amount) }}</div>
+    <div class="card-sub">Across {{ total }} transactions</div>
+  </div>
+  <div class="summary-card card-amber">
+    <div class="card-label">Companies Affected</div>
+    <div class="card-value">{{ companies_affected }}</div>
+    <div class="card-sub">Unique shortcodes: {{ unique_shortcodes }}</div>
+  </div>
+  <div class="summary-card card-slate">
+    <div class="card-label">Avg per Clawback</div>
+    <div class="card-value">KES {{ "{:,.2f}".format(avg_amount) }}</div>
+    <div class="card-sub">Based on {{ total }} records</div>
+  </div>
+</div>
+
+<div class="section-heading">Clawback Transactions</div>
+{% if data %}
+<table class="data-table">
+  <thead>
+    <tr>
+      <th>#</th>
+      <th>Company</th>
+      <th>Shortcode</th>
+      <th>Agent Till</th>
+      <th>Receipt No.</th>
+      <th>Date</th>
+      <th>Reason</th>
+      <th class="right">Amount (KES)</th>
+      <th>Status</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for r in data %}
+    <tr>
+      <td>{{ loop.index }}</td>
+      <td>{{ r.company_name or '—' }}</td>
+      <td class="mono">{{ r.company_shortcode or '—' }}</td>
+      <td>{{ r.agent_company_name or '—' }}</td>
+      <td class="mono">{{ r.receipt_no or '—' }}</td>
+      <td>{{ r.completion_time[:10] if r.completion_time else '—' }}</td>
+      <td>{{ r.reason_type or '—' }}</td>
+      <td class="right">{{ "{:,.2f}".format(r.withdrawn | abs) }}</td>
+      <td>
+        {% set s = (r.transaction_status or '').lower() %}
+        {% if 'complet' in s %}
+          <span class="badge badge-completed">Completed</span>
+        {% elif 'pending' in s %}
+          <span class="badge badge-pending">Pending</span>
+        {% else %}
+          <span class="badge badge-failed">{{ r.transaction_status or '—' }}</span>
+        {% endif %}
+      </td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<p style="color:#64748b;font-style:italic;">No clawback records found for the selected period.</p>
+{% endif %}
+
+<div class="footer">Generated by Kwamz AI · {{ generated_at }} · Confidential</div>
+</body>
+</html>

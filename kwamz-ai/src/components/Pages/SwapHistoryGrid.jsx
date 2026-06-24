@@ -28,6 +28,8 @@ function SwapHistoryGrid() {
   const [swapPayouts, setSwapPayouts] = useState({});
   const [deleteConfirm, setDeleteConfirm] = useState(null); // { shortcode, till_name, total_swaps }
   const [isDeleting, setIsDeleting] = useState(false);
+  const [exportConfirm, setExportConfirm] = useState(null); // 'pdf' | 'csv'
+  const [isExportingReport, setIsExportingReport] = useState(false);
   const { showToast } = useToast();
   const dropdownRef = useRef(null);
 
@@ -187,6 +189,31 @@ function SwapHistoryGrid() {
     }
   };
 
+  // Export PDF report
+  const handleExportReportPDF = async () => {
+    try {
+      const token = localStorage.getItem('token');
+      const params = new URLSearchParams();
+      if (startDate) params.append('start_date', startDate);
+      if (endDate) params.append('end_date', endDate);
+      const response = await axios.get(`${config.API_URL}/swaps/report/export-pdf?${params}`, {
+        headers: { Authorization: `Bearer ${token}` },
+        responseType: 'blob',
+      });
+      const url = window.URL.createObjectURL(new Blob([response.data], { type: 'application/pdf' }));
+      const link = document.createElement('a');
+      link.href = url;
+      link.setAttribute('download', `swap_report_${new Date().toISOString().split('T')[0]}.pdf`);
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      window.URL.revokeObjectURL(url);
+      showToast('PDF exported successfully', 'success');
+    } catch {
+      showToast('Failed to export PDF', 'error');
+    }
+  };
+
   // Export report
   const handleExportReport = async () => {
     try {
@@ -213,6 +240,20 @@ function SwapHistoryGrid() {
     } catch (error) {
       console.error('Error exporting report:', error);
       showToast('Failed to export report', 'error');
+    }
+  };
+
+  const handleConfirmExport = async () => {
+    setIsExportingReport(true);
+    try {
+      if (exportConfirm === 'pdf') {
+        await handleExportReportPDF();
+      } else {
+        await handleExportReport();
+      }
+    } finally {
+      setIsExportingReport(false);
+      setExportConfirm(null);
     }
   };
 
@@ -421,11 +462,18 @@ function SwapHistoryGrid() {
                   Generate Swap Report
                 </button>
                 <button
-                  onClick={() => { handleExportReport(); setIsDropdownOpen(false); }}
-                  className="w-full flex items-center px-4 py-3 text-sm text-slate-800 dark:text-slate-200 hover:bg-blue-50 dark:hover:bg-blue-900/30 transition-colors rounded-b-lg"
+                  onClick={() => { setExportConfirm('csv'); setIsDropdownOpen(false); }}
+                  className="w-full flex items-center px-4 py-3 text-sm text-slate-800 dark:text-slate-200 hover:bg-blue-50 dark:hover:bg-blue-900/30 transition-colors"
                 >
                   <Download className="w-4 h-4 mr-2" />
                   Export to CSV
+                </button>
+                <button
+                  onClick={() => { setExportConfirm('pdf'); setIsDropdownOpen(false); }}
+                  className="w-full flex items-center px-4 py-3 text-sm text-slate-800 dark:text-slate-200 hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors rounded-b-lg"
+                >
+                  <FileText className="w-4 h-4 mr-2 text-red-500" />
+                  Export to PDF
                 </button>
               </div>
             )}
@@ -1196,13 +1244,22 @@ function SwapHistoryGrid() {
             {/* Modal Footer */}
             <div className="flex items-center justify-end gap-3 px-6 py-4 border-t border-slate-200 dark:border-slate-700">
               {reportData && (
-                <button
-                  onClick={handleExportReport}
-                  className="flex items-center gap-2 px-4 py-2 text-sm text-white bg-green-500 rounded-xl hover:bg-green-600 transition-colors"
-                >
-                  <Download className="w-4 h-4" />
-                  Export CSV
-                </button>
+                <>
+                  <button
+                    onClick={() => setExportConfirm('pdf')}
+                    className="flex items-center gap-2 px-4 py-2 text-sm text-white bg-red-600 rounded-xl hover:bg-red-700 transition-colors"
+                  >
+                    <FileText className="w-4 h-4" />
+                    Export PDF
+                  </button>
+                  <button
+                    onClick={() => setExportConfirm('csv')}
+                    className="flex items-center gap-2 px-4 py-2 text-sm text-white bg-green-500 rounded-xl hover:bg-green-600 transition-colors"
+                  >
+                    <Download className="w-4 h-4" />
+                    Export CSV
+                  </button>
+                </>
               )}
               <button
                 onClick={() => setIsReportModalOpen(false)}
@@ -1210,6 +1267,50 @@ function SwapHistoryGrid() {
               >
                 Close
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Export Confirmation Modal */}
+      {exportConfirm && (
+        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+          <div className="bg-white dark:bg-slate-800 rounded-2xl shadow-2xl w-full max-w-md">
+            <div className="p-6">
+              <div className="flex items-center gap-3 mb-4">
+                <div className={`w-10 h-10 rounded-xl flex items-center justify-center ${exportConfirm === 'pdf' ? 'bg-red-100 dark:bg-red-900/30' : 'bg-green-100 dark:bg-green-900/30'}`}>
+                  {exportConfirm === 'pdf'
+                    ? <FileText className="w-5 h-5 text-red-600 dark:text-red-400" />
+                    : <Download className="w-5 h-5 text-green-600 dark:text-green-400" />}
+                </div>
+                <h3 className="text-lg font-semibold text-slate-800 dark:text-white">
+                  Export {exportConfirm === 'pdf' ? 'PDF' : 'CSV'} Report
+                </h3>
+              </div>
+              <p className="text-sm text-slate-600 dark:text-slate-400 mb-6">
+                {exportConfirm === 'pdf'
+                  ? 'Generate and download a PDF swap report for the selected period. This may take a few seconds to compile.'
+                  : 'Download the swap report data as a CSV file for the selected period.'}
+              </p>
+              <div className="flex items-center justify-end gap-3">
+                <button
+                  onClick={() => setExportConfirm(null)}
+                  disabled={isExportingReport}
+                  className="px-4 py-2 text-sm text-slate-700 dark:text-slate-300 bg-slate-100 dark:bg-slate-700 rounded-xl hover:bg-slate-200 dark:hover:bg-slate-600 transition-colors disabled:opacity-50"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={handleConfirmExport}
+                  disabled={isExportingReport}
+                  className={`px-4 py-2 text-sm text-white rounded-xl transition-colors flex items-center gap-2 disabled:opacity-60 ${exportConfirm === 'pdf' ? 'bg-red-600 hover:bg-red-700' : 'bg-green-500 hover:bg-green-600'}`}
+                >
+                  {isExportingReport
+                    ? <Loader2 className="w-4 h-4 animate-spin" />
+                    : exportConfirm === 'pdf' ? <FileText className="w-4 h-4" /> : <Download className="w-4 h-4" />}
+                  {isExportingReport ? 'Generating...' : `Export ${exportConfirm === 'pdf' ? 'PDF' : 'CSV'}`}
+                </button>
+              </div>
             </div>
           </div>
         </div>
