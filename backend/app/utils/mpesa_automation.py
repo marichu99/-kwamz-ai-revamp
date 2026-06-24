@@ -115,26 +115,41 @@ def _start_cdp_screencast(page, job_id: str):
     return cdp
 
 
-def _get_captcha_from_user(job_id: str, page=None, timeout: float = 120.0) -> str:
+def _capture_captcha_image(page) -> str | None:
     """
-    Wait for the captcha element to load, capture a screenshot of it, then
-    signal the frontend (via PromptManager) to show the captcha dock with the
-    image embedded.  Blocks until the user submits the 4-digit code.
+    Wait for the captcha <img> element to be fully loaded (img.complete +
+    naturalWidth > 0, not just DOM-visible), then return a base64 PNG
+    screenshot of that element.  Returns None on any failure.
+    """
+    try:
+        captcha_selector = "//img[@class='verifyCode-img-item']"
+        page.wait_for_selector(captcha_selector, state="visible", timeout=10000)
+        # Block until the browser has finished decoding the image pixels.
+        # 'visible' only means the element isn't hidden — the src may still
+        # be in-flight.  We use a JS promise so we don't busy-wait.
+        page.evaluate("""() => new Promise((resolve) => {
+            const img = document.querySelector('img.verifyCode-img-item');
+            if (!img) { resolve(); return; }
+            if (img.complete && img.naturalWidth > 0) { resolve(); return; }
+            img.addEventListener('load',  resolve, { once: true });
+            img.addEventListener('error', resolve, { once: true });
+            setTimeout(resolve, 5000);
+        })""")
+        captcha_bytes = page.locator(captcha_selector).first.screenshot()
+        b64 = base64.b64encode(captcha_bytes).decode()
+        logger.info(f"[CAPTCHA] Image captured ({len(captcha_bytes)} bytes)")
+        return b64
+    except Exception as e:
+        logger.warning(f"[CAPTCHA] Could not capture image: {e}")
+        return None
+
+
+def _get_captcha_from_user(job_id: str, captcha_b64: str = None, timeout: float = 120.0) -> str:
+    """
+    Signal the frontend to show the captcha dock (with the pre-captured image
+    if available), then block until the user submits the 4-digit code.
     """
     from app.streaming.stream_manager import captcha_mailbox, prompt_manager
-
-    captcha_b64 = None
-    if page is not None:
-        try:
-            captcha_selector = "//img[@class='verifyCode-img-item']"
-            page.wait_for_selector(captcha_selector, state="visible", timeout=10000)
-            time.sleep(0.5)  # let the image content fully render
-            captcha_bytes = page.locator(captcha_selector).first.screenshot()
-            captcha_b64 = base64.b64encode(captcha_bytes).decode()
-            logger.info(f"[CAPTCHA] Captured captcha element ({len(captcha_bytes)} bytes) for job={job_id}")
-        except Exception as e:
-            logger.warning(f"[CAPTCHA] Could not capture captcha image: {e}")
-
     prompt_manager.set(job_id, 'captcha', captcha_b64=captcha_b64)
     logger.info(f"[CAPTCHA] Waiting for user input (job={job_id}, timeout={timeout}s)…")
     code = captcha_mailbox.get(job_id, timeout=timeout)
@@ -185,11 +200,15 @@ def login_to_mpesa(password: str = None, username: str = None, short_code: str =
             page.goto(url, timeout=600000)
             time.sleep(3)
 
+            # Capture captcha BEFORE filling the form — filling credentials can
+            # trigger Vue reactivity on the portal that regenerates the captcha image.
+            captcha_b64 = _capture_captcha_image(page)
+
             fill_login_form(page, short_code, username, password)
             logger.info("[INFO] Login form filled")
 
-            # Capture the captcha image and ask the user to type it
-            captcha_solution = _get_captcha_from_user(job_id, page=page)
+            # Show the user the captured captcha image and wait for their input
+            captcha_solution = _get_captcha_from_user(job_id, captcha_b64=captcha_b64)
             logger.info(f"[INFO] Initial captcha received from user: {captcha_solution}")
 
             # Submit loop: re-ask the user if the captcha is rejected by the portal
@@ -345,8 +364,8 @@ def has_verification_error_regex(page) -> bool:
 
 def retry_captcha_login(page: Page, job_id: str = None) -> str:
     """
-    Refresh the captcha image on the portal page, then wait for the user to
-    type the new 4-digit code through the live-feed captcha dock.
+    Click the SVG refresh icon to get a new captcha, capture it, then ask
+    the user to type the new code via the live-feed captcha dock.
     """
     svg_element = page.query_selector("//div[@class='img-part']//*[name()='svg']")
     if svg_element:
@@ -359,7 +378,8 @@ def retry_captcha_login(page: Page, job_id: str = None) -> str:
     if not job_id:
         raise Exception("[CAPTCHA] Cannot prompt for captcha without a job_id (no live feed)")
 
-    return _get_captcha_from_user(job_id, page=page)
+    captcha_b64 = _capture_captcha_image(page)
+    return _get_captcha_from_user(job_id, captcha_b64=captcha_b64)
     
 def maximize_page(page: Page) -> None:
     """
