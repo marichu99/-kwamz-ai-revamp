@@ -267,7 +267,7 @@ def login_company():
     job_id = str(job.id)
 
     if os.getenv('USE_LOCAL_AUTOMATION', '').lower() == 'true':
-        from app.utils.mpesa_automation import login_to_mpesa
+        from app.utils.mpesa_automation import MpesaScraper
         import time as _time
         from app.streaming.stream_manager import stream_manager
         _t0 = _time.time()
@@ -279,13 +279,14 @@ def login_company():
         def run_local():
             logger.info(f"[SCRAPER-THREAD {_ts()}] thread started for job={job_id}")
             with app.app_context():
-                login_to_mpesa(
+                scraper = MpesaScraper(
                     password=password,
                     username=user_name,
                     short_code=short_code,
                     user_id_passed=current_user_id,
                     job_id=job_id,
                 )
+                scraper.run()
         threading.Thread(target=run_local, daemon=True).start()
         logger.info(f"[CONTROLLER {_ts()}] returning job_id={job_id} to client")
         message = "Running automation locally on backend."

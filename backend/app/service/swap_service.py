@@ -1,10 +1,12 @@
 from app import db
 from app.model.agent_swap import AgentSwap
 from app.model.agentcompany import AgentCompany
+from app.model.company import Company
 from app.model.agent_accounts import AgentAccount
 from app.model.agent_account_balances import AgentAccountBalance
 from app.model.useragent import UserAgent, user_agent_companies
 from datetime import datetime, timedelta, timezone
+from sqlalchemy import or_
 
 EAT = timezone(timedelta(hours=3))
 
@@ -43,6 +45,16 @@ class SwapService:
         if latest and latest.current_balance is not None:
             return latest.current_balance
         return Decimal('0.00')
+
+    def _get_user_agent_company_ids(self, user_id) -> list:
+        """Return IDs of all AgentCompanies owned by user — directly or via parent Company."""
+        acs = AgentCompany.query.filter(
+            or_(
+                AgentCompany.user_id == user_id,
+                AgentCompany.company.has(Company.user_id == user_id),
+            )
+        ).with_entities(AgentCompany.id).all()
+        return [ac.id for ac in acs]
 
     def _serialize_agents(self, user_agents):
         return [
@@ -182,10 +194,7 @@ class SwapService:
         try:
             filters = filters or {}
 
-            # Get agent companies belonging to this user
-            user_companies = AgentCompany.query.filter_by(user_id=user_id).all()
-            company_ids = [c.id for c in user_companies]
-
+            company_ids = self._get_user_agent_company_ids(user_id)
             if not company_ids:
                 return [], None
 
@@ -207,9 +216,7 @@ class SwapService:
     def get_swaps_grouped_by_company(self, user_id, filters=None):
         try:
             filters = filters or {}
-            user_companies = AgentCompany.query.filter_by(user_id=user_id).all()
-            company_ids = [c.id for c in user_companies]
-
+            company_ids = self._get_user_agent_company_ids(user_id)
             if not company_ids:
                 return [], None
 
@@ -251,8 +258,7 @@ class SwapService:
     def get_swaps_grouped_by_agent(self, user_id, filters=None):
         try:
             filters = filters or {}
-            user_companies = AgentCompany.query.filter_by(user_id=user_id).all()
-            company_ids = [c.id for c in user_companies]
+            company_ids = self._get_user_agent_company_ids(user_id)
             if not company_ids:
                 return [], None
 
@@ -340,8 +346,7 @@ class SwapService:
         """
         try:
             filters = filters or {}
-            user_companies = AgentCompany.query.filter_by(user_id=user_id).all()
-            company_ids = [c.id for c in user_companies]
+            company_ids = self._get_user_agent_company_ids(user_id)
             if not company_ids:
                 return [], None
 
@@ -453,9 +458,7 @@ class SwapService:
     def generate_swap_report(self, user_id, filters=None):
         try:
             filters = filters or {}
-            user_companies = AgentCompany.query.filter_by(user_id=user_id).all()
-            company_ids = [c.id for c in user_companies]
-
+            company_ids = self._get_user_agent_company_ids(user_id)
             if not company_ids:
                 return {'summary': {}, 'companies': []}, None
 

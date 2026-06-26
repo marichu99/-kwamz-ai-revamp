@@ -46,12 +46,13 @@ def kill_stream(job_id: str):
     Closes the Playwright browser (which crashes the scraper thread naturally)
     and sends a sentinel to the MJPEG queue so connected consumers disconnect.
     """
-    import app.utils.mpesa_automation as auto
+    from app.utils.mpesa_automation import _job_registry
     from app.streaming.stream_manager import stream_manager
 
     try:
-        if auto.browser:
-            auto.browser.close()
+        scraper = _job_registry.get(job_id)
+        if scraper and scraper.browser:
+            scraper.browser.close()
             logger.info(f"[STREAM-KILL] Browser closed for job={job_id}")
     except Exception as e:
         logger.warning(f"[STREAM-KILL] Could not close browser for job={job_id}: {e}")

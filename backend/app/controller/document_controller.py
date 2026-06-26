@@ -7,7 +7,6 @@ from app.utils.police_clearance_details import extract_clearance_details
 from app.utils.user_service import UserService
 from app.model.agentcompany import  AgentCompany
 from app.model.agent_documents import AgentDocuments
-from app.utils.mpesa_automation import login_to_mpesa
 from app.utils.script import authenticate_kra_from_app
 from app import db
 import os
