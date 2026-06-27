@@ -62,7 +62,8 @@ class SwapService:
                 'id': ua.id,
                 'name': f"{ua.firstname} {ua.lastname}",
                 'idnumber': ua.idnumber,
-                'phone_number': ua.phone_number
+                'phone_number': ua.phone_number,
+                'role': ua.operator_role,
             }
             for ua in user_agents
         ]
@@ -205,7 +206,7 @@ class SwapService:
             if filters.get('start_date'):
                 query = query.filter(AgentSwap.swap_date >= datetime.fromisoformat(filters['start_date']))
             if filters.get('end_date'):
-                query = query.filter(AgentSwap.swap_date <= datetime.fromisoformat(filters['end_date']))
+                query = query.filter(AgentSwap.swap_date <= datetime.fromisoformat(filters['end_date']).replace(hour=23, minute=59, second=59))
 
             swaps = query.order_by(AgentSwap.swap_date.desc()).all()
             return [s.to_dict() for s in swaps], None
@@ -227,7 +228,7 @@ class SwapService:
             if filters.get('start_date'):
                 query = query.filter(AgentSwap.swap_date >= datetime.fromisoformat(filters['start_date']))
             if filters.get('end_date'):
-                query = query.filter(AgentSwap.swap_date <= datetime.fromisoformat(filters['end_date']))
+                query = query.filter(AgentSwap.swap_date <= datetime.fromisoformat(filters['end_date']).replace(hour=23, minute=59, second=59))
 
             swaps = query.order_by(AgentSwap.agent_company_id, AgentSwap.swap_date.desc()).all()
 
@@ -268,7 +269,7 @@ class SwapService:
             if filters.get('start_date'):
                 query = query.filter(AgentSwap.swap_date >= datetime.fromisoformat(filters['start_date']))
             if filters.get('end_date'):
-                query = query.filter(AgentSwap.swap_date <= datetime.fromisoformat(filters['end_date']))
+                query = query.filter(AgentSwap.swap_date <= datetime.fromisoformat(filters['end_date']).replace(hour=23, minute=59, second=59))
 
             swaps = query.order_by(AgentSwap.swap_date.desc()).all()
 
@@ -353,12 +354,12 @@ class SwapService:
             query = AgentSwap.query.filter(AgentSwap.agent_company_id.in_(company_ids))
             if filters.get('agent_company_id'):
                 query = query.filter_by(agent_company_id=int(filters['agent_company_id']))
-            if filters.get('start_date'):
-                query = query.filter(AgentSwap.swap_date >= datetime.fromisoformat(filters['start_date']))
-            if filters.get('end_date'):
-                query = query.filter(AgentSwap.swap_date <= datetime.fromisoformat(filters['end_date']))
 
             swaps = query.order_by(AgentSwap.swap_date.desc()).all()
+
+            # Date range filters apply to agent_registration_time, not swap_date.
+            reg_start = datetime.fromisoformat(filters['start_date']) if filters.get('start_date') else None
+            reg_end   = datetime.fromisoformat(filters['end_date']).replace(hour=23, minute=59, second=59) if filters.get('end_date') else None
 
             def _prev_name(p):
                 return (
@@ -409,13 +410,19 @@ class SwapService:
                         for ua in ac.user_agents
                     ]
 
+                    # Current live balances — same source as the Agents Grid
+                    current_float      = float(self._get_balance_for_account_type(ac_id, 'FLOAT'))
+                    current_commission = float(self._get_balance_for_account_type(ac_id, 'COMMISSION'))
+
                     companies[cid]["tills"][ac_id] = {
-                        "agent_company_id": ac_id,
-                        "till_name":        till_label,
-                        "short_code":       short_code,
-                        "current_agents":   live_agents,
-                        "previous_rows":    [],
-                        "total_swaps":      0,
+                        "agent_company_id":         ac_id,
+                        "till_name":                till_label,
+                        "short_code":               short_code,
+                        "current_agents":           live_agents,
+                        "current_float_balance":    current_float,
+                        "current_commission_balance": current_commission,
+                        "previous_rows":            [],
+                        "total_swaps":              0,
                     }
 
                 till       = companies[cid]["tills"][ac_id]
@@ -424,13 +431,29 @@ class SwapService:
                 cv         = "—" if is_scraper else str(swap.commission_balance_at_swap or "0.00")
 
                 for prev in (swap.previous_agents or []):
+                    reg_time_str = prev.get("registration_time")
+
+                    # Apply registration-date filter if set
+                    if reg_start or reg_end:
+                        if not reg_time_str:
+                            continue  # no registration time — exclude when filtering
+                        try:
+                            reg_dt = datetime.fromisoformat(reg_time_str[:19])
+                            if reg_start and reg_dt < reg_start:
+                                continue
+                            if reg_end and reg_dt > reg_end:
+                                continue
+                        except (ValueError, TypeError):
+                            continue
+
                     till["previous_rows"].append({
                         "swap_id":                 swap.id,
                         "swap_date":               _to_eat(swap.swap_date),
                         "agent_name":              _prev_name(prev),
+                        "agent_role":              prev.get("role"),
                         "agent_idnumber":          prev.get("idnumber"),
                         "agent_phone":             prev.get("phone_number"),
-                        "agent_registration_time": prev.get("registration_time"),
+                        "agent_registration_time": reg_time_str,
                         "agent_kyc_id_number":     prev.get("kyc_id_number"),
                         "agent_kyc_id_type":       prev.get("kyc_id_type"),
                         "float_at_swap":           fv,
@@ -443,6 +466,11 @@ class SwapService:
             result = []
             for cd in companies.values():
                 tills = list(cd["tills"].values())
+                # When date-filtering, drop tills that have no matching previous agents
+                if reg_start or reg_end:
+                    tills = [t for t in tills if t["previous_rows"]]
+                if not tills:
+                    continue
                 result.append({
                     "company_id":   cd["company_id"],
                     "company_name": cd["company_name"],
@@ -470,7 +498,7 @@ class SwapService:
                 start = datetime.fromisoformat(filters['start_date'])
                 query = query.filter(AgentSwap.swap_date >= start)
             if filters.get('end_date'):
-                end = datetime.fromisoformat(filters['end_date'])
+                end = datetime.fromisoformat(filters['end_date']).replace(hour=23, minute=59, second=59)
                 query = query.filter(AgentSwap.swap_date <= end)
 
             swaps = query.order_by(AgentSwap.swap_date.desc()).all()

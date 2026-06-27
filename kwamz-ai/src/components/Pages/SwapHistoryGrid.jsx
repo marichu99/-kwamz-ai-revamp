@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import { Search, ChevronDown, ChevronRight, ChevronsUpDown, MoreVertical, FileText, Download, Calendar, ArrowRightLeft, Users, X, Loader2, Undo2, AlertTriangle, Eye, Banknote, CheckCircle2, Clock, XCircle, Trash2 } from 'lucide-react';
+import XLSXStyle from 'xlsx-js-style';
 import axios from 'axios';
 import config from '../../Config';
 import { useToast } from './ToastProvider';
@@ -28,7 +29,7 @@ function SwapHistoryGrid() {
   const [swapPayouts, setSwapPayouts] = useState({});
   const [deleteConfirm, setDeleteConfirm] = useState(null); // { shortcode, till_name, total_swaps }
   const [isDeleting, setIsDeleting] = useState(false);
-  const [exportConfirm, setExportConfirm] = useState(null); // 'pdf' | 'csv'
+  const [exportConfirm, setExportConfirm] = useState(null); // 'pdf' | 'excel'
   const [isExportingReport, setIsExportingReport] = useState(false);
   const { showToast } = useToast();
   const dropdownRef = useRef(null);
@@ -214,33 +215,169 @@ function SwapHistoryGrid() {
     }
   };
 
-  // Export report
-  const handleExportReport = async () => {
-    try {
-      const token = localStorage.getItem('token');
-      const params = new URLSearchParams();
-      if (startDate) params.append('start_date', startDate);
-      if (endDate) params.append('end_date', endDate);
-      params.append('format', 'csv');
+  // Export swap data as styled Excel — grouped by company then till, color-coded
+  const handleExportExcel = () => {
+    const COLS = ['A','B','C','D','E','F','G','H','I','J','K','L','M'];
+    const NUM_COLS = COLS.length;
 
-      const response = await axios.get(`${config.API_URL}/swaps/report/export?${params}`, {
-        headers: { Authorization: `Bearer ${token}` },
-        responseType: 'blob',
+    // Distinct company accent colors (dark header bg, lighter till bg, lightest row tint)
+    const PALETTES = [
+      { company: '1F3864', till: 'BDD7EE', row: 'DEEAF1' },
+      { company: '375623', till: 'C6EFCE', row: 'EBF5EC' },
+      { company: '7B2D00', till: 'FCE4D6', row: 'FEF2EC' },
+      { company: '4B0082', till: 'E2D9F3', row: 'F3EFF9' },
+      { company: '7F6000', till: 'FFEB9C', row: 'FFF8DC' },
+      { company: '1E4D6B', till: 'DDEBF7', row: 'EEF4FA' },
+    ];
+
+    const mkStyle = (bgHex, bold = false, sz = 10, color = '000000', border = false) => ({
+      font: { bold, sz, color: { rgb: color } },
+      fill: { fgColor: { rgb: bgHex }, patternType: 'solid' },
+      alignment: { vertical: 'center', wrapText: false },
+      ...(border ? {
+        border: {
+          bottom: { style: 'thin', color: { rgb: 'CCCCCC' } },
+        }
+      } : {}),
+    });
+
+    const numStyle = (bgHex, color = '1F497D') => ({
+      font: { sz: 10, color: { rgb: color } },
+      fill: { fgColor: { rgb: bgHex }, patternType: 'solid' },
+      alignment: { vertical: 'center', horizontal: 'right' },
+      numFmt: '#,##0.00',
+    });
+
+    const ws = {};
+    let r = 0; // current row (0-indexed)
+
+    // ── Column header row ────────────────────────────────────────────────────
+    const headers = [
+      'Company', 'Till', 'Short Code', 'Status',
+      'Agent Name', 'Role', 'ID Number', 'Phone', 'Swap Date',
+      'Float Balance', 'Commission Balance', 'Initiated By', 'Notes',
+    ];
+    headers.forEach((h, c) => {
+      ws[`${COLS[c]}${r + 1}`] = {
+        v: h, t: 's',
+        s: { ...mkStyle('2C3E50', true, 11, 'FFFFFF'), alignment: { horizontal: 'center', vertical: 'center' } },
+      };
+    });
+    r++;
+
+    // ── Data rows ────────────────────────────────────────────────────────────
+    groupedData.forEach((company, ci) => {
+      const palette = PALETTES[ci % PALETTES.length];
+
+      // Company header row — spans all columns visually via merged cells
+      COLS.forEach((col, c) => {
+        ws[`${col}${r + 1}`] = {
+          v: c === 0 ? (company.company_name || 'Unknown Company') : '',
+          t: 's',
+          s: mkStyle(palette.company, true, 11, 'FFFFFF'),
+        };
       });
+      if (!ws['!merges']) ws['!merges'] = [];
+      ws['!merges'].push({ s: { r, c: 0 }, e: { r, c: NUM_COLS - 1 } });
+      r++;
 
-      const url = window.URL.createObjectURL(new Blob([response.data]));
-      const link = document.createElement('a');
-      link.href = url;
-      link.setAttribute('download', `swap_report_${new Date().toISOString().split('T')[0]}.csv`);
-      document.body.appendChild(link);
-      link.click();
-      link.remove();
-      window.URL.revokeObjectURL(url);
-      showToast('Report exported successfully', 'success');
-    } catch (error) {
-      console.error('Error exporting report:', error);
-      showToast('Failed to export report', 'error');
-    }
+      (company.tills || []).forEach(till => {
+        // Till sub-header row
+        const tillLabel = `${till.till_name || ''}${till.short_code ? '  ·  ' + till.short_code : ''}`;
+        COLS.forEach((col, c) => {
+          ws[`${col}${r + 1}`] = {
+            v: c === 0 ? tillLabel : '',
+            t: 's',
+            s: mkStyle(palette.till, true, 10, '000000'),
+          };
+        });
+        ws['!merges'].push({ s: { r, c: 0 }, e: { r, c: NUM_COLS - 1 } });
+        r++;
+
+        // Current agents
+        (till.current_agents || []).forEach(agent => {
+          const cells = [
+            company.company_name || '',
+            till.till_name || '',
+            till.short_code || '',
+            'Current',
+            agent.name || '',
+            agent.role || '',
+            agent.idnumber || '',
+            agent.phone_number || '',
+            '',
+            till.current_float_balance ?? 0,
+            till.current_commission_balance ?? 0,
+            '',
+            '',
+          ];
+          cells.forEach((val, c) => {
+            const isNum = c >= 9 && c <= 10;
+            ws[`${COLS[c]}${r + 1}`] = {
+              v: val, t: isNum ? 'n' : 's',
+              s: isNum
+                ? numStyle('C6EFCE', '276221')
+                : { ...mkStyle('C6EFCE', c === 3, 10, c === 3 ? '276221' : c === 5 ? '7F5200' : '000000'), border: true },
+            };
+          });
+          r++;
+        });
+
+        // Previous agent rows — alternating white / light palette tint
+        (till.previous_rows || []).forEach((row, ri) => {
+          const bg = ri % 2 === 0 ? 'FFFFFF' : palette.row;
+          const fv = row.float_at_swap === '—' ? 0 : parseFloat(row.float_at_swap || 0);
+          const cv = row.commission_at_swap === '—' ? 0 : parseFloat(row.commission_at_swap || 0);
+          const cells = [
+            company.company_name || '',
+            till.till_name || '',
+            till.short_code || '',
+            'Previous',
+            row.agent_name || '',
+            row.agent_role || '',
+            row.agent_idnumber || row.agent_kyc_id_number || '',
+            row.agent_phone || '',
+            row.swap_date ? new Date(row.swap_date).toLocaleString() : '',
+            fv,
+            cv,
+            row.initiated_by || '',
+            row.notes || '',
+          ];
+          cells.forEach((val, c) => {
+            const isNum = c >= 9 && c <= 10;
+            ws[`${COLS[c]}${r + 1}`] = {
+              v: val, t: isNum ? 'n' : 's',
+              s: isNum
+                ? numStyle(bg, '1F497D')
+                : { ...mkStyle(bg, c === 3, 10, c === 3 ? 'C00000' : c === 5 ? '7F5200' : '000000'), border: true },
+            };
+          });
+          r++;
+        });
+
+        // Blank separator row after each till
+        COLS.forEach(col => {
+          ws[`${col}${r + 1}`] = { v: '', t: 's', s: mkStyle('FFFFFF') };
+        });
+        r++;
+      });
+    });
+
+    // Column widths (13 cols: Company, Till, Short Code, Status, Agent Name, Role, ID, Phone, Swap Date, Float, Commission, Initiated By, Notes)
+    ws['!cols'] = [
+      { wch: 28 }, { wch: 30 }, { wch: 12 }, { wch: 10 },
+      { wch: 28 }, { wch: 26 }, { wch: 14 }, { wch: 14 }, { wch: 20 },
+      { wch: 16 }, { wch: 18 }, { wch: 16 }, { wch: 24 },
+    ];
+    ws['!ref'] = `A1:${COLS[NUM_COLS - 1]}${r}`;
+
+    // Freeze top header row
+    ws['!freeze'] = { xSplit: 0, ySplit: 1 };
+
+    const wb = XLSXStyle.utils.book_new();
+    XLSXStyle.utils.book_append_sheet(wb, ws, 'Swap History');
+    XLSXStyle.writeFile(wb, `swap_history_${new Date().toISOString().split('T')[0]}.xlsx`);
+    showToast('Excel exported successfully', 'success');
   };
 
   const handleConfirmExport = async () => {
@@ -249,12 +386,20 @@ function SwapHistoryGrid() {
       if (exportConfirm === 'pdf') {
         await handleExportReportPDF();
       } else {
-        await handleExportReport();
+        handleExportExcel();
       }
     } finally {
       setIsExportingReport(false);
       setExportConfirm(null);
     }
+  };
+
+  const formatRole = (role) => {
+    if (!role) return null;
+    const r = role.toLowerCase();
+    if (r.includes('primary')) return { label: 'Primary', cls: 'bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400' };
+    if (r.includes('till')) return { label: 'Till Op.', cls: 'bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400' };
+    return { label: role.slice(0, 12), cls: 'bg-slate-100 text-slate-600 dark:bg-slate-700 dark:text-slate-300' };
   };
 
   // Revert a swap
@@ -462,11 +607,11 @@ function SwapHistoryGrid() {
                   Generate Swap Report
                 </button>
                 <button
-                  onClick={() => { setExportConfirm('csv'); setIsDropdownOpen(false); }}
+                  onClick={() => { setExportConfirm('excel'); setIsDropdownOpen(false); }}
                   className="w-full flex items-center px-4 py-3 text-sm text-slate-800 dark:text-slate-200 hover:bg-blue-50 dark:hover:bg-blue-900/30 transition-colors"
                 >
                   <Download className="w-4 h-4 mr-2" />
-                  Export to CSV
+                  Export to Excel
                 </button>
                 <button
                   onClick={() => { setExportConfirm('pdf'); setIsDropdownOpen(false); }}
@@ -497,7 +642,7 @@ function SwapHistoryGrid() {
         </div>
         <div className="flex items-end gap-3">
           <div>
-            <label className="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1">Start Date</label>
+            <label className="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1">Registered From</label>
             <input
               type="date"
               value={startDate}
@@ -506,7 +651,7 @@ function SwapHistoryGrid() {
             />
           </div>
           <div>
-            <label className="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1">End Date</label>
+            <label className="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1">Registered To</label>
             <input
               type="date"
               value={endDate}
@@ -621,27 +766,30 @@ function SwapHistoryGrid() {
                         {expandedTills[till.agent_company_id] && (
                           <div className="divide-y divide-slate-100 dark:divide-slate-700">
                             {/* Column headers */}
-                            <div className="grid grid-cols-[140px_1fr_auto_1fr_120px_150px_auto] gap-3 px-6 py-2 bg-slate-50 dark:bg-slate-800/50 text-xs font-semibold text-slate-500 dark:text-slate-400">
+                            <div className="grid grid-cols-[140px_1fr_80px_120px_160px_56px] gap-3 px-6 py-2 bg-slate-50 dark:bg-slate-800/50 text-xs font-semibold text-slate-500 dark:text-slate-400">
                               <div>Swap Date</div>
                               <div>Agent</div>
                               <div className="text-center">Status</div>
-                              <div>Replaced By / Replaced</div>
-                              <div className="text-right whitespace-nowrap">Float at Swap</div>
-                              <div className="text-right whitespace-nowrap">Commission at Swap</div>
+                              <div className="text-right whitespace-nowrap">Float Balance</div>
+                              <div className="text-right whitespace-nowrap">Commission Balance</div>
                               <div className="text-center">Payout</div>
                             </div>
 
                             {/* Current agents row (shown first) */}
                             {(till.current_agents || []).length > 0 && (
-                              <div className="grid grid-cols-[140px_1fr_auto_1fr_120px_150px_auto] gap-3 px-6 py-3 bg-green-50/40 dark:bg-green-900/10">
+                              <div className="grid grid-cols-[140px_1fr_80px_120px_160px_56px] gap-3 px-6 py-3 bg-green-50/40 dark:bg-green-900/10">
                                 <div className="text-xs text-slate-400 italic self-start pt-0.5">Latest</div>
-                                <div className="space-y-1 self-start">
+                                <div className="space-y-1.5 self-start">
                                   {till.current_agents.map((a, ai) => {
                                     const name = a.name || [a.firstname, a.middlename, a.lastname].filter(Boolean).join(' ') || 'Unknown';
+                                    const roleBadge = formatRole(a.role);
                                     return (
                                       <div key={ai} className="flex items-center gap-1.5 text-xs text-green-700 dark:text-green-300">
                                         <Users className="w-3 h-3 flex-shrink-0" />
                                         <span className="font-medium">{name}</span>
+                                        {roleBadge && (
+                                          <span className={`px-1.5 py-0.5 rounded text-[10px] font-semibold ${roleBadge.cls}`}>{roleBadge.label}</span>
+                                        )}
                                         {a.phone_number && <span className="text-green-500/70">{a.phone_number}</span>}
                                       </div>
                                     );
@@ -652,9 +800,16 @@ function SwapHistoryGrid() {
                                     Current
                                   </span>
                                 </div>
-                                <div />
-                                <div />
-                                <div />
+                                <div className="text-right text-xs font-medium text-blue-700 dark:text-blue-400 self-start">
+                                  {till.current_float_balance != null
+                                    ? `KES ${parseFloat(till.current_float_balance).toLocaleString(undefined, { minimumFractionDigits: 2 })}`
+                                    : <span className="text-slate-400 font-normal">—</span>}
+                                </div>
+                                <div className="text-right text-xs font-medium text-green-700 dark:text-green-400 self-start">
+                                  {till.current_commission_balance != null
+                                    ? `KES ${parseFloat(till.current_commission_balance).toLocaleString(undefined, { minimumFractionDigits: 2 })}`
+                                    : <span className="text-slate-400 font-normal">—</span>}
+                                </div>
                                 <div />
                               </div>
                             )}
@@ -663,7 +818,7 @@ function SwapHistoryGrid() {
                             {(till.previous_rows || []).map((row, ri) => (
                               <div
                                 key={`${row.swap_id}-${ri}`}
-                                className="grid grid-cols-[140px_1fr_auto_1fr_120px_150px_auto] gap-3 px-6 py-3 hover:bg-slate-50 dark:hover:bg-slate-700/30 transition-colors"
+                                className="grid grid-cols-[140px_1fr_80px_120px_160px_56px] gap-3 px-6 py-3 hover:bg-slate-50 dark:hover:bg-slate-700/30 transition-colors"
                               >
                                 <div className="text-xs text-slate-500 dark:text-slate-400 self-start pt-0.5">
                                   {row.agent_registration_time
@@ -671,7 +826,14 @@ function SwapHistoryGrid() {
                                     : formatDate(row.swap_date)}
                                 </div>
                                 <div className="text-xs self-start">
-                                  <div className="font-medium text-slate-700 dark:text-slate-300">{row.agent_name}</div>
+                                  <div className="flex items-center gap-1.5">
+                                    <span className="font-medium text-slate-700 dark:text-slate-300">{row.agent_name}</span>
+                                    {formatRole(row.agent_role) && (
+                                      <span className={`px-1.5 py-0.5 rounded text-[10px] font-semibold ${formatRole(row.agent_role).cls}`}>
+                                        {formatRole(row.agent_role).label}
+                                      </span>
+                                    )}
+                                  </div>
                                   {(row.agent_kyc_id_number || row.agent_idnumber) && (
                                     <div className="text-slate-400">ID: {row.agent_kyc_id_number || row.agent_idnumber}</div>
                                   )}
@@ -682,7 +844,6 @@ function SwapHistoryGrid() {
                                     Previous
                                   </span>
                                 </div>
-                                <div />
                                 <div className="text-right text-xs font-medium text-blue-700 dark:text-blue-400 self-start">
                                   {row.float_at_swap === '—'
                                     ? <span className="text-slate-400 font-normal">—</span>
@@ -1253,11 +1414,11 @@ function SwapHistoryGrid() {
                     Export PDF
                   </button>
                   <button
-                    onClick={() => setExportConfirm('csv')}
+                    onClick={() => setExportConfirm('excel')}
                     className="flex items-center gap-2 px-4 py-2 text-sm text-white bg-green-500 rounded-xl hover:bg-green-600 transition-colors"
                   >
                     <Download className="w-4 h-4" />
-                    Export CSV
+                    Export Excel
                   </button>
                 </>
               )}
@@ -1284,13 +1445,13 @@ function SwapHistoryGrid() {
                     : <Download className="w-5 h-5 text-green-600 dark:text-green-400" />}
                 </div>
                 <h3 className="text-lg font-semibold text-slate-800 dark:text-white">
-                  Export {exportConfirm === 'pdf' ? 'PDF' : 'CSV'} Report
+                  Export {exportConfirm === 'pdf' ? 'PDF' : 'Excel'} Report
                 </h3>
               </div>
               <p className="text-sm text-slate-600 dark:text-slate-400 mb-6">
                 {exportConfirm === 'pdf'
                   ? 'Generate and download a PDF swap report for the selected period. This may take a few seconds to compile.'
-                  : 'Download the swap report data as a CSV file for the selected period.'}
+                  : 'Download the full swap history as an Excel workbook with current and previous agent columns.'}
               </p>
               <div className="flex items-center justify-end gap-3">
                 <button
@@ -1308,7 +1469,7 @@ function SwapHistoryGrid() {
                   {isExportingReport
                     ? <Loader2 className="w-4 h-4 animate-spin" />
                     : exportConfirm === 'pdf' ? <FileText className="w-4 h-4" /> : <Download className="w-4 h-4" />}
-                  {isExportingReport ? 'Generating...' : `Export ${exportConfirm === 'pdf' ? 'PDF' : 'CSV'}`}
+                  {isExportingReport ? 'Generating...' : `Export ${exportConfirm === 'pdf' ? 'PDF' : 'Excel'}`}
                 </button>
               </div>
             </div>
