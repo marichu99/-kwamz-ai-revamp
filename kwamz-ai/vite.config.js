@@ -69,12 +69,13 @@ export default defineConfig(({ mode }) => {
         }
       },
       
-      // Optimize dependencies
-      optimizeDeps: {
-        include: ['react', 'react-dom', 'react-router-dom']
-      }
     },
-    
+
+    // Pre-bundle CJS dependencies (optimizeDeps belongs at top level, not inside build)
+    optimizeDeps: {
+      include: ['react', 'react-dom', 'react-router-dom', 'xlsx', 'xlsx-js-style']
+    },
+
     // Environment variables
     define: {
       __APP_VERSION__: JSON.stringify(process.env.npm_package_version),
