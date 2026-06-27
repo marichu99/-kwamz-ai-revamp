@@ -8,6 +8,7 @@ import Header from './components/Layout/Header';
 import AppRouter from './AppRouter';
 import config from './Config';
 import LiveScrapeFeed from './components/LiveScrapeFeed';
+import ChatBubble from './components/ChatBubble';
 import { useLiveFeed } from './context/LiveFeedContext';
 
 function App() {
@@ -161,6 +162,9 @@ function App() {
       </div>
 
     </div>
+
+    {/* Floating data assistant — persists across all routes */}
+    <ChatBubble isAuthenticated={isAuthenticated} />
 
     {/* Global live feed — persists across all routes */}
     <LiveScrapeFeed
