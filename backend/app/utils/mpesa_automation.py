@@ -2911,7 +2911,7 @@ class MpesaScraper:
             export_trigger.wait_for(state="visible", timeout=30000)
             export_trigger.scroll_into_view_if_needed()
             export_trigger.hover(force=True, timeout=10_000)
-            logger.info(f"[TIMING] Export trigger hovered: {_elapsed(t)}")
+            logger.info(f"[TIMING] Export trigger hovered: {self._elapsed(t)}")
             time.sleep(3)
 
             page.wait_for_function(
@@ -2925,7 +2925,7 @@ class MpesaScraper:
                 }""",
                 timeout=40000,
             )
-            logger.info(f"[TIMING] Export dropdown open: {_elapsed(t)}")
+            logger.info(f"[TIMING] Export dropdown open: {self._elapsed(t)}")
 
             all_items = page.locator("ul.el-dropdown-menu li.el-dropdown-menu__item")
             excel_items = all_items.filter(has_text="Excel")
@@ -2948,7 +2948,7 @@ class MpesaScraper:
 
             download = dl_info.value
             temp_path = download.path()
-            logger.info(f"[TIMING] Excel downloaded: {_elapsed(t)}")
+            logger.info(f"[TIMING] Excel downloaded: {self._elapsed(t)}")
 
             # Parse and persist directly from the Playwright temp file
             t = time.time()
@@ -2959,7 +2959,7 @@ class MpesaScraper:
                 company_shortcode=self.company_shortcode,
                 agent_id=None,
             )
-            logger.info(f"[TIMING] DB upsert: {_elapsed(t)} | success={success} | rows={len(df) if df is not None else 0}")
+            logger.info(f"[TIMING] DB upsert: {self._elapsed(t)} | success={success} | rows={len(df) if df is not None else 0}")
 
             logger.info("[INFO] ===== Head Office Commission Scraping Complete =====")
 
@@ -4540,7 +4540,7 @@ class MpesaScraper:
             export_trigger.wait_for(state="visible", timeout=30000)
             export_trigger.scroll_into_view_if_needed()
             export_trigger.hover(force=True, timeout=10_000)
-            logger.info(f"[TIMING] Export trigger hovered: {_elapsed(t)}")
+            logger.info(f"[TIMING] Export trigger hovered: {self._elapsed(t)}")
             time.sleep(3)
 
             page.wait_for_function(
@@ -4554,7 +4554,7 @@ class MpesaScraper:
                 }""",
                 timeout=40000,
             )
-            logger.info(f"[TIMING] Export dropdown open: {_elapsed(t)}")
+            logger.info(f"[TIMING] Export dropdown open: {self._elapsed(t)}")
 
             all_items = page.locator("ul.el-dropdown-menu li.el-dropdown-menu__item")
             excel_items = all_items.filter(has_text="Excel")
@@ -4577,7 +4577,7 @@ class MpesaScraper:
 
             download = dl_info.value
             temp_path = download.path()
-            logger.info(f"[TIMING] Excel downloaded: {_elapsed(t)}")
+            logger.info(f"[TIMING] Excel downloaded: {self._elapsed(t)}")
 
             # Parse and persist directly from the Playwright temp file
             t = time.time()
@@ -4588,7 +4588,7 @@ class MpesaScraper:
                 company_shortcode=self.company_shortcode,
                 agent_id=None,
             )
-            logger.info(f"[TIMING] DB upsert: {_elapsed(t)} | success={success} | rows={len(df) if df is not None else 0}")
+            logger.info(f"[TIMING] DB upsert: {self._elapsed(t)} | success={success} | rows={len(df) if df is not None else 0}")
 
             return True
 
