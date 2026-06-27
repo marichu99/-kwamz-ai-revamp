@@ -934,8 +934,14 @@ class TransactionService:
             if shortcode:
                 agent_query = agent_query.filter(AgentCompany.business_short_code.ilike(f'%{shortcode}%'))
 
+            no_data_acs = agent_query.order_by(AgentCompany.business_short_code).all()
+
+            # Build company map for no-data tills to avoid lazy-load issues
+            nd_company_ids = {ac.company_id for ac in no_data_acs if ac.company_id}
+            nd_company_map = {c.id: c.company_name for c in Company.query.filter(Company.id.in_(nd_company_ids)).all()} if nd_company_ids else {}
+
             no_data_tills = []
-            for ac in agent_query.order_by(AgentCompany.business_short_code).all():
+            for ac in no_data_acs:
                 sc = ac.business_short_code
                 if sc and sc not in shortcodes_with_data:
                     no_data_tills.append({
@@ -948,7 +954,7 @@ class TransactionService:
                         'receipt_no': None,
                         'no_commission_data': True,
                         'company_id': ac.company_id,
-                        'company_name': (ac.company.company_name if ac.company else ''),
+                        'company_name': nd_company_map.get(ac.company_id, ''),
                     })
 
             return {
