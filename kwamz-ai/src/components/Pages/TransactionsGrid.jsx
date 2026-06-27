@@ -973,7 +973,7 @@ function TransactionsGrid() {
                     </div>
                 </div>
                 <div className="overflow-x-auto">
-                    <table className="w-full text-sm">
+                    <table className="w-full text-sm border-separate border-spacing-y-0">
                         <thead>
                             <tr className="bg-slate-100 dark:bg-slate-700 text-left text-slate-600 dark:text-slate-300">
                                 <th className="px-4 py-3 font-semibold rounded-l-xl">Till Name</th>
@@ -1024,6 +1024,8 @@ function TransactionsGrid() {
                                     const isOpen = expandedTillCompanies.has(group.company_name);
                                     return (
                                         <React.Fragment key={group.company_name}>
+                                            {/* Spacer before each group */}
+                                            <tr><td colSpan={5} className="py-1 bg-transparent border-none" /></tr>
                                             {/* Company header row */}
                                             <tr
                                                 className="cursor-pointer select-none"
@@ -1034,10 +1036,10 @@ function TransactionsGrid() {
                                                     return next;
                                                 })}
                                             >
-                                                <td colSpan={5} className="px-4 py-3 bg-amber-500 dark:bg-amber-600 text-white font-bold text-sm rounded-none">
+                                                <td colSpan={5} className="px-4 py-3 bg-amber-100 dark:bg-amber-900/40 text-amber-800 dark:text-amber-200 font-bold text-sm rounded-xl">
                                                     <span className="mr-2">{isOpen ? '▾' : '▸'}</span>
                                                     {group.company_name}
-                                                    <span className="ml-3 text-xs font-normal text-amber-100">{group.tills.length} till{group.tills.length !== 1 ? 's' : ''}</span>
+                                                    <span className="ml-3 text-xs font-normal text-amber-600 dark:text-amber-300">{group.tills.length} till{group.tills.length !== 1 ? 's' : ''}</span>
                                                 </td>
                                             </tr>
                                             {/* Till rows — only when expanded */}
