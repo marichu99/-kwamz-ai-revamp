@@ -1034,10 +1034,10 @@ function TransactionsGrid() {
                                                     return next;
                                                 })}
                                             >
-                                                <td colSpan={5} className="px-4 py-3 bg-amber-700 dark:bg-amber-800 text-white font-bold text-sm rounded-none">
+                                                <td colSpan={5} className="px-4 py-3 bg-amber-500 dark:bg-amber-600 text-white font-bold text-sm rounded-none">
                                                     <span className="mr-2">{isOpen ? '▾' : '▸'}</span>
                                                     {group.company_name}
-                                                    <span className="ml-3 text-xs font-normal text-amber-200">{group.tills.length} till{group.tills.length !== 1 ? 's' : ''}</span>
+                                                    <span className="ml-3 text-xs font-normal text-amber-100">{group.tills.length} till{group.tills.length !== 1 ? 's' : ''}</span>
                                                 </td>
                                             </tr>
                                             {/* Till rows — only when expanded */}
