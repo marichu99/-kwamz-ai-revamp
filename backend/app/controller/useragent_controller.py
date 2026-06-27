@@ -42,8 +42,9 @@ def get_all_users():
 @user_agent_bp.route('/<int:user_id>', methods=['GET'])
 @jwt_required()
 def get_user(user_id):
+    current_user_id = get_jwt_identity()
     service = UserAgentService()
-    user, error = service.get_user(user_id)
+    user, error = service.get_user(user_id, requesting_user_id=current_user_id)
     if error:
         return jsonify({'error': error}), 404 if 'not found' in error.lower() else 500
     return jsonify(user), 200
@@ -51,8 +52,9 @@ def get_user(user_id):
 @user_agent_bp.route('/<int:user_id>/scrape-status', methods=['GET'])
 @jwt_required()
 def get_scrape_status(user_id):
+    current_user_id = get_jwt_identity()
     service = UserAgentService()
-    result, error = service.get_scrape_status(user_id)
+    result, error = service.get_scrape_status(user_id, requesting_user_id=current_user_id)
     if error:
         return jsonify({'error': error}), 404 if 'not found' in error.lower() else 500
     return jsonify(result), 200
@@ -60,8 +62,9 @@ def get_scrape_status(user_id):
 @user_agent_bp.route('/<int:user_id>', methods=['PUT'])
 @jwt_required()
 def update_user(user_id):
+    current_user_id = get_jwt_identity()
     service = UserAgentService()
-    user, error = service.update_user(user_id, request.form, request.files)
+    user, error = service.update_user(user_id, request.form, request.files, requesting_user_id=current_user_id)
     if error:
         return jsonify({'error': error}), 400 if 'Invalid' in error or 'empty' in error else 500
     return jsonify({

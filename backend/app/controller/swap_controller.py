@@ -183,9 +183,14 @@ def export_swap_report_pdf():
         if error:
             return jsonify({'error': error}), 500
 
+        grouped, g_error = service.get_swaps_by_company_and_till(current_user_id, filters)
+        if g_error:
+            grouped = []
+
         html_string = render_template(
             'swap_report_pdf.html',
             report=result,
+            grouped=grouped or [],
             generated_at=datetime.now().strftime('%d %b %Y %H:%M'),
         )
         pdf_bytes = HTML(string=html_string).write_pdf()

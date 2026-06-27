@@ -527,10 +527,25 @@ class TransactionService:
                     balance_confirmed = balance_confirmed.upper() in ['TRUE', 'YES', '1', 'Y']
                     
                 company_id = company_service.get_company_by_shortcode(company_shortcode).id
+
+                # Guard: if business_shortcode is a known parent-company shortcode that belongs
+                # to a DIFFERENT company than the scraping context, use the correct company_id.
+                # This prevents transactions from being stored under the wrong company when the
+                # scraper processes a statement that contains shortcodes from other companies.
+                if business_shortcode and business_shortcode != company_shortcode:
+                    correct = company_service.get_company_by_shortcode(business_shortcode)
+                    if correct and correct.id != company_id:
+                        logger.warning(
+                            f"[TX GUARD] business_shortcode={business_shortcode} belongs to "
+                            f"company '{correct.company_name}' (id={correct.id}), not scraping "
+                            f"context company_id={company_id}. Reassigning company_id."
+                        )
+                        company_id = correct.id
+
                 balance_value = self._parse_decimal(trans_data.get('balance', '0'))
                 if transaction_type == 'commission':
                     balance_value = balance_value * Decimal('0.25')
-                
+
                 # Prepare transaction data
                 transaction_data = {
                     'receipt_no': receipt_no,
@@ -5268,7 +5283,30 @@ class TransactionService:
 
             if filters:
                 if filters.get('company_ids') is not None:
-                    query = query.filter(Transaction.company_id.in_(filters['company_ids']))
+                    company_ids = filters['company_ids']
+                    query = query.filter(Transaction.company_id.in_(company_ids))
+
+                    # Secondary guard: only show transactions whose business_shortcode
+                    # belongs to a till or parent company owned by this user. Prevents
+                    # scraped data with wrong company_id from leaking across accounts.
+                    owned_acs = AgentCompany.query.filter(
+                        AgentCompany.company_id.in_(company_ids)
+                    ).with_entities(
+                        AgentCompany.business_short_code,
+                        AgentCompany.short_code,
+                    ).all()
+                    owned_shortcodes = {sc for ac in owned_acs for sc in (ac.business_short_code, ac.short_code) if sc}
+                    # Also include parent company shortcodes
+                    from app.model.company import Company as _Company
+                    parent_shortcodes = {
+                        c.shortcode for c in _Company.query.filter(
+                            _Company.id.in_(company_ids)
+                        ).all() if c.shortcode
+                    }
+                    all_shortcodes = owned_shortcodes | parent_shortcodes
+                    if all_shortcodes:
+                        query = query.filter(Transaction.business_shortcode.in_(all_shortcodes))
+
                 if filters.get('start_date'):
                     query = query.filter(Transaction.completion_time >= filters['start_date'])
                 if filters.get('end_date'):

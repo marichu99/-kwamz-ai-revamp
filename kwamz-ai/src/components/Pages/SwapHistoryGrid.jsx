@@ -337,7 +337,9 @@ function SwapHistoryGrid() {
             row.agent_role || '',
             row.agent_idnumber || row.agent_kyc_id_number || '',
             row.agent_phone || '',
-            row.swap_date ? new Date(row.swap_date).toLocaleString() : '',
+            row.agent_registration_time
+              ? new Date(row.agent_registration_time).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' })
+              : (row.swap_date ? new Date(row.swap_date).toLocaleString() : ''),
             fv,
             cv,
             row.initiated_by || '',

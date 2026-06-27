@@ -4484,7 +4484,7 @@ class MpesaScraper:
 
             try:
                 # Open transaction-type dropdown and navigate to the Commission option
-                page.click(_TRANSACTION_TYPE_DROPDOWN_XPATH)
+                page.click(self._TRANSACTION_TYPE_DROPDOWN_XPATH)
                 time.sleep(0.5)
 
                 commission_found = False
@@ -4509,7 +4509,7 @@ class MpesaScraper:
                 logger.error(f"[ERROR] Failed to select Commission from dropdown: {e}")
                 logger.info("[INFO] Attempting fallback method to select Commission option...")
                 # Open transaction-type dropdown and navigate to the Commission option
-                page.click(_TRANSACTION_TYPE_DROPDOWN_XPATH)
+                page.click(self._TRANSACTION_TYPE_DROPDOWN_XPATH)
                 time.sleep(0.5)
 
                 commission_found = False

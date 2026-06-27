@@ -55,9 +55,24 @@ class UserAgentService:
             'parent_short_code': primary.parent_short_code,
         }
 
-    def serialize_user_agent(self, user_agent):
-        """Serialize UserAgent object to JSON."""
+    def serialize_user_agent(self, user_agent, requesting_user_id=None):
+        """Serialize UserAgent object to JSON.
+
+        requesting_user_id: when provided, agent_companies is filtered to only
+        include AgentCompanies that belong to that user, so operators shared
+        across multiple onboarded companies never expose another user's tills.
+        """
         primary = user_agent.agent_company
+
+        # Scope M2M assignments to the requesting user's own companies only
+        all_companies = user_agent.agent_companies
+        if requesting_user_id is not None:
+            all_companies = [
+                ac for ac in all_companies
+                if ac.user_id == requesting_user_id
+                or (ac.company and ac.company.user_id == requesting_user_id)
+            ]
+
         return {
             'id': user_agent.id,
             'firstname': user_agent.firstname,
@@ -71,8 +86,8 @@ class UserAgentService:
             'operator_role': user_agent.operator_role,
             'agent_company_id': user_agent.agent_company_id,
             'agent_company_name': primary.company_name if primary else None,
-            'agent_company_ids': user_agent.get_agent_company_ids(),
-            'agent_company_names': user_agent.get_agent_company_names(),
+            'agent_company_ids': [ac.id for ac in all_companies],
+            'agent_company_names': [ac.company_name for ac in all_companies],
             'agent_companies': [{
                 'id': company.id,
                 'company_name': company.company_name,
@@ -84,7 +99,7 @@ class UserAgentService:
                 'top_organization': company.top_organization,
                 'parent_short_code': company.parent_short_code,
                 'is_primary': company.id == user_agent.agent_company_id
-            } for company in user_agent.agent_companies],
+            } for company in all_companies],
             'primary_company': self._serialize_primary_company(primary),
         }
 
@@ -179,7 +194,7 @@ class UserAgentService:
 
             db.session.add(new_user)
             db.session.commit()
-            return self.serialize_user_agent(new_user), None
+            return self.serialize_user_agent(new_user, requesting_user_id=user_id), None
 
         except ValueError:
             db.session.rollback()
@@ -228,27 +243,33 @@ class UserAgentService:
                 )
                 .all()
             )
-            return [self.serialize_user_agent(user) for user in users], None
+            return [self.serialize_user_agent(user, requesting_user_id=user_id) for user in users], None
         except Exception as e:
             logger.error(f"Error fetching users: {str(e)}")
             current_app.logger.error(f"Error fetching users: {str(e)}")
             return [], 'Internal server error'
 
-    def get_user(self, user_id):
+    def get_user(self, user_agent_id, requesting_user_id=None):
         """Retrieve a single UserAgent by ID."""
         try:
-            user = UserAgent.query.get_or_404(user_id)
-            return self.serialize_user_agent(user), None
+            user = UserAgent.query.get_or_404(user_agent_id)
+            return self.serialize_user_agent(user, requesting_user_id=requesting_user_id), None
         except Exception as e:
             return None, str(e)
 
-    def get_scrape_status(self, user_agent_id):
+    def get_scrape_status(self, user_agent_id, requesting_user_id=None):
         """Check scrape status for all agent companies linked to a user agent."""
         try:
             user_agent = UserAgent.query.get_or_404(user_agent_id)
-            companies = user_agent.agent_companies
-            if not companies and user_agent.agent_company:
-                companies = [user_agent.agent_company]
+            all_companies = user_agent.agent_companies
+            # Scope to requesting user's own companies only
+            if requesting_user_id is not None:
+                all_companies = [
+                    ac for ac in all_companies
+                    if ac.user_id == requesting_user_id
+                    or (ac.company and ac.company.user_id == requesting_user_id)
+                ]
+            companies = all_companies or ([user_agent.agent_company] if user_agent.agent_company else [])
 
             result = []
             all_scraped = True
@@ -279,7 +300,7 @@ class UserAgentService:
             current_app.logger.error(f"Error checking scrape status: {str(e)}")
             return None, str(e)
 
-    def update_user(self, user_id, data, files):
+    def update_user(self, user_id, data, files, requesting_user_id=None):
         """Update an existing UserAgent."""
         try:
             user = UserAgent.query.get_or_404(user_id)
@@ -377,7 +398,7 @@ class UserAgentService:
                 user.image_loc = result['gcs_path']
 
             db.session.commit()
-            return self.serialize_user_agent(user), None
+            return self.serialize_user_agent(user, requesting_user_id=requesting_user_id), None
 
         except ValueError:
             db.session.rollback()

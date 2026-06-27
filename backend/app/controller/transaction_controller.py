@@ -9,6 +9,7 @@ from app.service.reports.monthly_commission_report_service import MonthlyCommiss
 from app.service.export_service import ExportService
 from app.utils.user_service import UserService
 from app.model.company import Company
+from app.model.agentcompany import AgentCompany
 from flask_jwt_extended import jwt_required, get_jwt_identity, verify_jwt_in_request
 import io
 import os
@@ -920,9 +921,11 @@ def export_clawbacks_pdf():
 @transaction_bp.route('/export-commission-tills', methods=['GET'])
 @jwt_required()
 def export_commission_tills():
-    """Export all commission till balances to an Excel file."""
+    """Export commission till balances grouped by company with color-coded styling."""
     try:
-        import pandas as pd
+        from openpyxl import Workbook
+        from openpyxl.styles import PatternFill, Font, Alignment, Border, Side
+        from openpyxl.utils import get_column_letter
         import io as _io
 
         current_user_id = get_jwt_identity()
@@ -946,18 +949,123 @@ def export_commission_tills():
         if not result['success']:
             return jsonify(result), 400
 
-        rows = result['data']
-        df = pd.DataFrame([{
-            'Till Name': r['till_name'],
-            'Shortcode': r['shortcode'],
-            'Current Balance (KES)': float(r['current_balance'] or 0),
-            'Available Balance (KES)': float(r['available_balance'] or 0),
-            'Last Updated': r['last_updated'],
-        } for r in rows])
+        # Shortcode → balance row lookups
+        sc_map = {r['shortcode']: r for r in result['data']}
+        no_data_map = {r['shortcode']: r for r in result.get('no_commission_tills', [])}
+
+        # Company → tills hierarchy
+        if company_ids is not None:
+            companies = Company.query.filter(Company.id.in_(company_ids)).order_by(Company.company_name).all()
+        else:
+            companies = Company.query.order_by(Company.company_name).all()
+
+        # Same 6 palettes as Swap History Excel
+        PALETTES = [
+            {'company': '1F3864', 'sub': 'BDD7EE', 'even': 'DEEAF1', 'odd': 'FFFFFF'},
+            {'company': '375623', 'sub': 'C6EFCE', 'even': 'EBF5EC', 'odd': 'FFFFFF'},
+            {'company': '833C00', 'sub': 'FCE4D6', 'even': 'FFF2CC', 'odd': 'FFFFFF'},
+            {'company': '4B2981', 'sub': 'E2CFFF', 'even': 'F4EFFF', 'odd': 'FFFFFF'},
+            {'company': '004B4B', 'sub': 'C6E0E0', 'even': 'E2F0F0', 'odd': 'FFFFFF'},
+            {'company': '2E4057', 'sub': 'D0D8E4', 'even': 'EEF1F6', 'odd': 'FFFFFF'},
+        ]
+
+        COLS = ['A', 'B', 'C', 'D', 'E', 'F', 'G']
+        HEADERS = ['Company', 'Till Name', 'Short Code', 'Current Balance (KES)', 'Available Balance (KES)', 'Last Updated', 'Status']
+        COL_WIDTHS = [32, 42, 14, 24, 26, 20, 20]
+        NUM_COLS = len(COLS)
+
+        thin = Side(style='thin', color='D0D0D0')
+        bdr = Border(left=thin, right=thin, top=thin, bottom=thin)
+
+        def mk_fill(hex_color):
+            return PatternFill(fill_type='solid', fgColor=hex_color)
+
+        def mk_font(color='000000', bold=False, size=9):
+            return Font(color=color, bold=bold, size=size)
+
+        wb = Workbook()
+        ws = wb.active
+        ws.title = 'Commission Till Balances'
+
+        # Column header row
+        for c, (h, w) in enumerate(zip(HEADERS, COL_WIDTHS), 1):
+            cell = ws.cell(row=1, column=c, value=h)
+            cell.fill = mk_fill('1F3864')
+            cell.font = Font(bold=True, color='FFFFFF', size=10)
+            cell.alignment = Alignment(horizontal='center', vertical='center')
+            cell.border = bdr
+            ws.column_dimensions[get_column_letter(c)].width = w
+        ws.row_dimensions[1].height = 20
+        ws.freeze_panes = 'A2'
+
+        r = 1  # 0-indexed data row counter (row 1 = header)
+
+        for ci, company in enumerate(companies):
+            palette = PALETTES[ci % NUM_COLS]
+            tills = AgentCompany.query.filter_by(company_id=company.id).order_by(AgentCompany.company_name).all()
+            if not tills:
+                continue
+
+            # Company header — dark accent, merged
+            r += 1
+            ws.merge_cells(start_row=r, start_column=1, end_row=r, end_column=NUM_COLS)
+            cell = ws.cell(row=r, column=1, value=f'  {company.company_name or "Unknown Company"}')
+            cell.fill = mk_fill(palette['company'])
+            cell.font = Font(bold=True, color='FFFFFF', size=11)
+            cell.alignment = Alignment(vertical='center')
+            ws.row_dimensions[r].height = 18
+
+            # Till sub-header — lighter tint, merged
+            r += 1
+            ws.merge_cells(start_row=r, start_column=1, end_row=r, end_column=NUM_COLS)
+            cell = ws.cell(row=r, column=1, value=f'    Tills ({len(tills)})')
+            cell.fill = mk_fill(palette['sub'])
+            cell.font = Font(bold=True, color='000000', size=9)
+            cell.alignment = Alignment(vertical='center')
+            ws.row_dimensions[r].height = 14
+
+            for ti, ac in enumerate(tills):
+                sc = ac.business_short_code or ac.short_code
+                row_data = sc_map.get(sc) or no_data_map.get(sc)
+                no_data = (row_data is None) or row_data.get('no_commission_data', False)
+
+                bg = palette['even'] if ti % 2 == 0 else palette['odd']
+                row_fill = mk_fill(bg)
+
+                cur_bal = float(row_data['current_balance'] or 0) if row_data and row_data.get('current_balance') is not None else None
+                avail_bal = float(row_data['available_balance'] or 0) if row_data and row_data.get('available_balance') is not None else None
+                last_upd = None
+                if row_data and row_data.get('last_updated'):
+                    last_upd = row_data['last_updated'][:16].replace('T', ' ')
+
+                values = [
+                    company.company_name or '',
+                    ac.company_name or ac.organization_name or '',
+                    sc or '',
+                    cur_bal,
+                    avail_bal,
+                    last_upd,
+                    'No commission data' if no_data else 'Active',
+                ]
+
+                r += 1
+                for c_idx, val in enumerate(values, 1):
+                    cell = ws.cell(row=r, column=c_idx, value=val)
+                    cell.fill = row_fill
+                    cell.border = bdr
+                    cell.alignment = Alignment(vertical='center')
+                    if c_idx in (4, 5):
+                        cell.number_format = '#,##0.00'
+                        cell.alignment = Alignment(horizontal='right', vertical='center')
+                    if no_data and c_idx == 7:
+                        cell.font = Font(color='C00000', bold=True, size=9)
+
+            # Blank spacer row between companies
+            r += 1
+            ws.row_dimensions[r].height = 6
 
         output = _io.BytesIO()
-        with pd.ExcelWriter(output, engine='openpyxl') as writer:
-            df.to_excel(writer, sheet_name='Commission Till Balances', index=False)
+        wb.save(output)
         output.seek(0)
 
         from flask import Response

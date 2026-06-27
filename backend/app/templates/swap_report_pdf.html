@@ -14,7 +14,7 @@
     }
   }
   * { box-sizing: border-box; margin: 0; padding: 0; }
-  body { font-family: "DejaVu Sans", Arial, sans-serif; font-size: 11px; color: #1e293b; line-height: 1.5; }
+  body { font-family: "DejaVu Sans", Arial, sans-serif; font-size: 10px; color: #1e293b; line-height: 1.5; }
 
   .cover {
     background: #1e3a5f;
@@ -29,33 +29,55 @@
   .cover .meta-item .label { font-size: 9px; text-transform: uppercase; color: #93c5fd; letter-spacing: 0.5px; }
   .cover .meta-item .value { font-size: 13px; font-weight: 600; color: #e2e8f0; }
 
-  .summary-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-bottom: 20px; }
-  .summary-card { border: 1px solid #e2e8f0; border-radius: 6px; padding: 12px 14px; }
-  .summary-card .card-label { font-size: 9px; color: #64748b; text-transform: uppercase; letter-spacing: 0.4px; }
-  .summary-card .card-value { font-size: 17px; font-weight: 700; color: #1e293b; margin-top: 2px; }
-  .summary-card .card-sub   { font-size: 9.5px; color: #64748b; margin-top: 2px; }
-  .card-blue   { border-color: #93c5fd; background: #eff6ff; }
-  .card-green  { border-color: #86efac; background: #f0fdf4; }
-  .card-purple { border-color: #c4b5fd; background: #faf5ff; }
-  .card-amber  { border-color: #fcd34d; background: #fffbeb; }
-  .card-slate  { border-color: #e2e8f0; background: #f8fafc; }
-
-  .section-heading {
+.section-heading {
     font-size: 13px; font-weight: 700; color: #0f172a;
     border-bottom: 2px solid #1e3a5f;
     padding-bottom: 4px; margin-bottom: 12px; margin-top: 22px;
   }
 
-  .data-table { width: 100%; border-collapse: collapse; font-size: 9.5px; margin-bottom: 6px; }
-  .data-table th {
+  /* ── Grouped breakdown ─────────────────────────────────────── */
+
+  .company-block { margin-bottom: 22px; }
+
+  .company-header {
     background: #1e3a5f; color: #fff;
-    padding: 6px 8px; text-align: left; font-weight: 600; letter-spacing: 0.2px;
+    padding: 6px 10px;
+    font-size: 11px; font-weight: 700;
+    display: flex; justify-content: space-between; align-items: center;
   }
-  .data-table th.right { text-align: right; }
-  .data-table td { padding: 5px 8px; border-bottom: 1px solid #f1f5f9; vertical-align: middle; }
-  .data-table tr:nth-child(even) td { background: #f8fafc; }
-  .data-table td.right { text-align: right; font-weight: 600; }
-  .data-table td.mono  { font-family: monospace; font-size: 9px; }
+  .company-header .swap-count { font-size: 9px; font-weight: 400; color: #93c5fd; }
+
+  .till-block { border: 1px solid #dbeafe; margin-bottom: 10px; }
+
+  .till-header {
+    background: #bfdbfe; color: #1e3a8a;
+    padding: 5px 10px; font-size: 10px; font-weight: 700;
+    display: flex; justify-content: space-between; align-items: center;
+  }
+  .till-header .shortcode { font-size: 9px; font-weight: 400; color: #1d4ed8; }
+
+  .agents-table { width: 100%; border-collapse: collapse; font-size: 8.5px; }
+  .agents-table th {
+    background: #1e3a5f; color: #fff;
+    padding: 4px 6px; text-align: left; font-weight: 600; white-space: nowrap;
+  }
+  .agents-table th.right { text-align: right; }
+  .agents-table td { padding: 4px 6px; border-bottom: 1px solid #f1f5f9; vertical-align: middle; }
+  .agents-table td.right { text-align: right; font-weight: 600; }
+  .agents-table td.mono  { font-family: monospace; font-size: 8px; }
+
+  .row-current   { background: #d1fae5; }
+  .row-prev-even { background: #ffffff; }
+  .row-prev-odd  { background: #f8fafc; }
+
+  .badge {
+    display: inline-block; padding: 1px 5px; border-radius: 3px;
+    font-size: 7.5px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.3px;
+  }
+  .badge-current  { background: #bbf7d0; color: #166534; }
+  .badge-previous { background: #fee2e2; color: #991b1b; }
+  .badge-primary  { background: #fef3c7; color: #92400e; }
+  .badge-till     { background: #dbeafe; color: #1e40af; }
 
   .footer { margin-top: 30px; border-top: 1px solid #e2e8f0; padding-top: 10px; text-align: center; font-size: 9px; color: #94a3b8; }
 </style>
@@ -87,54 +109,102 @@
   </div>
 </div>
 
-<div class="summary-grid">
-  <div class="summary-card card-blue">
-    <div class="card-label">Total Swaps</div>
-    <div class="card-value">{{ report.summary.total_swaps }}</div>
-    <div class="card-sub">{{ report.summary.companies_involved }} companies involved</div>
-  </div>
-  <div class="summary-card card-green">
-    <div class="card-label">Total Float at Swaps</div>
-    <div class="card-value" style="font-size:13px;">KES {{ "{:,.2f}".format(report.summary.total_float_at_swaps | float) }}</div>
-    <div class="card-sub">Avg KES {{ "{:,.2f}".format(report.summary.avg_float_at_swap | float) }}</div>
-  </div>
-  <div class="summary-card card-purple">
-    <div class="card-label">Total Commission at Swaps</div>
-    <div class="card-value" style="font-size:13px;">KES {{ "{:,.2f}".format(report.summary.total_commission_at_swaps | float) }}</div>
-    <div class="card-sub">Avg KES {{ "{:,.2f}".format(report.summary.avg_commission_at_swap | float) }}</div>
-  </div>
-</div>
 
-{% if report.companies %}
-<div class="section-heading">Per-Company Breakdown</div>
-<table class="data-table">
-  <thead>
-    <tr>
-      <th>#</th>
-      <th>Company</th>
-      <th>Till</th>
-      <th class="right">Swaps</th>
-      <th class="right">Total Float (KES)</th>
-      <th class="right">Total Commission (KES)</th>
-      <th>First Swap</th>
-      <th>Last Swap</th>
-    </tr>
-  </thead>
-  <tbody>
-    {% for c in report.companies %}
-    <tr>
-      <td>{{ loop.index }}</td>
-      <td style="font-weight:600;">{{ c.company_name or '—' }}</td>
-      <td>{{ c.till_name or '—' }} {% if c.till_number %}<span style="color:#64748b;font-size:8.5px;">({{ c.till_number }})</span>{% endif %}</td>
-      <td class="right">{{ c.swap_count }}</td>
-      <td class="right">{{ "{:,.2f}".format(c.total_float_at_swaps | float) }}</td>
-      <td class="right">{{ "{:,.2f}".format(c.total_commission_at_swaps | float) }}</td>
-      <td>{{ c.first_swap[:10] if c.first_swap else '—' }}</td>
-      <td>{{ c.last_swap[:10] if c.last_swap else '—' }}</td>
-    </tr>
-    {% endfor %}
-  </tbody>
-</table>
+{% if grouped %}
+<div class="section-heading">Detailed Agent Breakdown</div>
+
+{% for company in grouped %}
+<div class="company-block">
+
+  <div class="company-header">
+    <span>{{ company.company_name }}</span>
+    <span class="swap-count">{{ company.total_swaps }} swap{{ 's' if company.total_swaps != 1 else '' }}</span>
+  </div>
+
+  {% for till in company.tills %}
+  <div class="till-block">
+
+    <div class="till-header">
+      <span>{{ till.till_name }}</span>
+      <span class="shortcode">Short code: {{ till.short_code or '—' }}</span>
+    </div>
+
+    <table class="agents-table">
+      <thead>
+        <tr>
+          <th>Status</th>
+          <th>Agent Name</th>
+          <th>Role</th>
+          <th>ID Number</th>
+          <th>Phone</th>
+          <th>Reg. Date</th>
+          <th class="right">Float (KES)</th>
+          <th class="right">Commission (KES)</th>
+          <th>Initiated By</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for agent in till.current_agents %}
+        <tr class="row-current">
+          <td><span class="badge badge-current">Current</span></td>
+          <td style="font-weight:600;">{{ agent.name }}</td>
+          <td>
+            {% if agent.role and 'primary' in agent.role.lower() %}
+              <span class="badge badge-primary">Primary</span>
+            {% elif agent.role %}
+              <span class="badge badge-till">Till Op.</span>
+            {% endif %}
+          </td>
+          <td class="mono">{{ agent.idnumber or '—' }}</td>
+          <td>{{ agent.phone_number or '—' }}</td>
+          <td>—</td>
+          <td class="right">{{ "{:,.2f}".format(till.current_float_balance | float) }}</td>
+          <td class="right">{{ "{:,.2f}".format(till.current_commission_balance | float) }}</td>
+          <td>—</td>
+        </tr>
+        {% endfor %}
+
+        {% for row in till.previous_rows %}
+        <tr class="{{ 'row-prev-even' if loop.index0 % 2 == 0 else 'row-prev-odd' }}">
+          <td><span class="badge badge-previous">Previous</span></td>
+          <td>{{ row.agent_name or '—' }}</td>
+          <td>
+            {% if row.agent_role and 'primary' in row.agent_role.lower() %}
+              <span class="badge badge-primary">Primary</span>
+            {% elif row.agent_role %}
+              <span class="badge badge-till">Till Op.</span>
+            {% endif %}
+          </td>
+          <td class="mono">{{ row.agent_idnumber or row.agent_kyc_id_number or '—' }}</td>
+          <td>{{ row.agent_phone or '—' }}</td>
+          <td>
+            {% if row.agent_registration_time %}
+              {{ row.agent_registration_time[:10] }}
+            {% elif row.swap_date %}
+              {{ row.swap_date[:10] }}
+            {% else %}—{% endif %}
+          </td>
+          <td class="right">
+            {% if row.float_at_swap == '—' %}—
+            {% else %}{{ "{:,.2f}".format(row.float_at_swap | float) }}
+            {% endif %}
+          </td>
+          <td class="right">
+            {% if row.commission_at_swap == '—' %}—
+            {% else %}{{ "{:,.2f}".format(row.commission_at_swap | float) }}
+            {% endif %}
+          </td>
+          <td>{{ row.initiated_by or '—' }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+
+  </div>
+  {% endfor %}
+
+</div>
+{% endfor %}
 {% endif %}
 
 <div class="footer">Generated by Kwamz AI · {{ generated_at }} · Confidential</div>
