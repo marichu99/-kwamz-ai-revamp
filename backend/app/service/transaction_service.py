@@ -895,6 +895,10 @@ class TransactionService:
             pages = max(1, (total + per_page - 1) // per_page)
             rows = base_query.offset((page - 1) * per_page).limit(per_page).all()
 
+            # Build company lookup for this page's rows
+            row_company_ids = {t.company_id for t in rows if t.company_id}
+            company_map = {c.id: c.company_name for c in Company.query.filter(Company.id.in_(row_company_ids)).all()} if row_company_ids else {}
+
             data = []
             for t in rows:
                 data.append({
@@ -906,6 +910,8 @@ class TransactionService:
                     'last_updated': t.completion_time.isoformat() if t.completion_time else None,
                     'receipt_no': t.receipt_no,
                     'no_commission_data': False,
+                    'company_id': t.company_id,
+                    'company_name': company_map.get(t.company_id, ''),
                 })
 
             # Find AgentCompany tills that have no commission data at all
@@ -941,6 +947,8 @@ class TransactionService:
                         'last_updated': None,
                         'receipt_no': None,
                         'no_commission_data': True,
+                        'company_id': ac.company_id,
+                        'company_name': (ac.company.company_name if ac.company else ''),
                     })
 
             return {

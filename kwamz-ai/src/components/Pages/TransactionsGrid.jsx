@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useMemo } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import {
     Search,
     MoreVertical,
@@ -56,6 +56,7 @@ function TransactionsGrid() {
 
     // Grouping states
     const [expandedCompanies, setExpandedCompanies] = useState(new Set());
+    const [expandedTillCompanies, setExpandedTillCompanies] = useState(new Set());
     const [expandedBusinesses, setExpandedBusinesses] = useState(new Set());
 
     // Commission till balances (latest per till, for commission view)
@@ -96,6 +97,24 @@ function TransactionsGrid() {
             return tillSortDir === 'asc' ? va - vb : vb - va;
         });
     }, [tillBalances, tillSortField, tillSortDir]);
+
+    // Group commission tills by company (data + no-data tills combined)
+    const groupedTillData = useMemo(() => {
+        const all = [
+            ...noCommissionTills,
+            ...sortedTillBalances,
+        ];
+        const map = {};
+        all.forEach(till => {
+            const cName = till.company_name || 'Unknown Company';
+            if (!map[cName]) {
+                map[cName] = { company_name: cName, tills: [] };
+            }
+            map[cName].tills.push(till);
+        });
+        // no-data tills first within each company (they arrive first in `all`)
+        return Object.values(map);
+    }, [sortedTillBalances, noCommissionTills]);
 
     // Group transactions by company and business
     const groupedData = useMemo(() => {
@@ -273,9 +292,14 @@ function TransactionsGrid() {
                 params
             });
             if (response.data.success) {
-                setTillBalances(response.data.data || []);
-                setNoCommissionTills(response.data.no_commission_tills || []);
+                const balances = response.data.data || [];
+                const noData = response.data.no_commission_tills || [];
+                setTillBalances(balances);
+                setNoCommissionTills(noData);
                 setTillPagination(response.data.pagination || { total: 0, pages: 1, has_next: false, has_prev: false });
+                // Auto-expand all company groups on initial load
+                const allCompanies = new Set([...balances, ...noData].map(t => t.company_name || 'Unknown Company'));
+                setExpandedTillCompanies(allCompanies);
             } else {
                 showToast(response.data.error || 'Failed to load till balances', 'error');
             }
@@ -989,64 +1013,69 @@ function TransactionsGrid() {
                                         <div className="mt-2 text-slate-500 dark:text-slate-400">Loading commission balances...</div>
                                     </td>
                                 </tr>
-                            ) : tillBalances.length === 0 && noCommissionTills.length === 0 ? (
+                            ) : groupedTillData.length === 0 ? (
                                 <tr>
                                     <td colSpan={5} className="text-center py-8 text-slate-500 dark:text-slate-400">
                                         No commission till balances found
                                     </td>
                                 </tr>
                             ) : (
-                                <>
-                                    {noCommissionTills.map((till, index) => (
-                                        <tr
-                                            key={till.id}
-                                            className="border-b border-red-100 dark:border-red-900/30 bg-red-50 dark:bg-red-950/20 hover:bg-red-100 dark:hover:bg-red-900/30 transition-colors"
-                                        >
-                                            <td className="px-4 py-3 font-medium text-slate-700 dark:text-slate-300">
-                                                <span>{till.till_name}</span>
-                                                <span className="ml-2 text-xs font-semibold text-red-600 dark:text-red-400 bg-red-100 dark:bg-red-900/50 px-2 py-0.5 rounded-full">
-                                                    No commission data
-                                                </span>
-                                            </td>
-                                            <td className="px-4 py-3 font-mono text-amber-600 dark:text-amber-400">
-                                                {till.shortcode}
-                                            </td>
-                                            <td className="px-4 py-3 text-slate-400 dark:text-slate-500 italic text-sm">
-                                                —
-                                            </td>
-                                            <td className="px-4 py-3 text-slate-400 dark:text-slate-500 italic text-sm">
-                                                —
-                                            </td>
-                                            <td className="px-4 py-3 text-slate-400 dark:text-slate-500 italic text-sm">
-                                                —
-                                            </td>
-                                        </tr>
-                                    ))}
-                                    {sortedTillBalances.map((till, index) => (
-                                        <tr
-                                            key={till.id}
-                                            className={`border-b border-slate-200 dark:border-slate-600 ${
-                                                index % 2 === 0 ? 'bg-white dark:bg-slate-800' : 'bg-slate-50 dark:bg-slate-700/50'
-                                            } hover:bg-amber-50 dark:hover:bg-slate-700 transition-colors`}
-                                        >
-                                            <td className="px-4 py-3 font-medium text-slate-800 dark:text-white">
-                                                {till.till_name}
-                                            </td>
-                                            <td className="px-4 py-3 font-mono text-amber-600 dark:text-amber-400">
-                                                {till.shortcode}
-                                            </td>
-                                            <td className="px-4 py-3 font-bold text-slate-800 dark:text-white">
-                                                {formatCurrency(till.current_balance)}
-                                            </td>
-                                            <td className="px-4 py-3 font-bold text-green-600 dark:text-green-400">
-                                                {formatCurrency(till.available_balance)}
-                                            </td>
-                                            <td className="px-4 py-3 text-slate-500 dark:text-slate-400 text-xs">
-                                                {formatDate(till.last_updated)}
-                                            </td>
-                                        </tr>
-                                    ))}
-                                </>
+                                groupedTillData.map(group => {
+                                    const isOpen = expandedTillCompanies.has(group.company_name);
+                                    return (
+                                        <React.Fragment key={group.company_name}>
+                                            {/* Company header row */}
+                                            <tr
+                                                className="cursor-pointer select-none"
+                                                onClick={() => setExpandedTillCompanies(prev => {
+                                                    const next = new Set(prev);
+                                                    if (next.has(group.company_name)) next.delete(group.company_name);
+                                                    else next.add(group.company_name);
+                                                    return next;
+                                                })}
+                                            >
+                                                <td colSpan={5} className="px-4 py-3 bg-slate-800 dark:bg-slate-900 text-white font-bold text-sm rounded-none">
+                                                    <span className="mr-2">{isOpen ? '▾' : '▸'}</span>
+                                                    {group.company_name}
+                                                    <span className="ml-3 text-xs font-normal text-slate-300">{group.tills.length} till{group.tills.length !== 1 ? 's' : ''}</span>
+                                                </td>
+                                            </tr>
+                                            {/* Till rows — only when expanded */}
+                                            {isOpen && group.tills.map((till, index) => (
+                                                till.no_commission_data ? (
+                                                    <tr
+                                                        key={till.id}
+                                                        className="border-b border-red-100 dark:border-red-900/30 bg-red-50 dark:bg-red-950/20 hover:bg-red-100 dark:hover:bg-red-900/30 transition-colors"
+                                                    >
+                                                        <td className="px-4 py-3 font-medium text-slate-700 dark:text-slate-300">
+                                                            <span>{till.till_name}</span>
+                                                            <span className="ml-2 text-xs font-semibold text-red-600 dark:text-red-400 bg-red-100 dark:bg-red-900/50 px-2 py-0.5 rounded-full">
+                                                                No commission data
+                                                            </span>
+                                                        </td>
+                                                        <td className="px-4 py-3 font-mono text-amber-600 dark:text-amber-400">{till.shortcode}</td>
+                                                        <td className="px-4 py-3 text-slate-400 dark:text-slate-500 italic text-sm">—</td>
+                                                        <td className="px-4 py-3 text-slate-400 dark:text-slate-500 italic text-sm">—</td>
+                                                        <td className="px-4 py-3 text-slate-400 dark:text-slate-500 italic text-sm">—</td>
+                                                    </tr>
+                                                ) : (
+                                                    <tr
+                                                        key={till.id}
+                                                        className={`border-b border-slate-200 dark:border-slate-600 ${
+                                                            index % 2 === 0 ? 'bg-white dark:bg-slate-800' : 'bg-slate-50 dark:bg-slate-700/50'
+                                                        } hover:bg-amber-50 dark:hover:bg-slate-700 transition-colors`}
+                                                    >
+                                                        <td className="px-4 py-3 font-medium text-slate-800 dark:text-white">{till.till_name}</td>
+                                                        <td className="px-4 py-3 font-mono text-amber-600 dark:text-amber-400">{till.shortcode}</td>
+                                                        <td className="px-4 py-3 font-bold text-slate-800 dark:text-white">{formatCurrency(till.current_balance)}</td>
+                                                        <td className="px-4 py-3 font-bold text-green-600 dark:text-green-400">{formatCurrency(till.available_balance)}</td>
+                                                        <td className="px-4 py-3 text-slate-500 dark:text-slate-400 text-xs">{formatDate(till.last_updated)}</td>
+                                                    </tr>
+                                                )
+                                            ))}
+                                        </React.Fragment>
+                                    );
+                                })
                             )}
                         </tbody>
                     </table>
