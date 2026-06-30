@@ -11,6 +11,11 @@ import {
     Activity,
     Loader2,
     Download,
+    AlertTriangle,
+    Clock,
+    TrendingUp,
+    Hash,
+    Percent,
 } from 'lucide-react';
 import axios from 'axios';
 import config from '../../Config';
@@ -29,221 +34,154 @@ const DATE_RANGES = [
     { value: 'custom', label: 'Custom Range' },
 ];
 
-const FRAUD_TYPE_META = {
-    split_transaction: {
-        label: 'Split Transaction',
-        summaryKey: 'split_transactions',
-        tabLabel: 'Split',
-        color: 'red',
-        description: 'Multiple transactions of similar amounts within a short window to avoid detection thresholds.',
-    },
-    rollover_fraud: {
-        label: 'Rollover Fraud',
-        summaryKey: 'rollover_fraud',
-        tabLabel: 'Rollover',
-        color: 'orange',
-        description: 'Rapid cluster of deposits or withdrawals on the same account in a short time window.',
-    },
-    rapid_back_forth: {
-        label: 'Rapid Back & Forth',
-        summaryKey: 'rapid_back_forth',
-        tabLabel: 'Rapid B&F',
-        color: 'yellow',
-        description: '5+ alternating deposits and withdrawals by the same party within 3 minutes — commission farming or float manipulation.',
-    },
-    deposit_withdrawal_recovery: {
-        label: 'Deposit-Withdrawal Recovery',
-        summaryKey: 'deposit_withdrawal_recovery',
-        tabLabel: 'Dep-Withdrawal',
-        color: 'purple',
-        description: 'Large deposit followed by a similar-amount withdrawal within 24 hrs — possible wash transaction or pre-existing balance exploitation.',
-    },
-    high_frequency_daily: {
-        label: 'High Frequency Daily',
-        summaryKey: 'high_frequency_daily',
-        tabLabel: 'High Freq',
-        color: 'slate',
-        description: null,
-    },
-    structuring: {
-        label: 'Structuring',
-        summaryKey: 'structuring',
-        tabLabel: 'Structuring',
-        color: 'rose',
-        description: 'Same phone, same-direction burst — amounts clustered just below reporting thresholds, consistent with deliberate layering.',
-    },
-    float_cycling: {
-        label: 'Float Cycling',
-        summaryKey: 'float_cycling',
-        tabLabel: 'Float Cycling',
-        color: 'teal',
-        description: 'Large float top-up immediately drained via API/B2B transfers — till used as a pass-through channel.',
-    },
+const RISK_BADGE = {
+    HIGH: 'bg-red-500 text-white',
+    MEDIUM: 'bg-amber-500 text-white',
+    LOW: 'bg-blue-500 text-white',
 };
 
-const RISK_COLORS = {
+const RISK_PILL = {
     HIGH: 'bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-300',
     MEDIUM: 'bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300',
     LOW: 'bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300',
 };
 
-function FindingCard({ finding, index }) {
+function fmt(n) {
+    return Number(n || 0).toLocaleString('en-KE', { minimumFractionDigits: 2 });
+}
+
+function SplitFindingCard({ finding, index }) {
     const [expanded, setExpanded] = useState(false);
-    const meta = FRAUD_TYPE_META[finding.fraud_type] || { label: finding.fraud_type, color: 'slate', description: '' };
-    const riskColor = RISK_COLORS[finding.risk_level] || RISK_COLORS.LOW;
 
     const agentCompanies = finding.agent_info?.agent_companies || [];
     const userAgents = finding.agent_info?.user_agents || [];
     const shortcodes = finding.agent_info?.shortcodes || [];
+    const riskBadge = RISK_BADGE[finding.risk_level] || RISK_BADGE.LOW;
 
     return (
-        <div className="border border-slate-200 dark:border-slate-600 rounded-xl overflow-hidden mb-3">
-            {/* Header row */}
+        <div className="border border-slate-200 dark:border-slate-600 rounded-xl overflow-hidden mb-3 shadow-sm">
+            {/* Header row — always visible */}
             <button
                 onClick={() => setExpanded(e => !e)}
-                className="w-full flex items-center justify-between px-4 py-3 bg-slate-50 dark:bg-slate-700 hover:bg-slate-100 dark:hover:bg-slate-600 transition-colors text-left"
+                className="w-full flex items-center justify-between px-4 py-3 bg-white dark:bg-slate-800 hover:bg-slate-50 dark:hover:bg-slate-750 transition-colors text-left"
             >
-                <div className="flex items-center gap-3">
-                    <span className="text-xs font-semibold text-slate-400 dark:text-slate-500 w-6">#{index + 1}</span>
-                    <span className={`text-xs font-bold px-2 py-0.5 rounded-full ${riskColor}`}>
+                <div className="flex items-center gap-3 min-w-0">
+                    <span className="text-xs font-semibold text-slate-400 dark:text-slate-500 w-6 shrink-0">
+                        #{index + 1}
+                    </span>
+                    <span className={`text-xs font-bold px-2 py-0.5 rounded-full shrink-0 ${riskBadge}`}>
                         {finding.risk_level}
                     </span>
-                    <span className="text-sm font-semibold text-slate-800 dark:text-white">
-                        {meta.label}
+                    <span className="text-sm font-semibold text-slate-800 dark:text-white shrink-0">
+                        Split Transaction
                     </span>
-                    <span className="text-sm text-slate-500 dark:text-slate-400">
-                        {finding.account_name || finding.account_phone || (finding.business_shortcode ? `Till ${finding.business_shortcode}` : '—')}
+                    <span className="text-sm text-slate-600 dark:text-slate-300 truncate">
+                        {finding.account_name || '—'}
                     </span>
-                    {finding.account_phone && finding.account_name && (
-                        <span className="text-xs text-slate-400 dark:text-slate-500">{finding.account_phone}</span>
+                    {finding.account_phone && (
+                        <span className="text-xs text-slate-400 dark:text-slate-500 font-mono shrink-0 hidden sm:block">
+                            {finding.account_phone}
+                        </span>
                     )}
                 </div>
-                <div className="flex items-center gap-4">
-                    <span className="text-sm font-medium text-slate-600 dark:text-slate-300">
-                        KES {Number(finding.total_amount || 0).toLocaleString('en-KE', { minimumFractionDigits: 2 })}
+                <div className="flex items-center gap-3 shrink-0 ml-3">
+                    <span className="text-sm font-semibold text-slate-700 dark:text-slate-200">
+                        KES {fmt(finding.anchor_amount)}
                     </span>
-                    {expanded ? <ChevronDown className="w-4 h-4 text-slate-400" /> : <ChevronRight className="w-4 h-4 text-slate-400" />}
+                    {expanded
+                        ? <ChevronDown className="w-4 h-4 text-slate-400" />
+                        : <ChevronRight className="w-4 h-4 text-slate-400" />}
                 </div>
             </button>
 
             {expanded && (
-                <div className="px-4 py-4 bg-white dark:bg-slate-800 space-y-4">
-                    {/* Explanation — omitted for high_frequency_daily */}
+                <div className="px-4 py-4 bg-white dark:bg-slate-800 border-t border-slate-100 dark:border-slate-700 space-y-4">
+
+                    {/* Narrative explanation */}
                     {finding.explanation && (
-                        <div className="p-3 bg-slate-50 dark:bg-slate-700 rounded-lg text-sm text-slate-700 dark:text-slate-300 leading-relaxed">
+                        <p className="text-sm text-slate-600 dark:text-slate-300 leading-relaxed px-4 py-3 bg-slate-50 dark:bg-slate-700/60 rounded-lg">
                             {finding.explanation}
-                        </div>
+                        </p>
                     )}
 
-                    {/* Date badge for high-frequency findings */}
-                    {finding.fraud_type === 'high_frequency_daily' && finding.day && (
-                        <div className="flex items-center gap-2 text-sm text-slate-600 dark:text-slate-300">
-                            <Calendar className="w-4 h-4 text-slate-400" />
-                            <span>{finding.transaction_count} transactions on <span className="font-semibold">{finding.day}</span></span>
+                    {/* Key stat cards */}
+                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                        <div className="bg-red-50 dark:bg-red-900/20 rounded-lg p-3 text-center">
+                            <p className="text-xs text-red-500 dark:text-red-400 mb-1">Anchor deposit</p>
+                            <p className="text-sm font-bold text-slate-800 dark:text-white">
+                                KES {fmt(finding.anchor_amount)}
+                            </p>
                         </div>
-                    )}
-
-                    {/* Split transaction anchor stats */}
-                    {finding.fraud_type === 'split_transaction' && (
-                        <div className="grid grid-cols-3 gap-2">
-                            <div className={`rounded-lg p-2 text-center ${finding.anchor_type === 'deposit' ? 'bg-green-50 dark:bg-green-900/20' : 'bg-red-50 dark:bg-red-900/20'}`}>
-                                <p className={`text-xs ${finding.anchor_type === 'deposit' ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400'}`}>
-                                    Anchor {finding.anchor_type}
-                                </p>
-                                <p className="text-sm font-bold text-slate-800 dark:text-white">
-                                    KES {Number(finding.anchor_amount || 0).toLocaleString('en-KE', { minimumFractionDigits: 2 })}
-                                </p>
-                            </div>
-                            <div className={`rounded-lg p-2 text-center ${finding.anchor_type === 'deposit' ? 'bg-red-50 dark:bg-red-900/20' : 'bg-green-50 dark:bg-green-900/20'}`}>
-                                <p className={`text-xs ${finding.anchor_type === 'deposit' ? 'text-red-600 dark:text-red-400' : 'text-green-600 dark:text-green-400'}`}>
-                                    {finding.subsequent_count} follow-up {finding.anchor_type === 'deposit' ? 'withdrawals' : 'deposits'}
-                                </p>
-                                <p className="text-sm font-bold text-slate-800 dark:text-white">
-                                    KES {Number(finding.subsequent_total || 0).toLocaleString('en-KE', { minimumFractionDigits: 2 })}
-                                </p>
-                            </div>
-                            <div className="bg-slate-50 dark:bg-slate-700 rounded-lg p-2 text-center">
-                                <p className="text-xs text-slate-500 dark:text-slate-400">Within</p>
-                                <p className="text-sm font-bold text-slate-800 dark:text-white">{finding.time_window_minutes} min</p>
-                            </div>
+                        <div className="bg-amber-50 dark:bg-amber-900/20 rounded-lg p-3 text-center">
+                            <p className="text-xs text-amber-600 dark:text-amber-400 mb-1">Depositor reclaimed</p>
+                            <p className="text-sm font-bold text-slate-800 dark:text-white">
+                                KES {fmt(finding.depositor_own_withdrawal)}
+                            </p>
+                            <p className="text-xs text-amber-500 dark:text-amber-400 mt-0.5 font-semibold">
+                                {finding.depositor_withdrawal_pct}% of deposit
+                            </p>
                         </div>
-                    )}
-
-                    {/* Recovery stats for deposit-withdrawal pattern */}
-                    {finding.fraud_type === 'deposit_withdrawal_recovery' && (
-                        <div className="grid grid-cols-3 gap-2">
-                            <div className="bg-green-50 dark:bg-green-900/20 rounded-lg p-2 text-center">
-                                <p className="text-xs text-green-600 dark:text-green-400">Deposited</p>
-                                <p className="text-sm font-bold text-slate-800 dark:text-white">
-                                    KES {Number(finding.deposit_amount || 0).toLocaleString('en-KE', { minimumFractionDigits: 2 })}
-                                </p>
-                            </div>
-                            <div className="bg-red-50 dark:bg-red-900/20 rounded-lg p-2 text-center">
-                                <p className="text-xs text-red-600 dark:text-red-400">Withdrawn</p>
-                                <p className="text-sm font-bold text-slate-800 dark:text-white">
-                                    KES {Number(finding.total_withdrawn || 0).toLocaleString('en-KE', { minimumFractionDigits: 2 })}
-                                </p>
-                            </div>
-                            <div className={`rounded-lg p-2 text-center ${finding.overdraw ? 'bg-red-100 dark:bg-red-900/30' : 'bg-amber-50 dark:bg-amber-900/20'}`}>
-                                <p className={`text-xs ${finding.overdraw ? 'text-red-600 dark:text-red-400' : 'text-amber-600 dark:text-amber-400'}`}>
-                                    Recovery {finding.overdraw ? '⚠ Overdraw' : ''}
-                                </p>
-                                <p className="text-sm font-bold text-slate-800 dark:text-white">{finding.recovery_pct}%</p>
-                            </div>
+                        <div className="bg-green-50 dark:bg-green-900/20 rounded-lg p-3 text-center">
+                            <p className="text-xs text-green-600 dark:text-green-400 mb-1">
+                                {finding.subsequent_count} split withdrawals
+                            </p>
+                            <p className="text-sm font-bold text-slate-800 dark:text-white">
+                                KES {fmt(finding.subsequent_total)}
+                            </p>
                         </div>
-                    )}
-
-                    {/* Structuring stats */}
-                    {finding.fraud_type === 'structuring' && (
-                        <div className="grid grid-cols-3 gap-2">
-                            <div className={`rounded-lg p-2 text-center ${finding.direction === 'deposit' ? 'bg-green-50 dark:bg-green-900/20' : 'bg-red-50 dark:bg-red-900/20'}`}>
-                                <p className={`text-xs ${finding.direction === 'deposit' ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400'}`}>
-                                    Direction
-                                </p>
-                                <p className="text-sm font-bold text-slate-800 dark:text-white capitalize">{finding.direction}s</p>
-                            </div>
-                            <div className="bg-slate-50 dark:bg-slate-700 rounded-lg p-2 text-center">
-                                <p className="text-xs text-slate-500 dark:text-slate-400">{finding.transaction_count} transactions</p>
-                                <p className="text-sm font-bold text-slate-800 dark:text-white">within {finding.span_minutes} min</p>
-                            </div>
-                            <div className={`rounded-lg p-2 text-center ${finding.structuring_flag ? 'bg-red-100 dark:bg-red-900/30' : 'bg-slate-50 dark:bg-slate-700'}`}>
-                                <p className={`text-xs ${finding.structuring_flag ? 'text-red-600 dark:text-red-400' : 'text-slate-500 dark:text-slate-400'}`}>
-                                    Threshold clustering
-                                </p>
-                                <p className="text-sm font-bold text-slate-800 dark:text-white">{finding.structuring_flag ? '⚠ Detected' : 'Not detected'}</p>
-                            </div>
+                        <div className="bg-slate-50 dark:bg-slate-700 rounded-lg p-3 text-center">
+                            <p className="text-xs text-slate-500 dark:text-slate-400 mb-1">Within</p>
+                            <p className="text-sm font-bold text-slate-800 dark:text-white">
+                                {finding.time_window_minutes} min
+                            </p>
                         </div>
-                    )}
+                    </div>
 
-                    {/* Float cycling stats */}
-                    {finding.fraud_type === 'float_cycling' && (
-                        <div className="grid grid-cols-3 gap-2">
-                            <div className="bg-green-50 dark:bg-green-900/20 rounded-lg p-2 text-center">
-                                <p className="text-xs text-green-600 dark:text-green-400">Float Top-up</p>
-                                <p className="text-sm font-bold text-slate-800 dark:text-white">
-                                    KES {Number(finding.top_up_amount || 0).toLocaleString('en-KE', { minimumFractionDigits: 2 })}
-                                </p>
-                            </div>
-                            <div className="bg-red-50 dark:bg-red-900/20 rounded-lg p-2 text-center">
-                                <p className="text-xs text-red-600 dark:text-red-400">Drained</p>
-                                <p className="text-sm font-bold text-slate-800 dark:text-white">
-                                    KES {Number(finding.drain_total || 0).toLocaleString('en-KE', { minimumFractionDigits: 2 })}
-                                </p>
-                            </div>
-                            <div className={`rounded-lg p-2 text-center ${finding.overdrain ? 'bg-red-100 dark:bg-red-900/30' : 'bg-amber-50 dark:bg-amber-900/20'}`}>
-                                <p className={`text-xs ${finding.overdrain ? 'text-red-600 dark:text-red-400' : 'text-amber-600 dark:text-amber-400'}`}>
-                                    {finding.drain_pct}% drained{finding.overdrain ? ' ⚠ Overdrain' : ''}
-                                </p>
-                                <p className="text-sm font-bold text-slate-800 dark:text-white">within {finding.span_minutes} min</p>
-                            </div>
-                        </div>
-                    )}
+                    {/* Secondary metadata row */}
+                    <div className="flex flex-wrap gap-x-5 gap-y-1 text-xs text-slate-500 dark:text-slate-400 px-1">
+                        {finding.unique_withdrawers != null && (
+                            <span className="flex items-center gap-1">
+                                <Users className="w-3 h-3" />
+                                <span className="font-semibold text-slate-700 dark:text-slate-200">
+                                    {finding.unique_withdrawers}
+                                </span>
+                                &nbsp;unique withdrawers
+                            </span>
+                        )}
+                        {finding.coverage_ratio != null && (
+                            <span className="flex items-center gap-1">
+                                <Percent className="w-3 h-3" />
+                                Coverage:&nbsp;
+                                <span className={`font-semibold ${
+                                    finding.coverage_ratio >= 90 ? 'text-red-600 dark:text-red-400' : 'text-slate-700 dark:text-slate-200'
+                                }`}>
+                                    {finding.coverage_ratio}%
+                                </span>
+                            </span>
+                        )}
+                        <span className="flex items-center gap-1">
+                            <Hash className="w-3 h-3" />
+                            Till:&nbsp;
+                            <span className="font-mono font-semibold text-slate-700 dark:text-slate-200">
+                                {finding.business_shortcode || '—'}
+                            </span>
+                        </span>
+                        {(finding.recurring_associates?.length > 0) && (
+                            <span className="flex items-center gap-1 text-orange-600 dark:text-orange-400">
+                                <AlertTriangle className="w-3 h-3" />
+                                <span className="font-semibold">{finding.recurring_associates.length}</span>
+                                &nbsp;known repeat suspect{finding.recurring_associates.length !== 1 ? 's' : ''}
+                            </span>
+                        )}
+                    </div>
 
-                    {/* Transaction details */}
+                    {/* Transaction table */}
                     {finding.transaction_details?.length > 0 && (
                         <div>
-                            <p className="text-xs font-semibold text-slate-500 dark:text-slate-400 mb-2 uppercase tracking-wide">Transactions</p>
-                            <div className="overflow-x-auto">
+                            <p className="text-xs font-semibold text-slate-500 dark:text-slate-400 mb-2 uppercase tracking-wide">
+                                Transactions
+                            </p>
+                            <div className="overflow-x-auto rounded-lg border border-slate-100 dark:border-slate-700">
                                 <table className="w-full text-xs border-collapse">
                                     <thead>
                                         <tr className="bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300">
@@ -251,34 +189,54 @@ function FindingCard({ finding, index }) {
                                             <th className="px-3 py-2 text-left font-semibold">Type</th>
                                             <th className="px-3 py-2 text-right font-semibold">Amount (KES)</th>
                                             <th className="px-3 py-2 text-left font-semibold">Time</th>
-                                            {finding.fraud_type === 'float_cycling'
-                                                ? <th className="px-3 py-2 text-left font-semibold">Reason</th>
-                                                : <th className="px-3 py-2 text-left font-semibold">Party</th>
-                                            }
+                                            <th className="px-3 py-2 text-left font-semibold">Party</th>
                                         </tr>
                                     </thead>
                                     <tbody>
                                         {finding.transaction_details.map((txn, i) => (
-                                            <tr key={i} className="border-t border-slate-100 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-700/50">
-                                                <td className="px-3 py-2 font-mono text-slate-600 dark:text-slate-300">{txn.receipt_no}</td>
+                                            <tr
+                                                key={i}
+                                                className={`border-t border-slate-100 dark:border-slate-700 ${
+                                                    txn.is_anchor
+                                                        ? 'bg-red-50/60 dark:bg-red-900/10'
+                                                        : txn.is_depositor_withdrawal
+                                                            ? 'bg-amber-50/70 dark:bg-amber-900/15'
+                                                            : 'hover:bg-slate-50 dark:hover:bg-slate-700/40'
+                                                }`}
+                                            >
+                                                <td className="px-3 py-2 font-mono text-slate-600 dark:text-slate-300 whitespace-nowrap">
+                                                    {txn.receipt_no}
+                                                </td>
                                                 <td className="px-3 py-2">
-                                                    <span className={`px-1.5 py-0.5 rounded text-xs font-medium ${
-                                                        txn.type === 'Top-up'
-                                                            ? 'bg-teal-100 text-teal-700 dark:bg-teal-900/40 dark:text-teal-300'
-                                                            : txn.type === 'Deposit' || txn.type === 'DEPOSIT'
+                                                    <span className={`px-2 py-0.5 rounded text-xs font-medium ${
+                                                        txn.type === 'Deposit'
                                                             ? 'bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-300'
-                                                            : 'bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-300'}`}>
+                                                            : 'bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-300'
+                                                    }`}>
                                                         {txn.type}
                                                     </span>
                                                 </td>
-                                                <td className="px-3 py-2 text-right font-medium text-slate-800 dark:text-white">
-                                                    {Number(txn.amount || 0).toLocaleString('en-KE', { minimumFractionDigits: 2 })}
+                                                <td className="px-3 py-2 text-right font-medium text-slate-800 dark:text-white whitespace-nowrap">
+                                                    {fmt(txn.amount)}
                                                 </td>
-                                                <td className="px-3 py-2 text-slate-500 dark:text-slate-400 whitespace-nowrap">{txn.time}</td>
-                                                {finding.fraud_type === 'float_cycling'
-                                                    ? <td className="px-3 py-2 text-slate-500 dark:text-slate-400 text-xs">{txn.reason_type || '—'}</td>
-                                                    : <td className="px-3 py-2 text-slate-600 dark:text-slate-300">{txn.party_name || txn.party_phone || '—'}</td>
-                                                }
+                                                <td className="px-3 py-2 text-slate-500 dark:text-slate-400 whitespace-nowrap">
+                                                    {txn.time}
+                                                </td>
+                                                <td className="px-3 py-2 text-slate-600 dark:text-slate-300">
+                                                    <div className="flex items-center gap-1.5 flex-wrap">
+                                                        <span>{txn.party_name || txn.party_phone || txn.other_party_info || '—'}</span>
+                                                        {txn.is_depositor_withdrawal && (
+                                                            <span className="text-xs bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300 px-1.5 py-0.5 rounded font-semibold whitespace-nowrap">
+                                                                ← depositor
+                                                            </span>
+                                                        )}
+                                                        {txn.is_recurring_suspect && (
+                                                            <span className="text-xs bg-orange-100 text-orange-700 dark:bg-orange-900/40 dark:text-orange-300 px-1.5 py-0.5 rounded font-semibold whitespace-nowrap">
+                                                                ⚑ {txn.recurring_incident_count}× suspect
+                                                            </span>
+                                                        )}
+                                                    </div>
+                                                </td>
                                             </tr>
                                         ))}
                                     </tbody>
@@ -297,13 +255,17 @@ function FindingCard({ finding, index }) {
                                 <div className="space-y-2">
                                     {agentCompanies.map((ac, i) => (
                                         <div key={i} className="bg-slate-50 dark:bg-slate-700 rounded-lg overflow-hidden">
-                                            <div className="flex items-center gap-3 text-sm text-slate-700 dark:text-slate-300 px-3 py-2">
+                                            <div className="flex items-center gap-3 text-sm text-slate-700 dark:text-slate-300 px-3 py-2 flex-wrap">
                                                 <span className="font-semibold">{ac.company_name}</span>
-                                                {ac.short_code && <span className="text-xs text-slate-400">SC: {ac.short_code}</span>}
-                                                {ac.location && <span className="text-xs text-slate-400">{ac.location}</span>}
+                                                {ac.short_code && (
+                                                    <span className="text-xs text-slate-400">SC: {ac.short_code}</span>
+                                                )}
+                                                {ac.location && (
+                                                    <span className="text-xs text-slate-400">{ac.location}</span>
+                                                )}
                                                 {ac.fraud_risk_level && (
-                                                    <span className={`ml-auto text-xs font-semibold px-2 py-0.5 rounded-full ${RISK_COLORS[ac.fraud_risk_level?.toUpperCase()] || RISK_COLORS.LOW}`}>
-                                                        {ac.fraud_risk_level}
+                                                    <span className={`ml-auto text-xs font-semibold px-2 py-0.5 rounded-full ${RISK_PILL[ac.fraud_risk_level?.toUpperCase()] || RISK_PILL.LOW}`}>
+                                                        {ac.fraud_risk_level.toLowerCase()}
                                                     </span>
                                                 )}
                                             </div>
@@ -352,7 +314,6 @@ export default function FraudReportModal({ isOpen, onClose, companyId }) {
     const [isLoading, setIsLoading] = useState(false);
     const [isExporting, setIsExporting] = useState(false);
     const [report, setReport] = useState(null);
-    const [activeType, setActiveType] = useState('all');
 
     const fetchReport = useCallback(async () => {
         setIsLoading(true);
@@ -398,11 +359,11 @@ export default function FraudReportModal({ isOpen, onClose, companyId }) {
             const url = URL.createObjectURL(blob);
             const a = document.createElement('a');
             a.href = url;
-            a.download = `fraud_report_${new Date().toISOString().slice(0, 10)}.pdf`;
+            a.download = `split_fraud_report_${new Date().toISOString().slice(0, 10)}.pdf`;
             a.click();
             URL.revokeObjectURL(url);
             showToast('Fraud report exported as PDF', 'success');
-        } catch (err) {
+        } catch {
             showToast('Failed to export PDF', 'error');
         } finally {
             setIsExporting(false);
@@ -411,35 +372,52 @@ export default function FraudReportModal({ isOpen, onClose, companyId }) {
 
     if (!isOpen) return null;
 
-    const findings = report?.findings || [];
-    const filtered = activeType === 'all' ? findings : findings.filter(f => f.fraud_type === activeType);
-
+    // Only show split_transaction findings
+    const allFindings = report?.findings || [];
+    const findings = allFindings.filter(f => f.fraud_type === 'split_transaction');
     const summary = report?.summary;
+
+    // Compute stats from filtered findings
+    const highRisk = findings.filter(f => f.risk_level === 'HIGH').length;
+    const mediumRisk = findings.filter(f => f.risk_level === 'MEDIUM').length;
+    const lowRisk = findings.filter(f => f.risk_level === 'LOW').length;
+    const totalKesAtRisk = findings.reduce((s, f) => s + Number(f.anchor_amount || 0), 0);
+    const avgSplits = findings.length
+        ? (findings.reduce((s, f) => s + Number(f.subsequent_count || 0), 0) / findings.length).toFixed(1)
+        : '—';
+    const tillsAffected = new Set(findings.map(f => f.business_shortcode).filter(Boolean)).size;
 
     return (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
             <div className="bg-white dark:bg-slate-800 rounded-2xl shadow-2xl w-full max-w-5xl max-h-[90vh] flex flex-col">
-                {/* Header */}
+
+                {/* ── Header ── */}
                 <div className="flex items-center justify-between px-6 py-4 border-b border-slate-200 dark:border-slate-700">
                     <div className="flex items-center gap-3">
                         <ShieldAlert className="w-6 h-6 text-red-500" />
                         <div>
-                            <h2 className="text-xl font-bold text-slate-800 dark:text-white">Historical Fraud Report</h2>
+                            <h2 className="text-xl font-bold text-slate-800 dark:text-white">
+                                Split Transaction Fraud Report
+                            </h2>
                             {report && (
                                 <p className="text-sm text-slate-500 dark:text-slate-400">{report.period}</p>
                             )}
                         </div>
                     </div>
-                    <button onClick={onClose} className="p-2 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors">
+                    <button
+                        onClick={onClose}
+                        className="p-2 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors"
+                    >
                         <X className="w-5 h-5 text-slate-500" />
                     </button>
                 </div>
 
-                {/* Controls */}
+                {/* ── Controls ── */}
                 <div className="px-6 py-4 border-b border-slate-200 dark:border-slate-700 flex flex-wrap items-end gap-3">
-                    {/* Date range selector */}
                     <div className="relative">
-                        <label className="block text-xs font-medium text-slate-500 dark:text-slate-400 mb-1">Date Range</label>
+                        <label className="block text-xs font-medium text-slate-500 dark:text-slate-400 mb-1">
+                            Date Range
+                        </label>
                         <button
                             onClick={() => setShowDatePicker(p => !p)}
                             className="flex items-center gap-2 px-3 py-2 border border-slate-300 dark:border-slate-600 rounded-lg text-sm text-slate-700 dark:text-slate-300 bg-white dark:bg-slate-700 hover:bg-slate-50 dark:hover:bg-slate-600 transition-colors"
@@ -454,7 +432,11 @@ export default function FraudReportModal({ isOpen, onClose, companyId }) {
                                     <button
                                         key={r.value}
                                         onClick={() => { setDateRange(r.value); setShowDatePicker(false); }}
-                                        className={`w-full text-left px-4 py-2 text-sm hover:bg-slate-50 dark:hover:bg-slate-600 transition-colors first:rounded-t-xl last:rounded-b-xl ${dateRange === r.value ? 'font-semibold text-blue-600 dark:text-blue-400' : 'text-slate-700 dark:text-slate-300'}`}
+                                        className={`w-full text-left px-4 py-2 text-sm hover:bg-slate-50 dark:hover:bg-slate-600 transition-colors first:rounded-t-xl last:rounded-b-xl ${
+                                            dateRange === r.value
+                                                ? 'font-semibold text-blue-600 dark:text-blue-400'
+                                                : 'text-slate-700 dark:text-slate-300'
+                                        }`}
                                     >
                                         {r.label}
                                     </button>
@@ -467,13 +449,21 @@ export default function FraudReportModal({ isOpen, onClose, companyId }) {
                         <>
                             <div>
                                 <label className="block text-xs font-medium text-slate-500 dark:text-slate-400 mb-1">From</label>
-                                <input type="date" value={customStartDate} onChange={e => setCustomStartDate(e.target.value)}
-                                    className="px-3 py-2 border border-slate-300 dark:border-slate-600 rounded-lg text-sm text-slate-700 dark:text-slate-300 bg-white dark:bg-slate-700" />
+                                <input
+                                    type="date"
+                                    value={customStartDate}
+                                    onChange={e => setCustomStartDate(e.target.value)}
+                                    className="px-3 py-2 border border-slate-300 dark:border-slate-600 rounded-lg text-sm text-slate-700 dark:text-slate-300 bg-white dark:bg-slate-700"
+                                />
                             </div>
                             <div>
                                 <label className="block text-xs font-medium text-slate-500 dark:text-slate-400 mb-1">To</label>
-                                <input type="date" value={customEndDate} onChange={e => setCustomEndDate(e.target.value)}
-                                    className="px-3 py-2 border border-slate-300 dark:border-slate-600 rounded-lg text-sm text-slate-700 dark:text-slate-300 bg-white dark:bg-slate-700" />
+                                <input
+                                    type="date"
+                                    value={customEndDate}
+                                    onChange={e => setCustomEndDate(e.target.value)}
+                                    className="px-3 py-2 border border-slate-300 dark:border-slate-600 rounded-lg text-sm text-slate-700 dark:text-slate-300 bg-white dark:bg-slate-700"
+                                />
                             </div>
                         </>
                     )}
@@ -499,92 +489,142 @@ export default function FraudReportModal({ isOpen, onClose, companyId }) {
                     )}
                 </div>
 
-                {/* Body */}
-                <div className="flex-1 overflow-y-auto px-6 py-4">
+                {/* ── Body ── */}
+                <div className="flex-1 overflow-y-auto px-6 py-5 space-y-5">
+
+                    {/* Empty state */}
                     {!report && !isLoading && (
                         <div className="flex flex-col items-center justify-center h-48 text-slate-400 dark:text-slate-500">
                             <ShieldAlert className="w-12 h-12 mb-3 opacity-40" />
-                            <p className="text-sm">Select a date range and run the analysis to view findings.</p>
+                            <p className="text-sm">Select a date range and run the analysis to detect split fraud.</p>
                         </div>
                     )}
 
+                    {/* Loading */}
                     {isLoading && (
                         <div className="flex flex-col items-center justify-center h-48 text-slate-400 dark:text-slate-500">
                             <Loader2 className="w-10 h-10 animate-spin mb-3 text-red-400" />
-                            <p className="text-sm">Scanning transactions for fraud patterns…</p>
+                            <p className="text-sm">Scanning transactions for split fraud patterns…</p>
                         </div>
                     )}
 
                     {report && !isLoading && (
                         <>
-                            {/* Summary cards */}
-                            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-6">
-                                <div className="bg-slate-50 dark:bg-slate-700 rounded-xl p-3 text-center">
+                            {/* ── Overview: risk-level stat cards ── */}
+                            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                                <div className="bg-slate-50 dark:bg-slate-700 rounded-xl p-4 text-center">
                                     <p className="text-xs text-slate-500 dark:text-slate-400 mb-1">Transactions Scanned</p>
-                                    <p className="text-xl font-bold text-slate-800 dark:text-white">{summary.total_transactions_analyzed.toLocaleString()}</p>
+                                    <p className="text-2xl font-bold text-slate-800 dark:text-white">
+                                        {(summary?.total_transactions_analyzed || 0).toLocaleString()}
+                                    </p>
                                 </div>
-                                <div className="bg-red-50 dark:bg-red-900/30 rounded-xl p-3 text-center">
+                                <div className="bg-red-50 dark:bg-red-900/30 rounded-xl p-4 text-center">
                                     <p className="text-xs text-red-600 dark:text-red-400 mb-1">High Risk</p>
-                                    <p className="text-xl font-bold text-red-700 dark:text-red-300">{summary.high_risk}</p>
+                                    <p className="text-2xl font-bold text-red-700 dark:text-red-300">{highRisk}</p>
                                 </div>
-                                <div className="bg-amber-50 dark:bg-amber-900/30 rounded-xl p-3 text-center">
+                                <div className="bg-amber-50 dark:bg-amber-900/30 rounded-xl p-4 text-center">
                                     <p className="text-xs text-amber-600 dark:text-amber-400 mb-1">Medium Risk</p>
-                                    <p className="text-xl font-bold text-amber-700 dark:text-amber-300">{summary.medium_risk}</p>
+                                    <p className="text-2xl font-bold text-amber-700 dark:text-amber-300">{mediumRisk}</p>
                                 </div>
-                                <div className="bg-blue-50 dark:bg-blue-900/30 rounded-xl p-3 text-center">
+                                <div className="bg-blue-50 dark:bg-blue-900/30 rounded-xl p-4 text-center">
                                     <p className="text-xs text-blue-600 dark:text-blue-400 mb-1">Low Risk</p>
-                                    <p className="text-xl font-bold text-blue-700 dark:text-blue-300">{summary.low_risk}</p>
+                                    <p className="text-2xl font-bold text-blue-700 dark:text-blue-300">{lowRisk}</p>
                                 </div>
                             </div>
 
-                            {/* Fraud type breakdown */}
-                            <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-3 mb-6">
-                                {Object.entries(FRAUD_TYPE_META).map(([type, meta]) => {
-                                    const count = summary[meta.summaryKey] ?? 0;
-                                    return (
-                                        <div key={type} className="bg-slate-50 dark:bg-slate-700 rounded-xl p-3">
-                                            <p className="text-xs font-semibold text-slate-500 dark:text-slate-400 mb-1">{meta.label}</p>
-                                            <p className="text-2xl font-bold text-slate-800 dark:text-white">{count}</p>
-                                            {meta.description && (
-                                                <p className="text-xs text-slate-400 dark:text-slate-500 mt-1 leading-tight">{meta.description}</p>
-                                            )}
-                                        </div>
-                                    );
-                                })}
+                            {/* ── Split fraud explainer card ── */}
+                            <div className="bg-gradient-to-r from-red-50 to-orange-50 dark:from-red-900/20 dark:to-orange-900/20 border border-red-100 dark:border-red-800/40 rounded-xl p-4">
+                                <div className="flex items-start gap-4">
+                                    <div className="p-2.5 bg-red-100 dark:bg-red-900/40 rounded-lg shrink-0">
+                                        <AlertTriangle className="w-5 h-5 text-red-600 dark:text-red-400" />
+                                    </div>
+                                    <div className="flex-1 min-w-0">
+                                        <h3 className="text-base font-semibold text-slate-800 dark:text-white mb-1">
+                                            What is Split Transaction Fraud?
+                                        </h3>
+                                        <p className="text-sm text-slate-600 dark:text-slate-300 leading-relaxed">
+                                            A fraudster makes one large deposit at an agent till, then sends multiple
+                                            accomplices to withdraw smaller amounts — each below the threshold that would
+                                            trigger a manual review. The combined withdrawals match the deposit closely,
+                                            effectively converting electronic M-Pesa credit into untraceable cash while
+                                            evading transaction monitoring. This is the single most prevalent fraud
+                                            pattern in M-Pesa agent operations.
+                                        </p>
+                                    </div>
+                                    <div className="text-right shrink-0">
+                                        <p className="text-3xl font-bold text-red-600 dark:text-red-400">
+                                            {findings.length}
+                                        </p>
+                                        <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">incidents</p>
+                                    </div>
+                                </div>
                             </div>
 
+                            {/* ── Key metrics ── */}
+                            {findings.length > 0 && (
+                                <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                                    <div className="bg-white dark:bg-slate-700 border border-slate-200 dark:border-slate-600 rounded-xl p-3 flex items-center gap-3">
+                                        <div className="p-2 bg-red-100 dark:bg-red-900/30 rounded-lg shrink-0">
+                                            <ShieldAlert className="w-4 h-4 text-red-500" />
+                                        </div>
+                                        <div>
+                                            <p className="text-xs text-slate-500 dark:text-slate-400">Total Incidents</p>
+                                            <p className="text-lg font-bold text-slate-800 dark:text-white">{findings.length}</p>
+                                        </div>
+                                    </div>
+                                    <div className="bg-white dark:bg-slate-700 border border-slate-200 dark:border-slate-600 rounded-xl p-3 flex items-center gap-3">
+                                        <div className="p-2 bg-amber-100 dark:bg-amber-900/30 rounded-lg shrink-0">
+                                            <TrendingUp className="w-4 h-4 text-amber-500" />
+                                        </div>
+                                        <div>
+                                            <p className="text-xs text-slate-500 dark:text-slate-400">KES at Risk</p>
+                                            <p className="text-lg font-bold text-slate-800 dark:text-white">
+                                                {totalKesAtRisk >= 1_000_000
+                                                    ? `${(totalKesAtRisk / 1_000_000).toFixed(1)}M`
+                                                    : totalKesAtRisk >= 1_000
+                                                        ? `${(totalKesAtRisk / 1_000).toFixed(0)}K`
+                                                        : fmt(totalKesAtRisk)}
+                                            </p>
+                                        </div>
+                                    </div>
+                                    <div className="bg-white dark:bg-slate-700 border border-slate-200 dark:border-slate-600 rounded-xl p-3 flex items-center gap-3">
+                                        <div className="p-2 bg-blue-100 dark:bg-blue-900/30 rounded-lg shrink-0">
+                                            <Clock className="w-4 h-4 text-blue-500" />
+                                        </div>
+                                        <div>
+                                            <p className="text-xs text-slate-500 dark:text-slate-400">Avg Splits</p>
+                                            <p className="text-lg font-bold text-slate-800 dark:text-white">{avgSplits}</p>
+                                        </div>
+                                    </div>
+                                    <div className="bg-white dark:bg-slate-700 border border-slate-200 dark:border-slate-600 rounded-xl p-3 flex items-center gap-3">
+                                        <div className="p-2 bg-purple-100 dark:bg-purple-900/30 rounded-lg shrink-0">
+                                            <Building className="w-4 h-4 text-purple-500" />
+                                        </div>
+                                        <div>
+                                            <p className="text-xs text-slate-500 dark:text-slate-400">Tills Affected</p>
+                                            <p className="text-lg font-bold text-slate-800 dark:text-white">{tillsAffected}</p>
+                                        </div>
+                                    </div>
+                                </div>
+                            )}
+
+                            {/* ── Findings list ── */}
                             {findings.length === 0 ? (
                                 <div className="flex flex-col items-center justify-center h-32 text-slate-400 dark:text-slate-500">
                                     <Shield className="w-10 h-10 mb-2 text-green-400" />
-                                    <p className="text-sm font-medium text-green-600 dark:text-green-400">No suspicious patterns detected in this period.</p>
+                                    <p className="text-sm font-medium text-green-600 dark:text-green-400">
+                                        No split fraud patterns detected in this period.
+                                    </p>
                                 </div>
                             ) : (
-                                <>
-                                    {/* Filter tabs */}
-                                    <div className="flex gap-2 mb-4 flex-wrap">
-                                        {[
-                                        { value: 'all', label: `All (${findings.length})` },
-                                        ...Object.entries(FRAUD_TYPE_META).map(([type, meta]) => ({
-                                            value: type,
-                                            label: `${meta.tabLabel} (${summary[meta.summaryKey] ?? 0})`,
-                                        })),
-                                        ].map(tab => (
-                                            <button key={tab.value} onClick={() => setActiveType(tab.value)}
-                                                className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-colors ${activeType === tab.value
-                                                    ? 'bg-red-500 text-white'
-                                                    : 'bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-600'}`}>
-                                                {tab.label}
-                                            </button>
-                                        ))}
-                                    </div>
-
-                                    {/* Findings list */}
-                                    <div>
-                                        {filtered.map((finding, i) => (
-                                            <FindingCard key={i} finding={finding} index={i} />
-                                        ))}
-                                    </div>
-                                </>
+                                <div>
+                                    <p className="text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wide mb-3">
+                                        Flagged Incidents — sorted by severity
+                                    </p>
+                                    {findings.map((finding, i) => (
+                                        <SplitFindingCard key={i} finding={finding} index={i} />
+                                    ))}
+                                </div>
                             )}
                         </>
                     )}

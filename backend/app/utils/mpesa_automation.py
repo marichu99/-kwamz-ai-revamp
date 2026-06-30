@@ -534,12 +534,12 @@ class MpesaScraper:
         org_op_tab.click()
         page.wait_for_timeout(1500)
 
-        # ── Step 3: locate the input once, then reuse it for every shortcode ────
+        # ── Step 3: re-query the input on every iteration — Vue re-renders the
+        # component after each search result loads, detaching the old node.
         _INPUT_SEL = (
             "//div[@class='el-form-item asterisk-left el-form-item--label-top org-short-code']"
             "//div[@class='el-input__wrapper']//input"
         )
-        sc_input = page.wait_for_selector(_INPUT_SEL, timeout=15000)
 
         scraped_rows = int(0)
         preselected_pagination = False
@@ -547,6 +547,7 @@ class MpesaScraper:
         for num,shortcode in enumerate(sorted(pending_shortcodes)):
             logger.info(f"[SWAPS] Querying shortcode: {shortcode}")
             try:
+                sc_input = page.wait_for_selector(_INPUT_SEL, timeout=15000)
                 sc_input.fill('')
                 sc_input.fill(shortcode)
                 page.wait_for_timeout(500)
@@ -1516,6 +1517,7 @@ class MpesaScraper:
 
 
     def save_table_to_dataframe_download_head_office(
+        self,
         page: Page,
         business_shortcode: int,
         additional_category: str = "",

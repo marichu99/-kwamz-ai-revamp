@@ -37,9 +37,11 @@ DWR_RECOVERY_PCT = 0.50          # withdrawal must be >= 50% of deposit
 DWR_WINDOW_HOURS = 24            # look for withdrawals within 24 hrs of deposit
 
 # Split transaction thresholds
-SPLIT_MIN_ANCHOR = 5000.0        # minimum anchor transaction amount (KES)
-SPLIT_WINDOW_MINUTES = 240        # all transactions must fall within this window
-SPLIT_MIN_SUBSEQUENT = 2         # minimum number of follow-up transactions
+SPLIT_MIN_ANCHOR = 1000.0        # minimum anchor deposit (KES)
+SPLIT_WINDOW_MINUTES = 120       # 2-hour window after the anchor deposit
+SPLIT_MIN_SUBSEQUENT = 3         # minimum number of follow-up withdrawals
+SPLIT_MIN_COVERAGE = 0.70        # withdrawals must total >= 70% of deposit
+SPLIT_MAX_COVERAGE = 1.50        # withdrawals must total <= 150% of deposit
 
 # Rapid back-and-forth thresholds
 RBF_WINDOW_MINUTES = 1           # time window in minutes
@@ -170,59 +172,85 @@ class FraudReportService:
         }
 
     # ------------------------------------------------------------------
-    # Split Transactions
-    # One large anchor (deposit OR withdrawal) followed by 2+ transactions
-    # of the opposite type, all within SPLIT_WINDOW_MINUTES.
+    # Split Transactions (till-level, depositor-must-withdraw rule)
+    #
+    # Qualifying pattern:
+    #   1. One large "Deposit at Agent Till" (anchor) — the depositor gets
+    #      M-Pesa credit on their phone.
+    #   2. Within 2 hours at the same till, 3+ "Customer Withdrawal" transactions
+    #      whose total covers 70–150 % of the deposit.
+    #   3. The DEPOSITOR'S own phone must appear among the withdrawers — they
+    #      reclaim the majority of the cash themselves while accomplices cover
+    #      the rest, making the activity look like routine agent traffic.
+    #   4. Recurring withdrawer flags: any withdrawer who has appeared in 3+
+    #      other split incidents at the same till is tagged as a known associate.
     # ------------------------------------------------------------------
     def _detect_split_transactions(self, txn_dicts, detector):
-        RELEVANT_REASONS = {
-            'Deposit at Agent Till',
+        DEPOSIT_REASONS = {'Deposit at Agent Till'}
+        WITHDRAWAL_REASONS = {
             'Customer Withdrawal at Agent Till',
             'Customer Withdrawal at Agent Till with OD',
         }
+        ALL_RELEVANT = DEPOSIT_REASONS | WITHDRAWAL_REASONS
 
-        relevant = [
-            t for t in txn_dicts
-            if t.get('reason_type') in RELEVANT_REASONS and t.get('phone_number')
-        ]
-        logger.info(f"[SPLIT] {len(relevant)}/{len(txn_dicts)} txns eligible")
+        # Group by shortcode
+        by_shortcode = defaultdict(list)
+        for txn in txn_dicts:
+            if txn.get('reason_type') in ALL_RELEVANT:
+                sc = txn.get('business_shortcode') or ''
+                if sc:
+                    by_shortcode[sc].append(txn)
 
-        # Group by (phone, shortcode)
-        groups = defaultdict(list)
-        for txn in relevant:
-            key = (txn['phone_number'], txn.get('business_shortcode') or '')
-            groups[key].append(txn)
+        logger.info(f"[SPLIT] {len(by_shortcode)} shortcodes with relevant transactions")
 
-        results = []
+        # ── First pass: detect qualifying incidents ────────────────────────────
+        raw_results = []
         used_receipts = set()
 
-        for (phone, shortcode), txns in groups.items():
+        for shortcode, txns in by_shortcode.items():
             sorted_txns = sorted(txns, key=lambda x: x['completion_time'])
 
-            for i, anchor in enumerate(sorted_txns):
-                anchor_deposit = anchor.get('paid_in', 0)
-                anchor_withdrawal = abs(anchor.get('withdrawn', 0))
-                anchor_amount = anchor_deposit if anchor_deposit >= SPLIT_MIN_ANCHOR else anchor_withdrawal
+            for anchor in sorted_txns:
+                if anchor['receipt_no'] in used_receipts:
+                    continue
+                if anchor.get('reason_type') not in DEPOSIT_REASONS:
+                    continue
 
+                anchor_amount = abs(anchor.get('withdrawn', 0))
                 if anchor_amount < SPLIT_MIN_ANCHOR:
                     continue
 
-                anchor_is_deposit = anchor_deposit >= SPLIT_MIN_ANCHOR
                 anchor_time = anchor['completion_time']
+                depositor_phone = anchor.get('phone_number') or ''
 
-                # Collect subsequent transactions of the OPPOSITE type within the window
-                subsequent = []
-                for txn in sorted_txns[i + 1:]:
-                    elapsed = (txn['completion_time'] - anchor_time).total_seconds() / 60
-                    if elapsed > SPLIT_WINDOW_MINUTES:
-                        break
-                    txn_is_deposit = txn.get('paid_in', 0) > 0
-                    if anchor_is_deposit and not txn_is_deposit:
-                        subsequent.append(txn)
-                    elif not anchor_is_deposit and txn_is_deposit:
-                        subsequent.append(txn)
+                # Must have a parseable phone to enforce the depositor-is-withdrawer rule
+                if not depositor_phone:
+                    continue
+
+                # Subsequent withdrawals at the same till within the window
+                subsequent = [
+                    t for t in sorted_txns
+                    if t['receipt_no'] != anchor['receipt_no']
+                    and t['receipt_no'] not in used_receipts
+                    and t.get('reason_type') in WITHDRAWAL_REASONS
+                    and t.get('paid_in', 0) > 0
+                    and 0 < (t['completion_time'] - anchor_time).total_seconds() / 60 <= SPLIT_WINDOW_MINUTES
+                ]
 
                 if len(subsequent) < SPLIT_MIN_SUBSEQUENT:
+                    continue
+
+                total_subsequent = sum(t.get('paid_in', 0) for t in subsequent)
+                coverage_ratio = total_subsequent / anchor_amount if anchor_amount > 0 else 0
+
+                if not (SPLIT_MIN_COVERAGE <= coverage_ratio <= SPLIT_MAX_COVERAGE):
+                    continue
+
+                # ── Core rule: the depositor must also be one of the withdrawers ──
+                depositor_withdrawals = [
+                    t for t in subsequent if t.get('phone_number') == depositor_phone
+                ]
+                if not depositor_withdrawals:
                     continue
 
                 candidate_receipts = {anchor['receipt_no']} | {t['receipt_no'] for t in subsequent}
@@ -230,65 +258,81 @@ class FraudReportService:
                     continue
                 used_receipts |= candidate_receipts
 
-                total_subsequent = sum(
-                    t.get('paid_in', 0) if not anchor_is_deposit else abs(t.get('withdrawn', 0))
-                    for t in subsequent
-                )
+                unique_phones = {t.get('phone_number') for t in subsequent if t.get('phone_number')}
+                unique_withdrawers = max(len(unique_phones), 1)
+
                 elapsed_total = (subsequent[-1]['completion_time'] - anchor_time).total_seconds() / 60
-                anchor_label = 'deposit' if anchor_is_deposit else 'withdrawal'
-                followup_label = 'withdrawals' if anchor_is_deposit else 'deposits'
+                depositor_name = anchor.get('name') or depositor_phone
+
+                depositor_own_withdrawal = sum(t.get('paid_in', 0) for t in depositor_withdrawals)
+                depositor_withdrawal_pct = round(depositor_own_withdrawal / anchor_amount * 100, 1)
+
+                # Score: base + splits + unique withdrawers + bonus if depositor reclaims >70%
+                fraud_score = min(
+                    40 + len(subsequent) * 6 + unique_withdrawers * 2
+                    + (10 if depositor_withdrawal_pct >= 70 else 0),
+                    100
+                )
 
                 explanation = (
-                    f"SPLIT TRANSACTION: {anchor.get('name') or phone} made a large {anchor_label} of "
-                    f"KES {anchor_amount:,.2f} (receipt {anchor['receipt_no']}) followed by "
-                    f"{len(subsequent)} {followup_label} totalling KES {total_subsequent:,.2f} "
-                    f"within {elapsed_total:.1f} minute(s) at shortcode {shortcode}. "
-                    f"This pattern of splitting a large transaction into smaller opposite-type "
-                    f"transactions in quick succession is consistent with commission farming or layering."
+                    f"SPLIT TRANSACTION: {depositor_name} deposited KES {anchor_amount:,.2f} "
+                    f"(receipt {anchor['receipt_no']}) at shortcode {shortcode}, then personally "
+                    f"withdrew KES {depositor_own_withdrawal:,.2f} ({depositor_withdrawal_pct}% of the deposit) "
+                    f"alongside {unique_withdrawers - 1} accomplice{'s' if unique_withdrawers - 1 != 1 else ''} "
+                    f"— {len(subsequent)} withdrawals in total covering KES {total_subsequent:,.2f} "
+                    f"({coverage_ratio*100:.0f}% of the deposit) within {elapsed_total:.1f} minute(s). "
+                    f"The depositor reclaiming the bulk of funds through their own withdrawal while "
+                    f"accomplices withdraw the remainder is the defining signature of split fraud."
                 )
 
                 txn_details = [
                     {
                         'receipt_no': anchor['receipt_no'],
                         'amount': anchor_amount,
-                        'type': 'Deposit' if anchor_is_deposit else 'Withdrawal',
+                        'type': 'Deposit',
                         'time': anchor['completion_time'].strftime('%Y-%m-%d %H:%M:%S')
                             if hasattr(anchor['completion_time'], 'strftime') else str(anchor['completion_time']),
-                        'party_phone': phone,
-                        'party_name': anchor.get('name'),
+                        'party_phone': depositor_phone,
+                        'party_name': depositor_name,
                         'other_party_info': anchor.get('other_party_info', ''),
                         'business_shortcode': shortcode,
-                        'agent_id': anchor.get('agent_id'),
+                        'is_anchor': True,
+                        'is_depositor_withdrawal': False,
                     }
                 ] + [
                     {
                         'receipt_no': t['receipt_no'],
-                        'amount': t.get('paid_in', 0) if not anchor_is_deposit else abs(t.get('withdrawn', 0)),
-                        'type': 'Deposit' if not anchor_is_deposit else 'Withdrawal',
+                        'amount': t.get('paid_in', 0),
+                        'type': 'Withdrawal',
                         'time': t['completion_time'].strftime('%Y-%m-%d %H:%M:%S')
                             if hasattr(t['completion_time'], 'strftime') else str(t['completion_time']),
-                        'party_phone': phone,
-                        'party_name': t.get('name'),
+                        'party_phone': t.get('phone_number') or '',
+                        'party_name': t.get('name') or '',
                         'other_party_info': t.get('other_party_info', ''),
                         'business_shortcode': shortcode,
-                        'agent_id': t.get('agent_id'),
+                        'is_anchor': False,
+                        # Flag rows where the depositor withdraws their own share
+                        'is_depositor_withdrawal': t.get('phone_number') == depositor_phone,
                     }
                     for t in subsequent
                 ]
 
-                fraud_score = min(50 + len(subsequent) * 10, 100)
                 agent_info = detector._extract_agent_info_from_transactions([anchor] + subsequent)
 
-                results.append({
+                raw_results.append({
                     'fraud_type': 'split_transaction',
-                    'account_phone': phone,
-                    'account_name': anchor.get('name'),
+                    'account_phone': depositor_phone,
+                    'account_name': depositor_name,
                     'transaction_count': 1 + len(subsequent),
                     'total_amount': anchor_amount + total_subsequent,
                     'anchor_amount': anchor_amount,
-                    'anchor_type': anchor_label,
+                    'anchor_type': 'deposit',
                     'subsequent_total': total_subsequent,
                     'subsequent_count': len(subsequent),
+                    'unique_withdrawers': unique_withdrawers,
+                    'coverage_ratio': round(coverage_ratio * 100, 1),
+                    'depositor_own_withdrawal': depositor_own_withdrawal,
+                    'depositor_withdrawal_pct': depositor_withdrawal_pct,
                     'time_window_minutes': round(elapsed_total, 1),
                     'receipt_nos': list(candidate_receipts),
                     'transaction_details': txn_details,
@@ -297,9 +341,39 @@ class FraudReportService:
                     'fraud_score': fraud_score,
                     'agent_info': agent_info,
                     'business_shortcode': shortcode,
+                    # Withdrawer phone list for second pass
+                    '_withdrawer_phones': [t.get('phone_number') for t in subsequent if t.get('phone_number')],
                 })
 
-        logger.info(f"[SPLIT] {len(results)} findings")
+        # ── Second pass: tag recurring withdrawers ────────────────────────────
+        # Count how many incidents each withdrawer phone appears in, per shortcode
+        from collections import Counter
+        withdrawer_incident_count: dict = defaultdict(Counter)  # {shortcode: {phone: count}}
+        for r in raw_results:
+            sc = r['business_shortcode']
+            for ph in r['_withdrawer_phones']:
+                withdrawer_incident_count[sc][ph] += 1
+
+        results = []
+        for r in raw_results:
+            sc = r['business_shortcode']
+            # Annotate each transaction detail with a recurring flag
+            for txn in r['transaction_details']:
+                ph = txn.get('party_phone', '')
+                count = withdrawer_incident_count[sc].get(ph, 0)
+                txn['recurring_incident_count'] = count
+                txn['is_recurring_suspect'] = count >= 3 and not txn.get('is_anchor')
+            # Build a summary list of recurring associates for quick display
+            r['recurring_associates'] = [
+                {'phone': ph, 'incident_count': cnt}
+                for ph, cnt in withdrawer_incident_count[sc].items()
+                if cnt >= 3 and ph != r['account_phone']
+            ]
+            del r['_withdrawer_phones']
+            results.append(r)
+
+        results.sort(key=lambda r: r['fraud_score'], reverse=True)
+        logger.info(f"[SPLIT] {len(results)} qualifying findings (depositor-is-withdrawer rule applied)")
         return results
 
     # ------------------------------------------------------------------
