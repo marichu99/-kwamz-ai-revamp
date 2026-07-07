@@ -7,7 +7,7 @@ own config so no user-level token management is needed.
 """
 
 from flask import Blueprint, jsonify, request, send_from_directory
-from app import db
+from app import db, limiter
 from app.model.mpesa_scrape_job import MpesaScrapeJob
 from app.model.verification_job import VerificationJob
 from app.controller.verification_controller import _sync_authenticity
@@ -254,6 +254,7 @@ def post_organization():
 
 @agent_bp.route('/captcha/solve-vision', methods=['POST'])
 @agent_auth_required
+@limiter.limit("30 per minute")
 def solve_captcha_vision():
     """
     Solves an image CAPTCHA using Anthropic Claude (claude-haiku-4-5).
@@ -492,6 +493,7 @@ def verification_failed(job_id):
 
 @agent_bp.route('/captcha/solve-arithmetic', methods=['POST'])
 @agent_auth_required
+@limiter.limit("30 per minute")
 def solve_arithmetic_captcha():
     """
     Solves a math CAPTCHA image (e.g. "3 + 5") using pytesseract OCR.

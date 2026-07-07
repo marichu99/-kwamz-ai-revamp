@@ -8,7 +8,7 @@ from flask_cors import CORS
 from flask_jwt_extended import jwt_required,get_jwt_identity
 from datetime import datetime
 import time
-from app import db
+from app import db, limiter
 
 logger = logging.getLogger(__name__)
 
@@ -20,6 +20,7 @@ CORS(app)  # Enable CORS for all routes
 
 @mpesa_bp.route('/stkpush', methods=['POST'])
 @jwt_required()
+@limiter.limit("10 per minute")
 def stkpush():
     user_id = get_jwt_identity()
     logger.info(f"The logged in user id is {user_id}")
@@ -67,6 +68,7 @@ def transaction_status(checkout_id):
 
 
 @mpesa_bp.route("/callback", methods=["POST"])
+@limiter.limit("60 per minute")
 def mpesa_callback():
     data = request.json
 
@@ -114,6 +116,7 @@ def mpesa_callback():
 
 @mpesa_bp.route('/b2c/payout', methods=['POST'])
 @jwt_required()
+@limiter.limit("10 per minute")
 def initiate_b2c_payout():
     user_id = get_jwt_identity()
     data = request.get_json()
@@ -134,6 +137,7 @@ def initiate_b2c_payout():
 
 
 @mpesa_bp.route('/b2c/result', methods=['POST'])
+@limiter.limit("60 per minute")
 def b2c_result_callback():
     data = request.json
 
@@ -147,6 +151,7 @@ def b2c_result_callback():
 
 
 @mpesa_bp.route('/b2c/timeout', methods=['POST'])
+@limiter.limit("60 per minute")
 def b2c_timeout_callback():
     data = request.json
 

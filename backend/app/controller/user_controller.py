@@ -4,7 +4,7 @@ from flask_jwt_extended import create_access_token, jwt_required, get_jwt_identi
 from app.model.user import User
 from app.model.otp import Otp
 from werkzeug.utils import secure_filename
-from app import db,bcrypt
+from app import db,bcrypt,limiter
 from datetime import datetime,timedelta
 from app.model.company import Company
 from app.utils.email_utils import send_otp_email, send_welcome_email, send_agent_new_clients_email, send_password_reset_otp_email
@@ -326,6 +326,7 @@ def delete_user(id):
 
 # Login route
 @user_bp.route('/login', methods=['POST'])
+@limiter.limit("10 per minute")
 def login():
     data = request.get_json()
     if not data or not data.get('username') or not data.get('password'):

@@ -5,6 +5,7 @@ Flask-SQLAlchemy
 flask-migrate
 flask-bcrypt
 flask-jwt-extended
+flask-limiter
 playwright
 gunicorn
 gitpython

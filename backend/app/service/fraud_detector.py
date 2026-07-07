@@ -61,6 +61,10 @@ class FraudDetectionService:
                         self.fraud_type_configs[ft_key][param] = self.config[param]
 
         self.email_templates = self._load_email_templates()
+        # Memoizes AgentCompany lookups across the lifetime of this detector
+        # instance so a whole-report run doesn't re-query the same
+        # shortcode/agent_id once per finding (N+1 query source).
+        self._agent_company_cache = {}
     
     def _load_email_templates(self) -> Dict:
         """Load email templates for different fraud types (plain text for CPU efficiency)."""
@@ -1223,19 +1227,24 @@ ACTION REQUIRED: Please review these transactions immediately.
 
             # Try to find agent company
             if shortcode or agent_id:
+                cache_key = ('agent_id', agent_id) if agent_id else ('shortcode', shortcode)
                 try:
-                    query = AgentCompany.query
-                    if agent_id:
-                        agent_company = query.filter_by(id=agent_id).first()
-                    elif shortcode:
-                        agent_company = query.filter(
-                            db.or_(
-                                AgentCompany.short_code == shortcode,
-                                AgentCompany.business_short_code == shortcode
-                            )
-                        ).first()
+                    if cache_key in self._agent_company_cache:
+                        agent_company = self._agent_company_cache[cache_key]
                     else:
-                        agent_company = None
+                        query = AgentCompany.query
+                        if agent_id:
+                            agent_company = query.filter_by(id=agent_id).first()
+                        elif shortcode:
+                            agent_company = query.filter(
+                                db.or_(
+                                    AgentCompany.short_code == shortcode,
+                                    AgentCompany.business_short_code == shortcode
+                                )
+                            ).first()
+                        else:
+                            agent_company = None
+                        self._agent_company_cache[cache_key] = agent_company
 
                     if agent_company and agent_company.id not in [ac['id'] for ac in agent_info['agent_companies']]:
                         agent_info['agent_companies'].append({

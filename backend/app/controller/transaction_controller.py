@@ -1,6 +1,14 @@
+import hashlib
+import json
 import logging
+import os
+import io
+import redis
+
 from flask import Blueprint, request, jsonify, current_app, send_file, render_template, make_response
+from flask_jwt_extended import jwt_required, get_jwt_identity, verify_jwt_in_request
 from datetime import datetime
+
 from app.service.transaction_service import TransactionService
 from app.service.reports.commissions_report_service import CommissionReportService
 from app.service.reports.fraud_report_service import FraudReportService
@@ -10,9 +18,30 @@ from app.service.export_service import ExportService
 from app.utils.user_service import UserService
 from app.model.company import Company
 from app.model.agentcompany import AgentCompany
-from flask_jwt_extended import jwt_required, get_jwt_identity, verify_jwt_in_request
-import io
-import os
+
+_redis_client = None
+
+def _get_redis():
+    global _redis_client
+    if _redis_client is None:
+        url = os.getenv('REDIS_URL', 'redis://localhost:6379/0')
+        _redis_client = redis.from_url(url, decode_responses=True)
+    return _redis_client
+
+
+FRAUD_REPORT_CACHE_TTL = 3600  # 1 hour
+
+
+def _fraud_report_cache_key(user_id, company_id, company_ids, date_range, start_date, end_date):
+    # When a specific company is requested, scope to that company.
+    # Otherwise, scope to all company_ids owned by the logged-in user.
+    if company_id:
+        scope = str(company_id)
+    else:
+        scope = ','.join(str(i) for i in sorted(company_ids or []))
+    parts = [str(user_id), scope, str(date_range), str(start_date or ''), str(end_date or '')]
+    digest = hashlib.sha256('|'.join(parts).encode()).hexdigest()[:16]
+    return f'fraud_report:{digest}'
 
 logger = logging.getLogger(__name__)
 
@@ -181,13 +210,34 @@ def get_fraud_report():
         if err:
             return err
 
+        user_id = get_jwt_identity()
+        date_range = request.args.get('date_range', 'custom')
+        start_date = request.args.get('start_date')
+        end_date = request.args.get('end_date')
+
+        cache_key = _fraud_report_cache_key(user_id, company_id, company_ids, date_range, start_date, end_date)
+        try:
+            cached = _get_redis().get(cache_key)
+            if cached:
+                logger.info(f"[FraudReport] Cache HIT for key {cache_key}")
+                return jsonify({'success': True, 'report': json.loads(cached), 'cached': True})
+        except Exception as redis_err:
+            logger.warning(f"[FraudReport] Redis read failed, proceeding without cache: {redis_err}")
+
         report = fraud_report_service.generate_report(
-            start_date=request.args.get('start_date'),
-            end_date=request.args.get('end_date'),
-            date_range=request.args.get('date_range', 'custom'),
+            start_date=start_date,
+            end_date=end_date,
+            date_range=date_range,
             company_id=company_id,
             company_ids=company_ids if not company_id else None,
         )
+
+        try:
+            _get_redis().setex(cache_key, FRAUD_REPORT_CACHE_TTL, json.dumps(report))
+            logger.info(f"[FraudReport] Cached result under key {cache_key} (TTL {FRAUD_REPORT_CACHE_TTL}s)")
+        except Exception as redis_err:
+            logger.warning(f"[FraudReport] Redis write failed: {redis_err}")
+
         return jsonify({'success': True, 'report': report})
 
     except ValueError as e:
@@ -682,10 +732,18 @@ def upload_transactions():
         )
         
         if result['success']:
+            try:
+                r = _get_redis()
+                keys = list(r.scan_iter('fraud_report:*'))
+                if keys:
+                    r.delete(*keys)
+                    logger.info(f"[FraudReport] Cache invalidated {len(keys)} key(s) after upload")
+            except Exception as redis_err:
+                logger.warning(f"[FraudReport] Cache invalidation failed: {redis_err}")
             return jsonify(result), 200
         else:
             return jsonify(result), 400
-            
+
     except Exception as e:
         current_app.logger.error(f"Error uploading transactions: {str(e)}")
         return jsonify({"error": f"Failed to upload transactions: {str(e)}"}), 500
@@ -724,10 +782,18 @@ def scrape_and_process_transactions():
         )
         
         if result.get('success', False):
+            try:
+                r = _get_redis()
+                keys = list(r.scan_iter('fraud_report:*'))
+                if keys:
+                    r.delete(*keys)
+                    logger.info(f"[FraudReport] Cache invalidated {len(keys)} key(s) after scrape-process")
+            except Exception as redis_err:
+                logger.warning(f"[FraudReport] Cache invalidation failed: {redis_err}")
             return jsonify(result), 200
         else:
             return jsonify(result), 400
-            
+
     except Exception as e:
         current_app.logger.error(f"Error processing scraped data: {str(e)}")
         return jsonify({"error": f"Failed to process scraped data: {str(e)}"}), 500

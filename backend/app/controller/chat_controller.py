@@ -2,6 +2,7 @@ import logging
 from flask import Blueprint, request, jsonify
 from flask_jwt_extended import jwt_required, get_jwt_identity
 from app.service.chat_service import chat
+from app import limiter
 
 logger = logging.getLogger(__name__)
 
@@ -10,6 +11,7 @@ chat_bp = Blueprint('chat', __name__)
 
 @chat_bp.route('/message', methods=['POST'])
 @jwt_required()
+@limiter.limit("20 per minute")
 def send_message():
     user_id = get_jwt_identity()
     data = request.get_json(silent=True) or {}

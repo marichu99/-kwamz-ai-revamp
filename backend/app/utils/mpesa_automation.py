@@ -540,6 +540,9 @@ class MpesaScraper:
             "//div[@class='el-form-item asterisk-left el-form-item--label-top org-short-code']"
             "//div[@class='el-input__wrapper']//input"
         )
+        _ORG_OP_TAB_SEL = (
+            "//span[contains(@class,'number-title')][normalize-space()='Organization Operator']"
+        )
 
         scraped_rows = int(0)
         preselected_pagination = False
@@ -547,22 +550,22 @@ class MpesaScraper:
         for num,shortcode in enumerate(sorted(pending_shortcodes)):
             logger.info(f"[SWAPS] Querying shortcode: {shortcode}")
             try:
+                # From the 2nd shortcode onward, close_detail_panel_idx may have closed the
+                # 'Organization Operator' portal tab.  Re-click it so the search form is
+                # always active before we look for the shortcode input.
+                if num > 0:
+                    try:
+                        org_op_tab = page.wait_for_selector(_ORG_OP_TAB_SEL, timeout=10000, state="visible")
+                        org_op_tab.click()
+                        page.wait_for_timeout(1000)
+                        logger.info(f"[SWAPS] Re-navigated to 'Organization Operator' for shortcode {shortcode}")
+                    except Exception as nav_err:
+                        logger.warning(f"[SWAPS] Could not re-click 'Organization Operator' tab: {nav_err}")
+
                 sc_input = page.wait_for_selector(_INPUT_SEL, timeout=15000)
                 sc_input.fill('')
                 sc_input.fill(shortcode)
                 page.wait_for_timeout(500)
-            
-                # if(num > 0):
-                #     logger.info(f"We have scraped {scraped_rows} rows for the previous shortcode, attempting to close detail panels before next search...")
-                #     for _ in range(scraped_rows):
-                #         try:
-                #             close_detail_panel_idx(page)
-                #             logger.info("[SWAPS] Closed a detail panel")
-                #             page.wait_for_timeout(1000)
-                #         except Exception:
-                #             pass
-                
-                #     scraped_rows = 0
 
                 # Click Search / Submit
                 page.click("//button[@class='el-button el-button--primary']")

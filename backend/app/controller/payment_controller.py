@@ -12,7 +12,7 @@ from app.model.pesalpalpayment import PesapalPayment
 from app.model.pesapalipnconfig import PesapalIPNConfig
 from app.model.subscription import Subscription
 from app.model.config import SmtpConfig
-from app import db
+from app import db, limiter
 
 import os
 
@@ -151,6 +151,7 @@ def billing_summary():
 
 @payment_bp.route('/create', methods=['POST'])
 @jwt_required()
+@limiter.limit("10 per minute")
 def create_payment():
     data = request.json
     current_user_id = get_jwt_identity()
@@ -227,6 +228,7 @@ def payment_callback():
 
 
 @payment_bp.route('/ipn', methods=['POST'])
+@limiter.limit("60 per minute")
 def payment_ipn():
     order_tracking_id = request.args.get('OrderTrackingId')
 
@@ -442,6 +444,7 @@ def admin_update_pesapal_config():
 
 
 @payment_bp.route('/refund', methods=['POST'])
+@limiter.limit("10 per minute")
 def refund_payment():
     data = request.json
 

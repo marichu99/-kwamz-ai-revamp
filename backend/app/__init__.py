@@ -6,6 +6,7 @@ from flask_migrate import Migrate
 from flask_cors import CORS
 from flask_bcrypt import Bcrypt
 from flask_jwt_extended import JWTManager
+from flask_limiter import Limiter
 from google.cloud import storage
 import os
 import sys
@@ -19,6 +20,26 @@ migrate = Migrate()
 bcrypt = Bcrypt()
 jwt = JWTManager()
 
+
+def get_client_ip():
+    """Resolve the real client IP behind Cloudflare Tunnel + nginx.
+
+    Cloudflare's edge sets CF-Connecting-IP to the true client IP before the
+    request ever reaches cloudflared/nginx, so it's more reliable here than
+    X-Forwarded-For (which nginx appends its own hop to).
+    """
+    from flask import request
+    cf_ip = request.headers.get('CF-Connecting-IP')
+    if cf_ip:
+        return cf_ip
+    forwarded_for = request.headers.get('X-Forwarded-For')
+    if forwarded_for:
+        return forwarded_for.split(',')[0].strip()
+    return request.remote_addr
+
+
+limiter = Limiter(key_func=get_client_ip)
+
 def create_app():
     app = Flask(__name__, instance_relative_config=True)
     load_dotenv()
@@ -28,10 +49,6 @@ def create_app():
     app.config['SQLALCHEMY_DATABASE_URI'] = os.getenv('DATABASE_URL')
     app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 
-    # Connection pool settings
-    # Celery workers use NullPool — connections are never pooled, each task
-    # opens and immediately closes its own connection. This prevents Celery
-    # from exhausting PostgreSQL's max_connections across many concurrent workers.
     is_celery = 'celery' in sys.argv[0] if sys.argv else False
     if is_celery:
         from sqlalchemy.pool import NullPool
@@ -56,7 +73,10 @@ def create_app():
     app.config['REDIS_URL']    = os.getenv('REDIS_URL','redis://localhost:6379/0')
     app.config['CELERY_BROKER_URL']  = os.getenv('CELERY_BROKER_URL','redis://localhost:6379/0')
     app.config['CELERY_RESULT_BACKEND'] = os.getenv('CELERY_RESULT_BACKEND','redis://localhost:6379/0')
-    
+    app.config['RATELIMIT_STORAGE_URI'] = app.config['REDIS_URL']
+    app.config['RATELIMIT_DEFAULT'] = os.getenv('RATELIMIT_DEFAULT', '300 per hour')
+    app.config['RATELIMIT_HEADERS_ENABLED'] = True
+
     # Initialize Celery AFTER app config is set
     from app.celery_config import init_celery
     celery = init_celery(app)  # This configures celery with app settings
@@ -68,6 +88,12 @@ def create_app():
     bcrypt.init_app(app)
     jwt.init_app(app)
     CORS(app)
+    limiter.init_app(app)
+
+    @app.errorhandler(429)
+    def ratelimit_handler(e):
+        from flask import jsonify
+        return jsonify({'error': 'Too many requests, please slow down.'}), 429
     
     # Import models here so they are always registered
     from app.model.verification_job import VerificationJob
