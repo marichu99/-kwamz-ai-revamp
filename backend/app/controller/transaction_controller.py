@@ -14,6 +14,7 @@ from app.service.reports.commissions_report_service import CommissionReportServi
 from app.service.reports.fraud_report_service import FraudReportService
 from app.service.reports.agent_performance_report_service import AgentPerformanceReportService
 from app.service.reports.monthly_commission_report_service import MonthlyCommissionReportService
+from app.service.reports.float_health_report_service import FloatHealthReportService
 from app.service.export_service import ExportService
 from app.utils.user_service import UserService
 from app.model.company import Company
@@ -63,6 +64,7 @@ commission_report_service = CommissionReportService()
 fraud_report_service = FraudReportService()
 agent_performance_report_service = AgentPerformanceReportService()
 monthly_commission_report_service = MonthlyCommissionReportService()
+float_health_report_service = FloatHealthReportService()
 export_service = ExportService()
 
 
@@ -483,6 +485,41 @@ def get_monthly_commission_report_excel():
                          as_attachment=True, download_name=filename)
     except Exception as e:
         current_app.logger.error(f"Monthly commission Excel error: {e}")
+        return jsonify({'success': False, 'error': 'Internal server error'}), 500
+
+
+@transaction_bp.route('/float-health-report', methods=['GET'])
+@jwt_required()
+def get_float_health_report():
+    """Return per-till float health metrics scoped to the current user's companies."""
+    try:
+        role, company_ids = _get_user_company_scope()
+        if role is None:
+            return jsonify({'success': False, 'error': 'User not found'}), 404
+        company_id, err = _resolve_company_id(request.args.get('company_id', type=int), company_ids)
+        if err:
+            return err
+
+        report = float_health_report_service.generate_report(
+            period_type=request.args.get('period_type', 'monthly'),
+            year=request.args.get('year', type=int),
+            month=request.args.get('month', type=int),
+            quarter=request.args.get('quarter', type=int),
+            half=request.args.get('half', type=int),
+            week=request.args.get('week', type=int),
+            start_date=request.args.get('start_date'),
+            end_date=request.args.get('end_date'),
+            company_id=company_id,
+            company_ids=company_ids if not company_id else None,
+            low_float_threshold=request.args.get('low_float_threshold', type=float, default=20000.0),
+            critical_float_threshold=request.args.get('critical_float_threshold', type=float, default=5000.0),
+        )
+        return jsonify({'success': True, 'report': report})
+
+    except ValueError as e:
+        return jsonify({'success': False, 'error': str(e)}), 400
+    except Exception as e:
+        current_app.logger.error(f"Error generating float health report: {str(e)}")
         return jsonify({'success': False, 'error': 'Internal server error'}), 500
 
 
@@ -1170,10 +1207,11 @@ def get_commission_till_balances():
         per_page = request.args.get('per_page', 10, type=int)
         updated_after = request.args.get('updated_after', None)
         shortcode = request.args.get('shortcode', None)
+        view_all = request.args.get('view_all', 'false').lower() == 'true'
 
         result = transaction_service.get_commission_till_balances(
             company_ids=company_ids, page=page, per_page=per_page,
-            updated_after=updated_after, shortcode=shortcode
+            updated_after=updated_after, shortcode=shortcode, view_all=view_all
         )
         return jsonify(result), 200 if result['success'] else 400
     except Exception as e:

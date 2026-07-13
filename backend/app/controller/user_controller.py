@@ -24,6 +24,9 @@ def handle_options():
     return jsonify({'message': 'OK'}), 200
 
 
+ONLINE_THRESHOLD = timedelta(minutes=5)
+
+
 # Get all users (protected)
 @user_bp.route('/', methods=['GET','OPTIONS'])
 @jwt_required()
@@ -31,13 +34,16 @@ def get_users():
     current_user_id = get_jwt_identity()
     logger.info(f"Current user ID: {current_user_id}")
     users = User.query.all()
+    now = datetime.utcnow()
     return jsonify([{
         'id': user.id,
         'username': user.username,
         'email': user.email,
         'phone_number': user.phone_number,
         'role': user.role or "user",
-        'date_of_birth': user.date_of_birth.isoformat() if user.date_of_birth else None
+        'date_of_birth': user.date_of_birth.isoformat() if user.date_of_birth else None,
+        'last_active': user.last_active.isoformat() if user.last_active else None,
+        'is_online': bool(user.last_active and now - user.last_active <= ONLINE_THRESHOLD)
     } for user in users])
 
 # Get a single user by ID (protected)
@@ -343,6 +349,8 @@ def login():
 
     # user = User.query.filter(or_(User.email == data['username'])).first()
     if user and user.check_password(data['password']):
+        user.last_active = datetime.utcnow()
+        db.session.commit()
         access_token = create_access_token(identity=str(user.id))
         return jsonify({
             'id': user.id,
@@ -521,7 +529,7 @@ def forgot_password_reset():
     if not re.search(r'\d', new_password):
         return jsonify({'error': 'Password must contain at least one number'}), 400
 
-    if not re.search(r'[!@#$%^&*(),.?":{}|<>]', new_password):
+    if not re.search(r'[^A-Za-z0-9]', new_password):
         return jsonify({'error': 'Password must contain at least one special character'}), 400
 
     # Verify OTP

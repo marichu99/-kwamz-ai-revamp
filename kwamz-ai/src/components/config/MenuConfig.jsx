@@ -5,8 +5,6 @@ import {
     Package,
     Wallet,
     Wrench,
-    Clock,
-    Shield,
     Repeat,
     Download,
     CreditCard,
@@ -114,28 +112,6 @@ const userMenuItems = [
         id: "transactions-list",
         icon: Wallet,
         label: "Transaction List",
-    },
-    {
-        id: "fraud-detection",
-        icon: Shield,
-        label: "Fraud Detection",
-        submenu: [
-            { id: "fraud-alerts", label: "Fraud Alerts" },
-            { id: "configs", label: "Detection Config" },
-        ]
-    },
-    {
-        id: "reports",
-        icon: Clock,
-        label: "Reports",
-        submenu: [
-            { id: "report-schedules", label: "Report Schedules" },
-        ]
-    },
-    {
-        id: "agent-download",
-        icon: Download,
-        label: "Download Agent",
     },
 ];
 

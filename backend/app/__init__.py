@@ -1,6 +1,6 @@
 import logging
 # app/__init__.py
-from flask import Flask
+from flask import Flask, request
 from flask_sqlalchemy import SQLAlchemy
 from flask_migrate import Migrate
 from flask_cors import CORS
@@ -10,7 +10,14 @@ from flask_limiter import Limiter
 from google.cloud import storage
 import os
 import sys
+from datetime import datetime, timedelta
 from dotenv import load_dotenv
+
+# Minimum gap between last_active DB writes for the same user, to avoid
+# writing on every single request from an active session.
+LAST_ACTIVE_WRITE_INTERVAL = timedelta(seconds=60)
+# How recently a user must have been seen to count as "online" for admins.
+ONLINE_THRESHOLD = timedelta(minutes=5)
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -123,7 +130,26 @@ def create_app():
     from app.model.agent_swap import AgentSwap
     from app.model.swap_payout import SwapPayout
     from app.model.swap_scrape_log import SwapScrapeLog
-    
+
+    @app.after_request
+    def update_last_active(response):
+        """Heartbeat: stamp the requesting user's last_active on any authenticated
+        request, throttled so we're not writing to the DB on every single call."""
+        if request.method != 'OPTIONS':
+            try:
+                from flask_jwt_extended import verify_jwt_in_request, get_jwt_identity
+                verify_jwt_in_request(optional=True)
+                user_id = get_jwt_identity()
+                if user_id:
+                    user = User.query.get(int(user_id))
+                    now = datetime.utcnow()
+                    if user and (not user.last_active or now - user.last_active > LAST_ACTIVE_WRITE_INTERVAL):
+                        user.last_active = now
+                        db.session.commit()
+            except Exception:
+                db.session.rollback()
+        return response
+
     # Initialize Pesapal Client and Payment Service
     from app.utils.pesapalclient import PesapalClient, PesapalConfig, FlaskIPNStorage
     from app.utils.pesapalutils import PesapalPaymentService

@@ -845,7 +845,7 @@ class TransactionService:
             logger.error(f'[COMM-BALANCE] Failed: {e}')
             return {'success': False, 'error': str(e)}
 
-    def get_commission_till_balances(self, company_ids: list = None, page: int = 1, per_page: int = 10, updated_after: str = None, shortcode: str = None) -> dict:
+    def get_commission_till_balances(self, company_ids: list = None, page: int = 1, per_page: int = 10, updated_after: str = None, shortcode: str = None, view_all: bool = False) -> dict:
         """
         Return the latest COMM-{shortcode} snapshot per till, paginated.
         One row per business_shortcode, ordered by shortcode.
@@ -892,8 +892,14 @@ class TransactionService:
                     pass
 
             total = base_query.count()
-            pages = max(1, (total + per_page - 1) // per_page)
-            rows = base_query.offset((page - 1) * per_page).limit(per_page).all()
+            if view_all:
+                page = 1
+                per_page = total
+                pages = 1
+                rows = base_query.all()
+            else:
+                pages = max(1, (total + per_page - 1) // per_page)
+                rows = base_query.offset((page - 1) * per_page).limit(per_page).all()
 
             # Build company lookup for this page's rows
             row_company_ids = {t.company_id for t in rows if t.company_id}

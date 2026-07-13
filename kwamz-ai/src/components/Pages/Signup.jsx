@@ -43,7 +43,7 @@ const SignUpForm = ({ onSuccess,user_role }) => {
     }
 
     if (name === 'password') {
-      const passwordRegex = /^(?=.*[0-9])(?=.*[!@#$%^&*])[A-Za-z\d!@#$%^&*]{8,}$/;
+      const passwordRegex = /^(?=.*[0-9])(?=.*[^A-Za-z0-9]).{8,}$/;
       newErrors.password = !passwordRegex.test(value) && value.length > 0
         ? 'Password must be at least 8 characters, include a number and a special character.'
         : '';
@@ -92,7 +92,7 @@ const SignUpForm = ({ onSuccess,user_role }) => {
       newErrors.phoneNumber = 'Phone number must be between 9 and 14 digits.';
     }
 
-    const passwordRegex = /^(?=.*[0-9])(?=.*[!@#$%^&*])[A-Za-z\d!@#$%^&*]{8,}$/;
+    const passwordRegex = /^(?=.*[0-9])(?=.*[^A-Za-z0-9]).{8,}$/;
     if (!passwordRegex.test(formData.password)) {
       newErrors.password = 'Password must be at least 8 characters, include a number and a special character.';
     }

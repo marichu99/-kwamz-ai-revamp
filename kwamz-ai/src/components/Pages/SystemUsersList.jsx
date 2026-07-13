@@ -1,6 +1,6 @@
 // components/UserList.jsx
 import { useState, useEffect, useRef } from 'react';
-import { Search, Filter, MoreVertical, Edit, Plus, Download, Upload, RefreshCw, ChevronRight, User, Shield, Briefcase, Mail, Phone, Calendar, IdCard, Crown, Building, Link, Unlink, Check, CreditCard } from 'lucide-react';
+import { Search, Filter, MoreVertical, Edit, Plus, Download, Upload, RefreshCw, ChevronRight, User, Shield, Briefcase, Mail, Phone, Calendar, IdCard, Crown, Building, Link, Unlink, Check, CreditCard, Circle } from 'lucide-react';
 import axios from 'axios';
 import * as XLSX from 'xlsx';
 import config from '../../Config';
@@ -92,9 +92,10 @@ function SystemUsersList() {
     }
   };
 
-  // Fetch users and companies
-  const fetchUsers = async () => {
-    setIsLoading(true);
+  // Fetch users and companies. `silent` skips the loading spinner/toast/selection
+  // reset so it can be used for a background presence-refresh poll.
+  const fetchUsers = async (silent = false) => {
+    if (!silent) setIsLoading(true);
     try {
       const token = localStorage.getItem('token');
       const [usersResponse, companiesResponse] = await Promise.all([
@@ -106,20 +107,19 @@ function SystemUsersList() {
         })
       ]);
 
-      console.log("The user response is:", usersResponse);
-      console.log("The companies response is:", companiesResponse);
-
       setUsers(usersResponse.data);
-      setFilteredUsers(usersResponse.data);
       setCompanies(companiesResponse.data);
-      setSelectedUserIds([]);
-      setCurrentPage(1);
-      showToast('Users reloaded successfully', 'success');
+      if (!silent) {
+        setFilteredUsers(usersResponse.data);
+        setSelectedUserIds([]);
+        setCurrentPage(1);
+        showToast('Users reloaded successfully', 'success');
+      }
     } catch (error) {
       console.error('Error fetching data:', error.response?.data || error.message);
-      showToast('Failed to fetch data', 'error');
+      if (!silent) showToast('Failed to fetch data', 'error');
     } finally {
-      setIsLoading(false);
+      if (!silent) setIsLoading(false);
     }
   };
 
@@ -159,6 +159,10 @@ function SystemUsersList() {
 
   useEffect(() => {
     fetchUsers();
+    // Poll in the background so online/last-active status stays current
+    // while the admin has this page open.
+    const interval = setInterval(() => fetchUsers(true), 30000);
+    return () => clearInterval(interval);
   }, []);
 
   // Handle search and filter
@@ -183,10 +187,10 @@ function SystemUsersList() {
       filtered = filtered.filter((user) => user.role === 'agent');
     } else if (filter === 'user') {
       filtered = filtered.filter((user) => user.role === 'user');
-    } else if (filter === 'active') {
-      filtered = filtered.filter((user) => user.is_active);
-    } else if (filter === 'inactive') {
-      filtered = filtered.filter((user) => !user.is_active);
+    } else if (filter === 'online') {
+      filtered = filtered.filter((user) => user.is_online);
+    } else if (filter === 'offline') {
+      filtered = filtered.filter((user) => !user.is_online);
     }
 
     setFilteredUsers(filtered);
@@ -353,6 +357,20 @@ function SystemUsersList() {
     }
   };
 
+  const formatLastActive = (lastActive) => {
+    if (!lastActive) return 'Never logged in';
+    const diffMs = Date.now() - new Date(lastActive).getTime();
+    const diffMins = Math.floor(diffMs / 60000);
+    if (diffMins < 1) return 'Just now';
+    if (diffMins < 60) return `${diffMins}m ago`;
+    const diffHours = Math.floor(diffMins / 60);
+    if (diffHours < 24) return `${diffHours}h ago`;
+    const diffDays = Math.floor(diffHours / 24);
+    return `${diffDays}d ago`;
+  };
+
+  const onlineCount = users.filter((u) => u.is_online).length;
+
   // Get companies assigned to an agent
   const getAgentCompanies = (agentId) => {
     return companies.filter(company => company.agent_user_id === agentId);
@@ -399,9 +417,17 @@ function SystemUsersList() {
 
       <div className="sticky top-0 z-20 bg-white dark:bg-slate-800">
       {/* Action Buttons */}
-      <div className="flex justify-end mb-4 space-x-4">
+      <div className="flex items-center justify-between mb-4">
+        <div className="flex items-center space-x-2 text-sm text-slate-600 dark:text-slate-300">
+          <span className="relative flex h-2.5 w-2.5">
+            <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75"></span>
+            <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-green-500"></span>
+          </span>
+          <span>{onlineCount} online now</span>
+        </div>
+      <div className="flex justify-end space-x-4">
         <button
-          onClick={fetchUsers}
+          onClick={() => fetchUsers()}
           disabled={isLoading}
           className="flex items-center space-x-2 py-2 px-4 bg-green-500 text-white rounded-xl hover:bg-green-600 transition-colors disabled:bg-green-300 disabled:cursor-not-allowed"
         >
@@ -475,6 +501,7 @@ function SystemUsersList() {
           )}
         </div>
       </div>
+      </div>
 
       {/* Search and Filter Controls */}
       <div className="flex flex-col sm:flex-row gap-4 mb-6">
@@ -499,8 +526,8 @@ function SystemUsersList() {
             <option value="admin">Admins</option>
             <option value="agent">Agents</option>
             <option value="user">Users</option>
-            <option value="active">Active</option>
-            <option value="inactive">Inactive</option>
+            <option value="online">Online</option>
+            <option value="offline">Offline</option>
           </select>
         </div>
       </div>
@@ -524,6 +551,7 @@ function SystemUsersList() {
               <th className="px-4 py-3 font-semibold">Contact</th>
               <th className="px-4 py-3 font-semibold">Date of Birth</th>
               <th className="px-4 py-3 font-semibold">Role</th>
+              <th className="px-4 py-3 font-semibold">Status</th>
               <th className="px-4 py-3 font-semibold">Companies</th>
             </tr>
           </thead>
@@ -611,6 +639,19 @@ function SystemUsersList() {
                         {user.role}
                       </span>
                     </div>
+                  </td>
+                  <td className="px-4 py-3">
+                    {user.is_online ? (
+                      <span className="flex items-center space-x-1.5 text-sm text-green-600 dark:text-green-400">
+                        <Circle className="w-2.5 h-2.5 fill-current" />
+                        <span>Online</span>
+                      </span>
+                    ) : (
+                      <span className="flex items-center space-x-1.5 text-sm text-slate-400 dark:text-slate-500">
+                        <Circle className="w-2.5 h-2.5 fill-current" />
+                        <span>{formatLastActive(user.last_active)}</span>
+                      </span>
+                    )}
                   </td>
                   <td className="px-4 py-3">
                     {user.role === 'agent' ? (

@@ -17,7 +17,8 @@ import {
     ChevronDown,
     Building,
     Store,
-    ShieldAlert
+    ShieldAlert,
+    Droplets
 } from 'lucide-react';
 import axios from 'axios';
 import config from '../../Config';
@@ -27,6 +28,7 @@ import TransactionStatsModal from './TransactionStatsModal.jsx';
 import FraudReportModal from './FraudReportModal.jsx';
 import AgentPerformanceReportModal from './AgentPerformanceReportModal.jsx';
 import MonthlyCommissionReportModal from './MonthlyCommissionReportModal.jsx';
+import FloatHealthReportModal from './FloatHealthReportModal.jsx';
 
 function TransactionsGrid() {
     const [transactionsResponse, setTransactionsResponse] = useState({
@@ -41,6 +43,7 @@ function TransactionsGrid() {
     const [isFraudReportOpen, setIsFraudReportOpen] = useState(false);
     const [isAgentPerformanceReportOpen, setIsAgentPerformanceReportOpen] = useState(false);
     const [isMonthlyCommissionOpen, setIsMonthlyCommissionOpen] = useState(false);
+    const [isFloatHealthReportOpen, setIsFloatHealthReportOpen] = useState(false);
     const [isStatsModalOpen, setIsStatsModalOpen] = useState(false);
     const [isLoading, setIsLoading] = useState(false);
     const [currentPage, setCurrentPage] = useState(1);
@@ -70,6 +73,7 @@ function TransactionsGrid() {
     const [tillSortField, setTillSortField] = useState('last_updated');
     const [tillSortDir, setTillSortDir] = useState('desc');
     const [tillShortcodeSearch, setTillShortcodeSearch] = useState('');
+    const [tillViewAll, setTillViewAll] = useState(false);
 
     // Transaction type toggle: 'float' | 'commission'
     const [transactionType, setTransactionType] = useState('float');
@@ -285,6 +289,7 @@ function TransactionsGrid() {
                 headers: { Authorization: `Bearer ${token}` },
             }).catch(() => {}); // fire-and-forget; don't block the fetch
             const params = { page, per_page: perPage };
+            if (tillViewAll) params.view_all = 'true';
             if (tillUpdatedAfter) params.updated_after = tillUpdatedAfter;
             if (shortcode.trim()) params.shortcode = shortcode.trim();
             const response = await axios.get(`${config.API_URL}/transactions/commission-till-balances`, {
@@ -345,7 +350,7 @@ function TransactionsGrid() {
             fetchTransactions();
             fetchStats();
         }
-    }, [currentPage, pageSize, filters, transactionType, tillPage, tillPageSize, tillUpdatedAfter]);
+    }, [currentPage, pageSize, filters, transactionType, tillPage, tillPageSize, tillUpdatedAfter, tillViewAll]);
 
     useEffect(() => {
         if (transactionType !== 'commission') return;
@@ -805,6 +810,15 @@ function TransactionsGrid() {
                                             Export Tills to Excel
                                         </button>
                                     )}
+                                    <button
+                                        onClick={() => { setIsFloatHealthReportOpen(true); setIsDropdownOpen(false); }}
+                                        disabled={transactionType !== 'float'}
+                                        className="w-full flex items-center px-4 py-2 text-sm text-slate-800 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-600 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                                        role="menuitem"
+                                    >
+                                        <Droplets className="w-4 h-4 mr-3 text-blue-500" />
+                                        Float Report
+                                    </button>
                                     <button
                                         onClick={() => { setIsFraudReportOpen(true); setIsDropdownOpen(false); }}
                                         disabled={transactionType !== 'commission'}
@@ -1354,40 +1368,54 @@ function TransactionsGrid() {
                 <div className="flex flex-col sm:flex-row justify-between items-center mt-4 space-y-4 sm:space-y-0">
                     <div className="flex items-center space-x-2">
                         <span className="text-sm text-slate-600 dark:text-slate-300">
-                            Showing {tillPagination.total === 0 ? 0 : (tillPage - 1) * tillPageSize + 1} - {Math.min(tillPage * tillPageSize, tillPagination.total)} of {tillPagination.total} tills
+                            {tillViewAll
+                                ? `Showing all ${tillPagination.total} tills`
+                                : `Showing ${tillPagination.total === 0 ? 0 : (tillPage - 1) * tillPageSize + 1} - ${Math.min(tillPage * tillPageSize, tillPagination.total)} of ${tillPagination.total} tills`}
                         </span>
-                        <select
-                            value={tillPageSize}
-                            onChange={(e) => { setTillPageSize(Number(e.target.value)); setTillPage(1); }}
-                            className="py-1 px-2 bg-slate-100 dark:bg-slate-700 border border-slate-200 dark:border-slate-600 rounded-xl text-slate-800 dark:text-white focus:outline-none focus:ring-2 focus:ring-amber-500"
+                        {!tillViewAll && (
+                            <select
+                                value={tillPageSize}
+                                onChange={(e) => { setTillPageSize(Number(e.target.value)); setTillPage(1); }}
+                                className="py-1 px-2 bg-slate-100 dark:bg-slate-700 border border-slate-200 dark:border-slate-600 rounded-xl text-slate-800 dark:text-white focus:outline-none focus:ring-2 focus:ring-amber-500"
+                            >
+                                <option value="5">5 per page</option>
+                                <option value="10">10 per page</option>
+                                <option value="20">20 per page</option>
+                                <option value="50">50 per page</option>
+                            </select>
+                        )}
+                        <button
+                            onClick={() => { setTillViewAll(v => !v); setTillPage(1); }}
+                            className={`py-1 px-3 rounded-xl text-sm font-medium transition-colors ${tillViewAll
+                                ? 'bg-amber-500 text-white hover:bg-amber-600'
+                                : 'bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-600'}`}
                         >
-                            <option value="5">5 per page</option>
-                            <option value="10">10 per page</option>
-                            <option value="20">20 per page</option>
-                            <option value="50">50 per page</option>
-                        </select>
-                    </div>
-                    <div className="flex items-center space-x-2">
-                        <button onClick={() => setTillPage(1)} disabled={!tillPagination.has_prev}
-                            className="py-1 px-3 bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300 rounded-xl hover:bg-slate-200 dark:hover:bg-slate-600 disabled:opacity-50 disabled:cursor-not-allowed">
-                            First
-                        </button>
-                        <button onClick={() => setTillPage(p => p - 1)} disabled={!tillPagination.has_prev}
-                            className="py-1 px-3 bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300 rounded-xl hover:bg-slate-200 dark:hover:bg-slate-600 disabled:opacity-50 disabled:cursor-not-allowed">
-                            Previous
-                        </button>
-                        <span className="text-sm text-slate-600 dark:text-slate-300">
-                            Page {tillPage} of {tillPagination.pages}
-                        </span>
-                        <button onClick={() => setTillPage(p => p + 1)} disabled={!tillPagination.has_next}
-                            className="py-1 px-3 bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300 rounded-xl hover:bg-slate-200 dark:hover:bg-slate-600 disabled:opacity-50 disabled:cursor-not-allowed">
-                            Next
-                        </button>
-                        <button onClick={() => setTillPage(tillPagination.pages)} disabled={!tillPagination.has_next}
-                            className="py-1 px-3 bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300 rounded-xl hover:bg-slate-200 dark:hover:bg-slate-600 disabled:opacity-50 disabled:cursor-not-allowed">
-                            Last
+                            {tillViewAll ? 'Paginate' : 'View all'}
                         </button>
                     </div>
+                    {!tillViewAll && (
+                        <div className="flex items-center space-x-2">
+                            <button onClick={() => setTillPage(1)} disabled={!tillPagination.has_prev}
+                                className="py-1 px-3 bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300 rounded-xl hover:bg-slate-200 dark:hover:bg-slate-600 disabled:opacity-50 disabled:cursor-not-allowed">
+                                First
+                            </button>
+                            <button onClick={() => setTillPage(p => p - 1)} disabled={!tillPagination.has_prev}
+                                className="py-1 px-3 bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300 rounded-xl hover:bg-slate-200 dark:hover:bg-slate-600 disabled:opacity-50 disabled:cursor-not-allowed">
+                                Previous
+                            </button>
+                            <span className="text-sm text-slate-600 dark:text-slate-300">
+                                Page {tillPage} of {tillPagination.pages}
+                            </span>
+                            <button onClick={() => setTillPage(p => p + 1)} disabled={!tillPagination.has_next}
+                                className="py-1 px-3 bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300 rounded-xl hover:bg-slate-200 dark:hover:bg-slate-600 disabled:opacity-50 disabled:cursor-not-allowed">
+                                Next
+                            </button>
+                            <button onClick={() => setTillPage(tillPagination.pages)} disabled={!tillPagination.has_next}
+                                className="py-1 px-3 bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300 rounded-xl hover:bg-slate-200 dark:hover:bg-slate-600 disabled:opacity-50 disabled:cursor-not-allowed">
+                                Last
+                            </button>
+                        </div>
+                    )}
                 </div>
             )}
             {transactionType === 'float' &&
@@ -1488,6 +1516,11 @@ function TransactionsGrid() {
             <MonthlyCommissionReportModal
                 isOpen={isMonthlyCommissionOpen}
                 onClose={() => setIsMonthlyCommissionOpen(false)}
+            />
+
+            <FloatHealthReportModal
+                isOpen={isFloatHealthReportOpen}
+                onClose={() => setIsFloatHealthReportOpen(false)}
             />
         </div>
     );
