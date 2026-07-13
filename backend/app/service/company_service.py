@@ -385,6 +385,15 @@ class CompanyService:
             if not 5 <= len(company_data['shortcode']) <= 10 or not company_data['shortcode'].isdigit():
                 raise ValueError("Shortcode must be a 5-10 digit number.")
 
+            # If the company already exists, flag it but let onboarding proceed
+            # against the existing record instead of failing.
+            existing = self.db.session.query(Company).filter_by(
+                shortcode=company_data['shortcode']).first()
+            if existing:
+                logger.info(f"Company with shortcode {company_data['shortcode']} already exists "
+                            f"(id={existing.id}); proceeding with existing record")
+                return existing.id, "Company already exists — proceeding with the existing record", True
+
             # Generate unique company code if not provided
             company_code = company_data.get('company_number') or str(uuid.uuid4())[:8].upper()
             file_location = company_data.get('file_location') or None
@@ -555,25 +564,25 @@ class CompanyService:
                             cr12_file_path=file_location
                         )
 
-            return company.id, "Company onboarded successfully"
+            return company.id, "Company onboarded successfully", False
         except ValueError as ve:
             self.db.session.rollback()
             logger.error(f"Validation error: {str(ve)}")
-            return None, str(ve)
+            return None, str(ve), False
         except IntegrityError as ie:
             self.db.session.rollback()
-            logger.error(f"Integrity error: {str(ie)}")        
-            return None, "It is most likely that the company has already been onboarded"
+            logger.error(f"Integrity error: {str(ie)}")
+            return None, "A database constraint blocked onboarding — check the server logs for details", False
         except SQLAlchemyError as sae:
             self.db.session.rollback()
             logger.error(f"SQLAlchemy error: {str(sae)}")
-            return None, str(sae)
+            return None, str(sae), False
         except Exception as e:
             self.db.session.rollback()
             logger.error(f"Unexpected error: {str(e)}")
             import traceback
             logger.error(f"Traceback: {traceback.format_exc()}")
-            return None, f"Failed to onboard company: {str(e)}"
+            return None, f"Failed to onboard company: {str(e)}", False
     def validate_batch_company(self, file):
         """Validate a batch of companies from an Excel file."""
         try:

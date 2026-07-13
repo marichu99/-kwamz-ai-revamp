@@ -315,7 +315,7 @@ function CompanyList() {
         throw new Error(result.error || `Failed to ${companyId ? 'update' : 'create'} company`);
       }
 
-      if (companyId) {
+      if (companyId || result.already_exists) {
         await fetchCompanies();
       } else {
         setCompanies((prev) => [...prev, result.company]);
@@ -325,7 +325,11 @@ function CompanyList() {
       setIsCompanyModalOpen(false);
       setSelectedCompanyIds([]);
       resetForm();
-      showToast(`Company ${companyId ? 'updated' : 'created'} successfully!`, 'success');
+      if (result.already_exists) {
+        showToast('Company already exists — proceeding with the existing record.', 'info');
+      } else {
+        showToast(`Company ${companyId ? 'updated' : 'created'} successfully!`, 'success');
+      }
     } catch (error) {
       console.error(`Error ${companyId ? 'updating' : 'creating'} company:`, error.message);
       showToast(error.message, 'error');

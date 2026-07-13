@@ -21,7 +21,8 @@ class BankConfig(db.Model):
     retry_attempts = db.Column(db.Integer, default=3)
     timeout_seconds = db.Column(db.Integer, default=30)
     additional_config = db.Column(db.Text)  # JSON string
-    
+    time_created = db.Column(db.DateTime, nullable=False, server_default=db.func.now())
+
     def to_dict(self):
         return {
             'id': self.id,

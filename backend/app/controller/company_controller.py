@@ -87,17 +87,19 @@ def create_or_update_company(company_id=None):
         
         logger.info(f"Processed data for service: {data}")  # Debug log
         
+        already_exists = False
         if company_id:
             # Update existing company
             company_id, message = company_service.update_company(company_id, data)
         else:
             # Create new company
-            company_id, message = company_service.onboard_company(data)
-            
+            company_id, message, already_exists = company_service.onboard_company(data)
+
         if company_id is None:
             return jsonify({'error': message}), 400
-            
-        return jsonify({'id': company_id, 'message': message, 'company': {'id': company_id}}), 201 if not company_id else 200
+
+        return jsonify({'id': company_id, 'message': message, 'already_exists': already_exists,
+                        'company': {'id': company_id}}), 200
         
     except Exception as e:
         logger.error(f"Error in create_or_update_company route: {str(e)}")

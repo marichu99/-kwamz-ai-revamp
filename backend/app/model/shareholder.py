@@ -12,6 +12,7 @@ class Shareholder(db.Model):
     id_number = db.Column(db.String(50), nullable=True)
     shares = db.Column(db.Numeric(precision=5, scale=2), default=Decimal('0.00'), nullable=False)
     user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=True)
+    time_created = db.Column(db.DateTime, nullable=False, server_default=db.func.now())
 
     def __init__(self, company_id, name, shares=Decimal('0.00'), email=None, id_number=None, user_id=None):
         self.company_id = company_id

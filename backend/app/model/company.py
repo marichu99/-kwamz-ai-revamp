@@ -25,6 +25,7 @@ class Company(db.Model):
     agent_assigned_at = db.Column(db.Date, nullable=True)
     user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=True)
     agent_user_id = db.Column(db.Integer, nullable=True)
+    time_created = db.Column(db.DateTime, nullable=False, server_default=db.func.now())
 
     # Relationships
     shareholders = db.relationship('Shareholder', backref='company', lazy=True, cascade='all, delete-orphan')
