@@ -1,11 +1,20 @@
-import { Bell, ChevronDown, Clock, CheckCircle, Filter, Menu, Search, Sun } from 'lucide-react';
-import React from 'react';
+import { Bell, ChevronDown, Clock, CheckCircle, Filter, Menu, Moon, Search, Sun } from 'lucide-react';
+import React, { useState } from 'react';
 import UserDropdown from '../Dashboard/UserDropdown';
 import { useNavigate } from 'react-router-dom';
 
 function Header({ sideBarCollapsed, onToggleSideBar, currentPage, setCurrentPage, billingStatus }) {
     const navigate = useNavigate();
     const user = JSON.parse(localStorage.getItem("user"));
+    // Initial value comes from <html class="dark">, set by the inline script in index.html
+    const [isDark, setIsDark] = useState(() => document.documentElement.classList.contains('dark'));
+
+    const toggleTheme = () => {
+        const next = !isDark;
+        setIsDark(next);
+        document.documentElement.classList.toggle('dark', next);
+        localStorage.setItem('theme', next ? 'dark' : 'light');
+    };
 
     return (
         <div className='bg-white/80 dark:bg-slate-900/80 backdrop-blur-xl border-b border-slate-200/50 dark:border-slate-700/50 px-3 py-3 sm:px-6 sm:py-4'>
@@ -48,9 +57,12 @@ function Header({ sideBarCollapsed, onToggleSideBar, currentPage, setCurrentPage
                             <span className='text-xs font-medium'>Active</span>
                         </div>
                     )}
-                    <button className='p-2.5 rounded-xl text-slate-600 dark:text-slate-300
+                    <button
+                        onClick={toggleTheme}
+                        title={isDark ? 'Switch to light mode' : 'Switch to dark mode'}
+                        className='p-2.5 rounded-xl text-slate-600 dark:text-slate-300
                 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors'>
-                        <Sun className='w-5 h-5' />
+                        {isDark ? <Sun className='w-5 h-5' /> : <Moon className='w-5 h-5' />}
                     </button>
                     <button className='relative p-2.5 rounded-xl text-slate-600
                 dark:text-slate-300 hover:bg-slate-100

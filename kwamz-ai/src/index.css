@@ -1,5 +1,9 @@
 @import "tailwindcss";
 
+/* Class-based dark mode: `dark:` variants apply when <html> has the `dark`
+   class (set by the header toggle) instead of following the OS preference. */
+@custom-variant dark (&:where(.dark, .dark *));
+
 @keyframes dropdown-enter {
   from { opacity: 0; transform: translateY(-6px) scale(0.97); }
   to   { opacity: 1; transform: translateY(0)    scale(1); }
