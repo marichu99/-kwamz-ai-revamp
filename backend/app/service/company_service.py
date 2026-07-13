@@ -394,6 +394,11 @@ class CompanyService:
                             f"(id={existing.id}); proceeding with existing record")
                 return existing.id, "Company already exists — proceeding with the existing record", True
 
+            # The SELECT above autobegins a transaction (SQLAlchemy 2.x); close it
+            # so the explicit session.begin() below doesn't raise "A transaction
+            # is already begun on this Session".
+            self.db.session.rollback()
+
             # Generate unique company code if not provided
             company_code = company_data.get('company_number') or str(uuid.uuid4())[:8].upper()
             file_location = company_data.get('file_location') or None
