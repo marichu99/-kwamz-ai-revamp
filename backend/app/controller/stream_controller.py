@@ -1,10 +1,16 @@
 import logging
 from flask import Blueprint, Response, stream_with_context, request, jsonify
 from flask_jwt_extended import jwt_required
+from app import limiter
 
 logger = logging.getLogger(__name__)
 
 stream_bp = Blueprint('stream', __name__)
+
+# The live-feed endpoints are polled every 2s (prompt) or held open for the
+# whole scrape (MJPEG), so the global default limit (300/hour per IP) starves
+# them within minutes and the captcha/OTP dock never appears.
+limiter.exempt(stream_bp)
 
 
 @stream_bp.route('/<job_id>')
