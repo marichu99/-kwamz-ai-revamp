@@ -67,4 +67,7 @@ ENV FLASK_ENV=production
 
 # Set entrypoint and default command
 ENTRYPOINT ["/app/entryPoint.sh"]
-CMD ["gunicorn", "--bind", "0.0.0.0:5000", "--workers", "4", "run:app"]
+# Single worker process: the live-scrape feed (prompt/captcha/OTP mailboxes,
+# MJPEG frame queues, job registry) lives in process memory, so every request
+# for a job must hit the same process. Concurrency comes from threads instead.
+CMD ["gunicorn", "--bind", "0.0.0.0:5000", "--workers", "1", "--threads", "100", "--worker-class", "gthread", "--timeout", "120", "run:app"]
