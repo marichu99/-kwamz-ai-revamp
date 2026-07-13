@@ -872,7 +872,7 @@ class MpesaScraper:
         """
         from app.model.agent_swap import AgentSwap
 
-        agent_company = agent_company_service.get_agent_company_by_shortcode_(str(shortcode))
+        agent_company = agent_company_service.get_agent_company_by_shortcode_(str(shortcode), user_id=self.user_id)
         if not agent_company:
             logger.info(f"[SWAPS] No AgentCompany for shortcode {shortcode} — skipping.")
             return
@@ -3495,7 +3495,7 @@ class MpesaScraper:
             logger.info(f"[INFO] Found {len(rows)} operator row(s) for short_code {short_code}")
 
             agent_company_service_local = AgentCompanyService()
-            agent_company = agent_company_service_local.get_agent_company_by_shortcode_(str(short_code))
+            agent_company = agent_company_service_local.get_agent_company_by_shortcode_(str(short_code), user_id=self.user_id)
 
             for idx, row in enumerate(rows):
                 try:
@@ -3664,17 +3664,27 @@ class MpesaScraper:
             # system under a different company/role, we reuse that record rather than duplicating.
             id_conflict = UserAgent.query.filter_by(idnumber=id_number).first()
             if id_conflict:
-                id_conflict.firstname         = first_name or id_conflict.firstname
-                id_conflict.lastname          = lastname   or id_conflict.lastname
-                id_conflict.authenticity_desc = f"Scraped from KYC (short_code={short_code})"
+                # Same person can operate tills for multiple tenants. If the record
+                # belongs to another user, only link it to this till via the M2M
+                # table (below) — never steal user_id / primary till / role from
+                # the other tenant.
+                belongs_to_other_user = (
+                    id_conflict.user_id is not None
+                    and self.user_id is not None
+                    and id_conflict.user_id != self.user_id
+                )
+                id_conflict.firstname = first_name or id_conflict.firstname
+                id_conflict.lastname  = lastname   or id_conflict.lastname
                 if phone:
                     id_conflict.phone_number = phone
-                if operator_role:
-                    id_conflict.operator_role = operator_role
-                if self.user_id:
-                    id_conflict.user_id = self.user_id
-                if agent_company and not id_conflict.agent_company_id:
-                    id_conflict.agent_company_id = agent_company.id
+                if not belongs_to_other_user:
+                    id_conflict.authenticity_desc = f"Scraped from KYC (short_code={short_code})"
+                    if operator_role:
+                        id_conflict.operator_role = operator_role
+                    if self.user_id:
+                        id_conflict.user_id = self.user_id
+                    if agent_company and not id_conflict.agent_company_id:
+                        id_conflict.agent_company_id = agent_company.id
                 user_agent = id_conflict
             else:
                 user_agent = UserAgent(

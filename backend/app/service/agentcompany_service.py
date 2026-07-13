@@ -716,11 +716,23 @@ class AgentCompanyService:
                 'error': str(e)
             }
         
-    def get_agent_company_by_shortcode_(self, short_code: str) -> AgentCompany | None:
-        """Get agent company by shortcode"""
+    def get_agent_company_by_shortcode_(self, short_code: str, user_id=None) -> AgentCompany | None:
+        """Get agent company by shortcode.
+
+        Shortcodes are stored inconsistently with/without leading zeros (portal
+        hierarchy scrape stores '040610', KYC scrape passes '40610'), so compare
+        with leading zeros stripped. Pass user_id to scope to that user's tills,
+        since stripped shortcodes are not unique across tenants.
+        """
         try:
-            return AgentCompany.query.filter_by(short_code=short_code).first()
-           
+            normalized = str(short_code).lstrip('0') or '0'
+            query = AgentCompany.query.filter(
+                db.func.ltrim(AgentCompany.short_code, '0') == normalized
+            )
+            if user_id is not None:
+                query = query.filter(AgentCompany.user_id == user_id)
+            return query.first()
+
         except Exception as e:
             current_app.logger.error(f"Error getting agent company by shortcode: {str(e)}")
             return None

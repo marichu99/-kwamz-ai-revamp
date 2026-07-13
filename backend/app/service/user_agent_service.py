@@ -64,6 +64,10 @@ class UserAgentService:
         """
         primary = user_agent.agent_company
 
+        # JWT identities arrive as strings — normalize before comparing to int columns
+        if requesting_user_id is not None:
+            requesting_user_id = int(requesting_user_id)
+
         # Scope M2M assignments to the requesting user's own companies only
         all_companies = user_agent.agent_companies
         if requesting_user_id is not None:
@@ -72,6 +76,16 @@ class UserAgentService:
                 if ac.user_id == requesting_user_id
                 or (ac.company and ac.company.user_id == requesting_user_id)
             ]
+
+            # Never present another tenant's till as this agent's primary —
+            # fall back to the first of the requesting user's own tills.
+            if primary is not None:
+                primary_is_own = (
+                    primary.user_id == requesting_user_id
+                    or (primary.company and primary.company.user_id == requesting_user_id)
+                )
+                if not primary_is_own:
+                    primary = all_companies[0] if all_companies else None
 
         return {
             'id': user_agent.id,
@@ -84,7 +98,7 @@ class UserAgentService:
             'image_loc': user_agent.image_loc,
             'date_of_birth': user_agent.date_of_birth.isoformat() if user_agent.date_of_birth else None,
             'operator_role': user_agent.operator_role,
-            'agent_company_id': user_agent.agent_company_id,
+            'agent_company_id': primary.id if primary else None,
             'agent_company_name': primary.company_name if primary else None,
             'agent_company_ids': [ac.id for ac in all_companies],
             'agent_company_names': [ac.company_name for ac in all_companies],
@@ -98,7 +112,7 @@ class UserAgentService:
                 'identity_status': company.identity_status,
                 'top_organization': company.top_organization,
                 'parent_short_code': company.parent_short_code,
-                'is_primary': company.id == user_agent.agent_company_id
+                'is_primary': company.id == (primary.id if primary else None)
             } for company in all_companies],
             'primary_company': self._serialize_primary_company(primary),
         }
@@ -228,13 +242,18 @@ class UserAgentService:
         """
         try:
             logger.info(f"The user id is {user_id}")
+            user_id = int(user_id)
             is_scraped   = UserAgent.idnumber.like('MPESA-%')
             still_linked = exists().where(
                 user_agent_companies.c.user_agent_id == UserAgent.id
             )
+            # An operator can serve tills for several tenants but the record is
+            # unique per ID number, so also include agents owned by another user
+            # that are M2M-linked to one of this user's tills.
+            on_own_till = UserAgent.agent_companies.any(AgentCompany.user_id == user_id)
             users = (
                 UserAgent.query
-                .filter_by(user_id=user_id)
+                .filter(or_(UserAgent.user_id == user_id, on_own_till))
                 .filter(
                     or_(
                         ~is_scraped,   # manual agent — always include
