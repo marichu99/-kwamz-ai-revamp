@@ -3553,6 +3553,16 @@ class MpesaScraper:
 
             agent_company_service_local = AgentCompanyService()
             agent_company = agent_company_service_local.get_agent_company_by_shortcode_(str(short_code), user_id=self.user_id)
+            if agent_company is None:
+                # The till row may not exist yet (it is onboarded later in the
+                # same cycle, or the previous session died before creating it).
+                # Operators saved now will be orphaned ("Unknown Company" in the
+                # agents grid) until the next successful scrape of this till
+                # re-links them by ID number.
+                logger.warning(
+                    f"[KYC] No AgentCompany found for short_code={short_code} "
+                    f"(user_id={self.user_id}) — operators will be saved unlinked"
+                )
 
             for idx, row in enumerate(rows):
                 try:
