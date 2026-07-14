@@ -489,6 +489,12 @@ class TransactionService:
         Returns:
             Dict with processing results
         """
+        # Normalize shortcodes to str — the scraper passes till codes as ints,
+        # and a varchar = integer comparison makes Postgres raise on every row
+        # (this silently zeroed all float saves from 2026-06-27 to 2026-07-14).
+        company_shortcode = str(company_shortcode).strip() if company_shortcode is not None else None
+        business_shortcode = str(business_shortcode).strip() if business_shortcode is not None else None
+
         updated_count = 0
         created_count = 0
         error_count = 0
@@ -630,9 +636,16 @@ class TransactionService:
 
             # Log summary
             logger.info(f"\n📊 Batch Update Summary:")
-            
+
             logger.info(f"Successfully processed {updated_count + created_count} transactions "
                        f"(updated: {updated_count}, created: {created_count}) for {business_shortcode}")
+            if error_count:
+                # Surface the actual failures — these were previously only in the
+                # (discarded) return payload, which hid a 17-day total save outage.
+                logger.error(
+                    f"[BATCH] {error_count}/{len(transactions_data)} rows FAILED for "
+                    f"{business_shortcode}; first errors: {errors[:3]}"
+                )
             
             return {
                 "success": True,

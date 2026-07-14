@@ -215,7 +215,11 @@ class CompanyService:
 
     def get_company_by_shortcode(self, company_shortcode):
         """Retrieve a company by shortcode."""
-        return self.db.session.query(Company).filter_by(shortcode=company_shortcode).first()
+        if company_shortcode is None:
+            return None
+        # Coerce to str: shortcode is varchar, and an int parameter makes
+        # Postgres raise "operator does not exist: character varying = integer"
+        return self.db.session.query(Company).filter_by(shortcode=str(company_shortcode).strip()).first()
 
     def create_company(self, company_data):
         """Create a new company."""
