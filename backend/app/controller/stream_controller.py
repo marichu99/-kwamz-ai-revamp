@@ -57,6 +57,10 @@ def kill_stream(job_id: str):
 
     try:
         scraper = _job_registry.get(job_id)
+        if scraper:
+            # For jobs still queued for a scrape slot there is no browser yet —
+            # the flag makes them abort right after they acquire the slot.
+            scraper.cancel_requested = True
         if scraper and scraper.browser:
             scraper.browser.close()
             logger.info(f"[STREAM-KILL] Browser closed for job={job_id}")
@@ -115,7 +119,10 @@ def submit_captcha(job_id: str):
 def get_prompt(job_id: str):
     """
     Return the current input prompt the frontend should show for this job.
-    Response: { prompt: 'captcha'|'otp'|null, captcha_b64: '<png>'|null }
+    Response: { prompt: 'captcha'|'otp'|'relogin'|'queued'|null, captcha_b64: '<png>'|null }
+    'relogin' means the browser session died mid-login — the user must
+    restart the scrape and log in again.  'queued' means the job is waiting
+    for a free scrape slot (MAX_CONCURRENT_SCRAPES).
     captcha_b64 is set when the scraper has captured the captcha element so
     the frontend can display it directly instead of reading it from the stream.
     """

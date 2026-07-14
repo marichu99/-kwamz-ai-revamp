@@ -195,7 +195,7 @@ function LiveScrapeFeed({ jobId, shortCode, isOpen, onClose, onStreamEnd, onKill
   const [minimized, setMinimized] = useState(false);
   const [fullscreen, setFullscreen] = useState(false);
   const [killing, setKilling] = useState(false);
-  // prompt: 'captcha' | 'otp' | null — driven by polling GET /stream/:id/prompt
+  // prompt: 'captcha' | 'otp' | 'relogin' | 'queued' | null — driven by polling GET /stream/:id/prompt
   const [prompt, setPrompt] = useState(null);
   const [captchaImage, setCaptchaImage] = useState(null); // base64 PNG from backend
   // Hide the dock right after the user submits; re-show if the prompt changes again
@@ -426,13 +426,39 @@ function LiveScrapeFeed({ jobId, shortCode, isOpen, onClose, onStreamEnd, onKill
         </div>
 
         {/* ── Input dock (captcha or OTP, same spot) ── */}
-        {jobId && prompt && !dockHidden && (
+        {jobId && (prompt === 'captcha' || prompt === 'otp') && !dockHidden && (
           <InputDock
             mode={prompt}
             jobId={jobId}
             captchaImage={captchaImage}
             onSubmitted={() => setDockHidden(true)}
           />
+        )}
+
+        {/* ── Queued — all scrape slots busy, job starts when one frees up ── */}
+        {jobId && prompt === 'queued' && (
+          <div className="flex flex-col items-center gap-1.5 py-3 px-4 bg-slate-900 border-t border-amber-700/40">
+            <span className="text-xs font-semibold uppercase tracking-widest text-amber-400">
+              Queued
+            </span>
+            <p className="text-xs text-slate-300 text-center max-w-md">
+              All scraper slots are currently busy — this job will start
+              automatically as soon as one frees up.
+            </p>
+          </div>
+        )}
+
+        {/* ── Session lost — the browser died before/while asking for input ── */}
+        {jobId && prompt === 'relogin' && (
+          <div className="flex flex-col items-center gap-1.5 py-3 px-4 bg-slate-900 border-t border-red-700/40">
+            <span className="text-xs font-semibold uppercase tracking-widest text-red-400">
+              Session Lost
+            </span>
+            <p className="text-xs text-slate-300 text-center max-w-md">
+              The M-Pesa portal session ended before login could complete.
+              Please close this feed and start the scrape again to log in afresh.
+            </p>
+          </div>
         )}
 
         {/* ── Footer ── */}

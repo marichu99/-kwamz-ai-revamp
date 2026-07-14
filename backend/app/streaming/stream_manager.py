@@ -15,66 +15,116 @@ def _ts() -> str:
 
 class StreamManager:
     """
-    Thread-safe registry of per-job MJPEG frame queues.
+    Thread-safe registry of per-job MJPEG streams with per-viewer fan-out.
 
-    The scraper thread pushes JPEG bytes via push_frame().
-    The Flask request thread consumes them via consume().
+    The scraper thread pushes JPEG bytes via push_frame(); each connected
+    viewer gets its own small queue, so two viewers of the same job no
+    longer split frames between them.  The latest frame is cached per job
+    so a newly connected viewer sees something immediately instead of
+    waiting for the portal page to repaint.  wants_frame() lets the CDP
+    frame callback skip decode/queue work entirely for unwatched streams.
     """
+
+    # Refresh the cached preview frame this often while nobody is watching,
+    # so a viewer who connects later doesn't see an ancient frame.
+    IDLE_FRAME_INTERVAL = 5.0
+    # Small per-viewer queue = fresh frames; overflow drops the oldest.
+    CONSUMER_QUEUE_SIZE = 5
 
     def __init__(self):
         self._streams: dict = {}
         self._lock = threading.Lock()
+        self._next_consumer_id = 0
 
     def create(self, job_id: str) -> None:
         with self._lock:
             if job_id not in self._streams:
-                self._streams[job_id] = queue.Queue(maxsize=60)
-                logger.info(f"[STREAM {_ts()}] QUEUE CREATED  job={job_id}")
+                self._streams[job_id] = {
+                    'consumers': {},      # consumer_id -> Queue
+                    'last_frame': None,   # most recent JPEG for instant first paint
+                    'last_frame_ts': 0.0,
+                }
+                logger.info(f"[STREAM {_ts()}] STREAM CREATED  job={job_id}")
             else:
-                logger.info(f"[STREAM {_ts()}] queue already exists (idempotent) job={job_id}")
+                logger.info(f"[STREAM {_ts()}] stream already exists (idempotent) job={job_id}")
+
+    def wants_frame(self, job_id: str) -> bool:
+        """
+        True when pushing a frame would be useful: a viewer is connected, or
+        the cached preview frame is stale.  The CDP callback checks this
+        before doing any base64 decoding so unwatched jobs cost ~nothing.
+        """
+        with self._lock:
+            s = self._streams.get(job_id)
+            if s is None:
+                return False
+            if s['consumers']:
+                return True
+            return (time.time() - s['last_frame_ts']) >= self.IDLE_FRAME_INTERVAL
 
     def push_frame(self, job_id: str, jpeg_bytes: bytes) -> None:
         with self._lock:
-            q = self._streams.get(job_id)
-        if q is None:
-            logger.warning(f"[STREAM {_ts()}] push_frame: NO QUEUE for job={job_id} — frame dropped")
-            return
-        try:
-            q.put_nowait(jpeg_bytes)
-        except queue.Full:
+            s = self._streams.get(job_id)
+            if s is None:
+                logger.warning(f"[STREAM {_ts()}] push_frame: NO STREAM for job={job_id} — frame dropped")
+                return
+            s['last_frame'] = jpeg_bytes
+            s['last_frame_ts'] = time.time()
+            consumer_queues = list(s['consumers'].values())
+        for q in consumer_queues:
             try:
-                q.get_nowait()
                 q.put_nowait(jpeg_bytes)
-            except (queue.Empty, queue.Full):
-                pass
+            except queue.Full:
+                try:
+                    q.get_nowait()
+                    q.put_nowait(jpeg_bytes)
+                except (queue.Empty, queue.Full):
+                    pass
 
     def consume(self, job_id: str, wait_timeout: float = 10.0):
         """
         Generator that yields JPEG frames for the given job.
         Exits when the stream is closed (sentinel None) or after a 120 s idle timeout.
-        Waits up to `wait_timeout` seconds for the queue to be created.
+        Waits up to `wait_timeout` seconds for the stream to be created.
         """
         deadline = time.time() + wait_timeout
-        q = None
         while time.time() < deadline:
             with self._lock:
-                q = self._streams.get(job_id)
-            if q is not None:
-                break
+                if job_id in self._streams:
+                    break
             time.sleep(0.1)
 
-        if q is None:
-            logger.error(
-                f"[STREAM {_ts()}] CONSUMER ARRIVED BUT QUEUE IS MISSING after "
-                f"{wait_timeout}s — job={job_id}"
-            )
-            return
+        q = queue.Queue(maxsize=self.CONSUMER_QUEUE_SIZE)
+        with self._lock:
+            s = self._streams.get(job_id)
+            if s is None:
+                logger.error(
+                    f"[STREAM {_ts()}] CONSUMER ARRIVED BUT STREAM IS MISSING after "
+                    f"{wait_timeout}s — job={job_id}"
+                )
+                return
+            self._next_consumer_id += 1
+            consumer_id = self._next_consumer_id
+            s['consumers'][consumer_id] = q
+            last_frame = s['last_frame']
 
-        logger.info(f"[STREAM {_ts()}] CONSUMER CONNECTED  job={job_id}")
+        logger.info(f"[STREAM {_ts()}] CONSUMER {consumer_id} CONNECTED  job={job_id}")
         frames_sent = 0
-        while True:
-            try:
-                frame = q.get(timeout=120)
+        try:
+            # Serve the cached frame right away so the viewer isn't stuck on a
+            # blank <img> until the (possibly static) portal page next repaints.
+            if last_frame is not None:
+                frames_sent += 1
+                yield last_frame
+            while True:
+                try:
+                    frame = q.get(timeout=120)
+                except queue.Empty:
+                    logger.warning(
+                        f"[STREAM {_ts()}] IDLE TIMEOUT after {frames_sent} frames — "
+                        f"closing consumer {consumer_id} job={job_id}"
+                    )
+                    break
                 if frame is None:
                     logger.info(
                         f"[STREAM {_ts()}] SENTINEL received — stream done "
@@ -85,22 +135,32 @@ class StreamManager:
                 if frames_sent == 1:
                     logger.info(f"[STREAM {_ts()}] FIRST FRAME yielded  job={job_id}")
                 yield frame
-            except queue.Empty:
-                logger.warning(
-                    f"[STREAM {_ts()}] IDLE TIMEOUT after {frames_sent} frames — "
-                    f"closing stream job={job_id}"
-                )
-                break
+        finally:
+            # Runs on sentinel/timeout AND when the browser disconnects
+            # (GeneratorExit) — the consumer never leaks.
+            with self._lock:
+                s = self._streams.get(job_id)
+                if s is not None:
+                    s['consumers'].pop(consumer_id, None)
+            logger.info(
+                f"[STREAM {_ts()}] CONSUMER {consumer_id} DISCONNECTED "
+                f"(sent {frames_sent} frames) job={job_id}"
+            )
 
     def close(self, job_id: str) -> None:
         with self._lock:
-            q = self._streams.pop(job_id, None)
-        if q:
-            try:
-                q.put_nowait(None)
-            except queue.Full:
-                pass
-        logger.info(f"[STREAM {_ts()}] QUEUE CLOSED  job={job_id}")
+            s = self._streams.pop(job_id, None)
+        if s:
+            for q in s['consumers'].values():
+                try:
+                    q.put_nowait(None)
+                except queue.Full:
+                    try:
+                        q.get_nowait()
+                        q.put_nowait(None)
+                    except (queue.Empty, queue.Full):
+                        pass
+        logger.info(f"[STREAM {_ts()}] STREAM CLOSED  job={job_id}")
 
 
 stream_manager = StreamManager()

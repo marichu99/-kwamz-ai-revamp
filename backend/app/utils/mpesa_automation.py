@@ -61,6 +61,14 @@ load_dotenv()
 # Module-level job registry: job_id -> MpesaScraper instance (for kill_stream)
 _job_registry: dict = {}
 
+# Cap on simultaneously running Playwright browsers — each one is a full
+# Chromium (~300-500 MB RSS plus render CPU), so unbounded launches OOM the
+# host and every feed goes blank.  Jobs beyond the cap block on this
+# semaphore (surfaced to the UI as a 'queued' prompt) and start FIFO-ish
+# as slots free up.
+MAX_CONCURRENT_SCRAPES = int(os.getenv('MAX_CONCURRENT_SCRAPES', '20'))
+_scrape_slots = threading.BoundedSemaphore(MAX_CONCURRENT_SCRAPES)
+
 
 class MpesaScraper:
     """One instance per scrape job — all state is instance-local, safe for 50+ concurrent jobs."""
@@ -81,6 +89,9 @@ class MpesaScraper:
         self.till_scraping_shortfall = {}
         self.context = None
         self.browser = None
+        # Set by kill_stream for jobs that are still waiting on a scrape slot
+        # (no browser to close yet) — checked right after the slot is acquired.
+        self.cancel_requested = False
 
     def _start_cdp_screencast(self, page, job_id: str):
 
@@ -107,9 +118,13 @@ class MpesaScraper:
 
         def _on_frame(event):
             try:
-                jpeg = base64.b64decode(event['data'])
-                stream_manager.push_frame(job_id, jpeg)
-                logger.debug(f"Screencast frame pushed for job {job_id} ({len(jpeg)} bytes)")
+                # Skip the base64 decode + queue work entirely when nobody is
+                # watching this job (the cached preview frame is still refreshed
+                # every few seconds so a late viewer gets an instant first paint).
+                if stream_manager.wants_frame(job_id):
+                    jpeg = base64.b64decode(event['data'])
+                    stream_manager.push_frame(job_id, jpeg)
+                    logger.debug(f"Screencast frame pushed for job {job_id} ({len(jpeg)} bytes)")
                 # _on_frame is called from Playwright's internal asyncio thread.
                 # We must NOT call the sync cdp.send() here (it would try to
                 # greenlet-switch back to the scraper thread, which is blocked on
@@ -122,12 +137,14 @@ class MpesaScraper:
                 logger.warning(f"Screencast frame drop: {exc}")
 
         cdp.on('Page.screencastFrame', _on_frame)
+        # Modest quality/rate: the portal is mostly static, and at high job
+        # counts browser-side JPEG encoding is a real CPU cost per stream.
         cdp.send('Page.startScreencast', {
             'format': 'jpeg',
-            'quality': 75,
-            'maxWidth': 1280,
-            'maxHeight': 720,
-            'everyNthFrame': 1,
+            'quality': 50,
+            'maxWidth': 960,
+            'maxHeight': 540,
+            'everyNthFrame': 3,
         })
         logger.info(f"CDP screencast started for job {job_id}")
         return cdp
@@ -159,6 +176,10 @@ class MpesaScraper:
             logger.info(f"[CAPTCHA] Image captured ({len(captcha_bytes)} bytes)")
             return b64
         except Exception as e:
+            if 'has been closed' in str(e):
+                # Page/context/browser is gone — no point prompting for a captcha
+                # on a dead session; let run() surface a re-login prompt instead.
+                raise
             logger.warning(f"[CAPTCHA] Could not capture image: {e}")
             return None
 
@@ -207,7 +228,24 @@ class MpesaScraper:
         from app.streaming.stream_manager import stream_manager
         _cdp = None
 
+        # Wait for a browser slot before launching Chromium; tell the live
+        # feed we're queued so the viewer isn't left staring at a spinner.
+        if not _scrape_slots.acquire(blocking=False):
+            logger.info(
+                f"[QUEUE] All {MAX_CONCURRENT_SCRAPES} scrape slots busy — job={job_id} waiting for a slot…"
+            )
+            if job_id:
+                from app.streaming.stream_manager import prompt_manager
+                prompt_manager.set(job_id, 'queued')
+            _scrape_slots.acquire()
+            if job_id:
+                from app.streaming.stream_manager import prompt_manager
+                prompt_manager.clear(job_id)
+            logger.info(f"[QUEUE] Slot acquired — job={job_id} starting")
+
         try:
+            if self.cancel_requested:
+                raise Exception(f"[QUEUE] Job {job_id} was killed while waiting for a scrape slot")
             with sync_playwright() as p:
                 self.browser = p.chromium.launch(
                     headless=False,
@@ -323,13 +361,30 @@ class MpesaScraper:
                     # so we can call it again without re-navigating.
                     self.process_organization_rows(page)
 
+        except Exception as exc:
+            # The browser/page dying mid-flow (user killed the stream, portal
+            # crash, cross-thread close) is unrecoverable — tell the frontend
+            # to ask the user to log in again instead of waiting for input.
+            if job_id and 'has been closed' in str(exc):
+                from app.streaming.stream_manager import prompt_manager
+                prompt_manager.set(job_id, 'relogin')
+                logger.error(f"[SESSION-LOST] Browser session died (job={job_id}) — prompting re-login: {exc}")
+            raise
+
         finally:
+            # Free the browser slot first so a queued job can start even if
+            # the cleanup below hits an error.
+            _scrape_slots.release()
             # Always close the stream — regardless of where an exception was raised
             if job_id:
                 from app.streaming.stream_manager import otp_mailbox, captcha_mailbox, prompt_manager
                 otp_mailbox.unregister(job_id)
                 captcha_mailbox.unregister(job_id)
-                prompt_manager.clear(job_id)
+                # Keep a 'relogin' prompt alive so the frontend poll can still
+                # see it after the job thread has died.
+                current_prompt = prompt_manager.get(job_id)
+                if not current_prompt or current_prompt.get('type') != 'relogin':
+                    prompt_manager.clear(job_id)
                 _job_registry.pop(job_id, None)
             if _cdp:
                 try:
