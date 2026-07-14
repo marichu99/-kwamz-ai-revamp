@@ -140,14 +140,17 @@ class MpesaScraper:
                 logger.warning(f"Screencast frame drop: {exc}")
 
         cdp.on('Page.screencastFrame', _on_frame)
-        # Modest quality/rate: the portal is mostly static, and at high job
-        # counts browser-side JPEG encoding is a real CPU cost per stream.
+        # Modest quality: the portal is mostly static, and at high job counts
+        # browser-side JPEG encoding is a real CPU cost per stream.
+        # everyNthFrame stays 1 — on a loaded host paints are already rare,
+        # and skipping compositor frames can delay the viewer's first frame
+        # indefinitely (the unwatched-stream skip provides the real savings).
         cdp.send('Page.startScreencast', {
             'format': 'jpeg',
             'quality': 50,
             'maxWidth': 960,
             'maxHeight': 540,
-            'everyNthFrame': 3,
+            'everyNthFrame': 1,
         })
         logger.info(f"CDP screencast started for job {job_id}")
         return cdp
