@@ -556,7 +556,7 @@ function CompanyList() {
               <th className="px-4 py-3 font-semibold">Live Feed</th>
             </tr>
           </thead>
-          <tbody>
+          <tbody className="text-slate-800 dark:text-white">
             {paginatedCompanies.map((c, index) => (
               <tr
                 key={c.id}

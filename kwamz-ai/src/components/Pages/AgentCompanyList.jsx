@@ -884,7 +884,7 @@ function AgentCompanyList() {
               <th className="px-4 py-3 font-semibold">Fraud Status</th>
             </tr>
           </thead>
-          <tbody>
+          <tbody className="text-slate-800 dark:text-white">
             {paginatedAgentCompanies.map((agentCompany, index) => {
               const floatAccount = getFloatAccount(agentCompany);
               const commissionAccount = getCommissionAccount(agentCompany);
