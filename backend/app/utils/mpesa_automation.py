@@ -92,6 +92,9 @@ class MpesaScraper:
         # Set by kill_stream for jobs that are still waiting on a scrape slot
         # (no browser to close yet) — checked right after the slot is acquired.
         self.cancel_requested = False
+        # Several failure paths can repeat every scrape cycle — cap the
+        # session-timeout email at one per job so the inbox isn't flooded.
+        self._timeout_email_sent = False
 
     def _start_cdp_screencast(self, page, job_id: str):
 
@@ -395,6 +398,17 @@ class MpesaScraper:
                 stream_manager.close(job_id)
 
 
+
+    def _notify_session_timeout(self) -> None:
+        """Send the session-timeout email at most once per scrape job."""
+        if self._timeout_email_sent:
+            logger.info("[EMAIL] Session-timeout email already sent for this job — skipping")
+            return
+        if not self.user:
+            self.user = User.query.filter_by(id=self.user_id).first()
+        if self.user and self.user.email:
+            self._timeout_email_sent = True
+            send_session_timeout_email(self.user.email)
 
     def _is_valid_captcha(self, solution: str) -> bool:
 
@@ -1569,7 +1583,7 @@ class MpesaScraper:
             logger.error(f"[ERROR] An error has occurred {e}")
             if _retry_count + 1 >= max_retries:
                 logger.error(f"[ERROR] Export failed after {max_retries} attempts — sending session timeout email")
-                send_session_timeout_email(self.user.email)
+                self._notify_session_timeout()
                 return pd.DataFrame(), False
             return self.save_table_to_dataframe_download(page=page, business_shortcode=business_shortcode, additional_category=additional_category, _retry_count=_retry_count + 1)
 
@@ -2187,11 +2201,7 @@ class MpesaScraper:
 
         except Exception as e:
             logger.error(f"[WARNING] Error clicking next page: {e}")
-            self.user = User.query.filter_by(id=self.user_id).first()
-
-            if self.user:
-                # send_session_timeout_email(user.email, user.first_name)
-                send_session_timeout_email(self.user.email)
+            self._notify_session_timeout()
             return False
 
     def go_previous_on_organisation(self, page: Page):
@@ -3056,11 +3066,7 @@ class MpesaScraper:
         
         except Exception as e:
             logger.error(f"[ERROR] Could not find date picker inputs: {e}")
-            self.user = User.query.filter_by(id=self.user_id).first()
-            if self.user:
-                send_session_timeout_email(self.user.email)
-                # context.close()
-                # browser.close()
+            self._notify_session_timeout()
             return False
     
         try:
@@ -3384,17 +3390,10 @@ class MpesaScraper:
             
                 # Find the End Time input (first date picker with placeholder "End Time")
                 end_time_input = page.wait_for_selector(
-                    "//input[@placeholder='End Time']", 
+                    "//input[@placeholder='End Time']",
                     timeout=10000
                 )
                 logger.info("[✓] Found End Time date picker input")
-                self.user = User.query.filter_by(id=self.user_id).first()
-                if self.user:
-                    # send_session_timeout_email(user.email)
-                    send_session_timeout_email(self.user.email)
-                    # context.close()
-                    # browser.close()
-                
 
             except Exception as e:
                 logger.error(f"[ERROR] Could not find date picker inputs: {e}")
