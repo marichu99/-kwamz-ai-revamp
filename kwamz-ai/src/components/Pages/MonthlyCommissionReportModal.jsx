@@ -6,6 +6,7 @@ import {
 } from 'lucide-react';
 import axios from 'axios';
 import config from '../../Config';
+import { CompanyDropdown } from '../Dashboard/DashboardHeader';
 
 const API = config.API_URL || 'http://localhost:5000';
 const token = () => localStorage.getItem('token');
@@ -63,6 +64,9 @@ export default function MonthlyCommissionReportModal({ isOpen, onClose }) {
     const [sortDir, setSortDir]     = useState('desc');
     const [search, setSearch]       = useState('');
     const [exporting, setExporting] = useState(null); // 'pdf' | 'excel' | null
+    // Companies linked to the logged-in user; null = all companies
+    const [companies, setCompanies] = useState([]);
+    const [selectedCompany, setSelectedCompany] = useState(null);
 
     const MONTH_NAMES = [
         'January','February','March','April','May','June',
@@ -76,7 +80,10 @@ export default function MonthlyCommissionReportModal({ isOpen, onClose }) {
         try {
             const { data } = await axios.get(
                 `${API}/transactions/monthly-commission-report`,
-                { params: { year, month }, headers: { Authorization: `Bearer ${token()}` } }
+                {
+                    params: { year, month, ...(selectedCompany ? { company_id: selectedCompany.id } : {}) },
+                    headers: { Authorization: `Bearer ${token()}` },
+                }
             );
             if (data.success) setReport(data.data);
             else setError(data.error || 'Failed to load report');
@@ -85,9 +92,19 @@ export default function MonthlyCommissionReportModal({ isOpen, onClose }) {
         } finally {
             setLoading(false);
         }
-    }, [year, month]);
+    }, [year, month, selectedCompany]);
 
     useEffect(() => { if (isOpen) fetchReport(); }, [isOpen, fetchReport]);
+
+    // Load the user's companies once, when the modal first opens
+    useEffect(() => {
+        if (!isOpen || companies.length > 0) return;
+        axios.get(`${API}/transactions/user-companies`, {
+            headers: { Authorization: `Bearer ${token()}` },
+        })
+            .then(({ data }) => { if (data.success) setCompanies(data.data); })
+            .catch(() => { /* dropdown simply stays hidden */ });
+    }, [isOpen, companies.length]);
 
     const handleExport = async (format) => {
         setExporting(format);
@@ -96,7 +113,7 @@ export default function MonthlyCommissionReportModal({ isOpen, onClose }) {
                 ? '/transactions/monthly-commission-report-pdf'
                 : '/transactions/monthly-commission-report-excel';
             const resp = await axios.get(`${API}${endpoint}`, {
-                params: { year, month },
+                params: { year, month, ...(selectedCompany ? { company_id: selectedCompany.id } : {}) },
                 headers: { Authorization: `Bearer ${token()}` },
                 responseType: 'blob',
             });
@@ -208,6 +225,14 @@ export default function MonthlyCommissionReportModal({ isOpen, onClose }) {
                             <ChevronDown className="absolute right-2 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-slate-400 pointer-events-none" />
                         </div>
                     </div>
+                    {/* Company (scoped to the logged-in user) */}
+                    {companies.length > 0 && (
+                        <CompanyDropdown
+                            companies={companies}
+                            selectedCompany={selectedCompany}
+                            onCompanyChange={setSelectedCompany}
+                        />
+                    )}
                     {/* Search */}
                     <input
                         type="text"

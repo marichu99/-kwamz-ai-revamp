@@ -1,7 +1,7 @@
 import React, { useState, useRef, useEffect } from 'react'
 import { RefreshCw, TrendingUp, TrendingDown, Minus, Calendar, Building2, ChevronDown, Check } from 'lucide-react'
 
-function CompanyDropdown({ companies, selectedCompany, onCompanyChange }) {
+export function CompanyDropdown({ companies, selectedCompany, onCompanyChange }) {
   const [open, setOpen] = useState(false)
   const ref = useRef(null)
 

@@ -20,7 +20,14 @@ class MonthlyCommissionReportService:
     """
 
     def _available_months(self, company_shortcodes=None):
-        """Return list of {month, year, label, total} for months that have rollup data."""
+        """Return list of {month, year, label, total} for months that have rollup data.
+
+        company_shortcodes semantics: None = no filter; empty set = the scoped
+        company has no tills, so nothing can match (must NOT fall through to
+        the unfiltered query).
+        """
+        if company_shortcodes is not None and not company_shortcodes:
+            return []
         sc_filter = ""
         params = {}
         if company_shortcodes:
@@ -66,6 +73,9 @@ class MonthlyCommissionReportService:
         Rollup transactions are posted on the 1st of month+1, so we query
         the next calendar month's transactions.
         """
+        # None = no filter; empty set = scoped company has no tills → no rows.
+        if company_shortcodes is not None and not company_shortcodes:
+            return []
         rollup_year, rollup_month = self._next_month(year, month)
         sc_filter = ""
         params = {"year": rollup_year, "month": rollup_month}
