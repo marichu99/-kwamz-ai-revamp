@@ -1,5 +1,6 @@
+import bisect
 from collections import defaultdict
-from datetime import datetime
+from datetime import datetime, timedelta
 from decimal import Decimal
 from app.model.transaction import Transaction
 from app.service.fraud_detector import FraudDetectionService
@@ -12,7 +13,7 @@ if not logger.handlers:
     _h = logging.StreamHandler(sys.stdout)
     _h.setFormatter(logging.Formatter('[%(asctime)s] %(levelname)s %(message)s', '%H:%M:%S'))
     logger.addHandler(_h)
-logger.setLevel(logging.DEBUG)
+logger.setLevel(logging.INFO)
 
 # Fixed thresholds — not bound to any DB config
 HARDCODED_CONFIG = {
@@ -228,9 +229,20 @@ class FraudReportService:
         # ── First pass: detect qualifying incidents ────────────────────────────
         raw_results = []
         used_receipts = set()
+        split_window = timedelta(minutes=SPLIT_WINDOW_MINUTES)
 
         for shortcode, txns in by_shortcode.items():
             sorted_txns = sorted(txns, key=lambda x: x['completion_time'])
+
+            # Withdrawals only, still time-sorted — lets us binary-search the
+            # 2-hour window per anchor instead of rescanning every transaction
+            # at this till for every anchor (that rescan was O(n^2) per till
+            # and dominated report generation time on busy tills).
+            withdrawals = [
+                t for t in sorted_txns
+                if t.get('reason_type') in WITHDRAWAL_REASONS and t.get('paid_in', 0) > 0
+            ]
+            withdrawal_times = [t['completion_time'] for t in withdrawals]
 
             for anchor in sorted_txns:
                 if anchor['receipt_no'] in used_receipts:
@@ -250,13 +262,11 @@ class FraudReportService:
                     continue
 
                 # Subsequent withdrawals at the same till within the window
+                lo = bisect.bisect_right(withdrawal_times, anchor_time)
+                hi = bisect.bisect_right(withdrawal_times, anchor_time + split_window)
                 subsequent = [
-                    t for t in sorted_txns
-                    if t['receipt_no'] != anchor['receipt_no']
-                    and t['receipt_no'] not in used_receipts
-                    and t.get('reason_type') in WITHDRAWAL_REASONS
-                    and t.get('paid_in', 0) > 0
-                    and 0 < (t['completion_time'] - anchor_time).total_seconds() / 60 <= SPLIT_WINDOW_MINUTES
+                    t for t in withdrawals[lo:hi]
+                    if t['receipt_no'] not in used_receipts
                 ]
 
                 if len(subsequent) < SPLIT_MIN_SUBSEQUENT:
