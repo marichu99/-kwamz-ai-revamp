@@ -1,6 +1,7 @@
 import asyncio
 import pandas as pd
 import os
+from math import ceil
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from sqlalchemy.exc import IntegrityError
@@ -1310,10 +1311,15 @@ class TransactionService:
                 query = query.filter(ho_clause if float_scope == 'head_office' else ~ho_clause)
 
             if filters.get('transaction_status'):
-                query = query.filter(Transaction.transaction_status.ilike(f"%{filters['transaction_status']}%"))
+                query = query.filter(Transaction.transaction_status == filters['transaction_status'])
 
             if filters.get('reasonType'):
-                query = query.filter(Transaction.reason_type.ilike(f"%{filters['reasonType']}%"))
+                # Exact match: reason_type values overlap as substrings (e.g.
+                # "Customer Withdrawal at Agent Till" is contained within
+                # "...with OD"), so a %contains% match here would silently
+                # pull in the wrong rows. Both dropdown values are always
+                # sent verbatim from the frontend, never partial text.
+                query = query.filter(Transaction.reason_type == filters['reasonType'])
 
             # Date range filtering on completion_time
             if filters.get('start_date'):
@@ -1360,24 +1366,40 @@ class TransactionService:
                     )
                 )
 
-            # Get total count before pagination
-            total = query.count()
-
             # ORDER BY most recent first
             query = query.order_by(Transaction.completion_time.desc())
 
-            # Pagination
-            pagination = query.paginate(page=page, per_page=per_page, error_out=False)
+            # Pagination. count=False: the totals aggregate query below already
+            # computes an exact row count (total_count) under the same
+            # filters, so we skip Pagination's own COUNT(*) — filtered COUNTs
+            # over this table run a full scan (large fraction of rows), and
+            # this used to run that same scan three times per page load
+            # (a separate query.count(), Pagination's own internal count, and
+            # the totals aggregate) instead of once.
+            pagination = query.paginate(page=page, per_page=per_page, error_out=False, count=False)
             transactions = pagination.items
+
+            # Batch-fetch agent companies for this page's shortcodes in one
+            # query instead of one query per row.
+            page_shortcodes = {t.business_shortcode for t in transactions if t.business_shortcode}
+            agent_company_by_shortcode = {}
+            if page_shortcodes:
+                normalized_values = {str(sc).lstrip('0') or '0' for sc in page_shortcodes}
+                for ac in AgentCompany.query.filter(
+                    db.func.ltrim(AgentCompany.short_code, '0').in_(normalized_values)
+                ).all():
+                    agent_company_by_shortcode[str(ac.short_code).lstrip('0') or '0'] = ac
 
             # Serialize transactions
             transactions_data : List = []
             for trans in transactions:
                 append_dict = trans.to_dict()
-                agent_company = agent_company_service.get_agent_company_by_shortcode_(trans.business_shortcode)
-                if(agent_company):
-                    append_dict["business_name"]=agent_company.company_name or ''
-                
+                if trans.business_shortcode:
+                    normalized = str(trans.business_shortcode).lstrip('0') or '0'
+                    agent_company = agent_company_by_shortcode.get(normalized)
+                    if agent_company:
+                        append_dict["business_name"] = agent_company.company_name or ''
+
                 transactions_data.append(append_dict)
 
 
@@ -1404,10 +1426,10 @@ class TransactionService:
                 totals_query = totals_query.filter(ho_clause if float_scope == 'head_office' else ~ho_clause)
 
             if filters.get('transaction_status'):
-                totals_query = totals_query.filter(Transaction.transaction_status.ilike(f"%{filters['transaction_status']}%"))
-            
+                totals_query = totals_query.filter(Transaction.transaction_status == filters['transaction_status'])
+
             if filters.get('reasonType'):
-                totals_query = totals_query.filter(Transaction.reason_type.ilike(f"%{filters['reasonType']}%"))
+                totals_query = totals_query.filter(Transaction.reason_type == filters['reasonType'])
             
             # Date range filtering for totals query
             if filters.get('start_date'):
@@ -1447,29 +1469,35 @@ class TransactionService:
                 )
             
             
-            # Calculate all totals in a single query for better performance
+            # Calculate all totals AND the filtered row count in one query —
+            # this is the same full-table aggregate the old code ran three
+            # times over (a plain query.count(), Pagination's own internal
+            # count, and this one); total_count here now does double duty as
+            # the pagination total too, so it only runs once.
             totals = totals_query.with_entities(
                 func.sum(Transaction.paid_in).label('total_paid_in'),
                 func.sum(Transaction.withdrawn).label('total_withdrawn'),
                 func.sum(Transaction.commission_amount).label('total_commission'),
                 func.count(Transaction.id).label('total_count')
             ).first()
-            
+
             # Extract totals with proper default values
             total_paid_in = totals.total_paid_in or Decimal('0.00')
             total_withdrawn = totals.total_withdrawn or Decimal('0.00')
             total_commission = totals.total_commission or Decimal('0.00')
-            
+            total = totals.total_count or 0
+            pages = ceil(total / per_page) if total and per_page else 0
+
             # For float transactions, calculate net flow
             # For commission transactions, commission is positive income
             transaction_type = filters.get('transaction_type', 'float')
-            
+
             if transaction_type == 'float':
                 net_flow = total_paid_in + total_withdrawn  # withdrawn is negative
             else:
                 # For commissions, net flow might be just commissions or include paid_in/withdrawn
                 net_flow = total_commission  # or total_paid_in + total_withdrawn depending on your logic
-            
+
             return {
                 "success": True,
                 "data": transactions_data,
@@ -1477,9 +1505,9 @@ class TransactionService:
                     "page": page,
                     "per_page": per_page,
                     "total": total,
-                    "pages": pagination.pages,
-                    "has_next": pagination.has_next,
-                    "has_prev": pagination.has_prev
+                    "pages": pages,
+                    "has_next": page < pages,
+                    "has_prev": page > 1
                 },
                 "summary": {
                     "total_paid_in": str(total_paid_in),
