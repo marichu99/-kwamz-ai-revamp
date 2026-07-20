@@ -8,6 +8,7 @@ from flask_bcrypt import Bcrypt
 from flask_jwt_extended import JWTManager
 from flask_limiter import Limiter
 from google.cloud import storage
+from werkzeug.middleware.proxy_fix import ProxyFix
 import os
 import sys
 from datetime import datetime, timedelta
@@ -50,6 +51,13 @@ limiter = Limiter(key_func=get_client_ip)
 def create_app():
     app = Flask(__name__, instance_relative_config=True)
     load_dotenv()
+
+    # nginx terminates TLS and proxies to gunicorn over plain HTTP (one hop),
+    # setting X-Forwarded-Proto/Host. Without this, Werkzeug builds redirects
+    # (e.g. strict_slashes) using the scheme it sees on the wire — http — so
+    # an https:// request gets redirected to an http:// URL, which browsers
+    # block as insecure mixed content.
+    app.wsgi_app = ProxyFix(app.wsgi_app, x_proto=1, x_host=1)
 
     # Load config
     app.config.from_pyfile('config.py', silent=True)

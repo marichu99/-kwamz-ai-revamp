@@ -176,7 +176,7 @@ function AdminBillingPage() {
   const fetchUsers = useCallback(async () => {
     setLoading(true);
     try {
-      const res = await fetch(`${API_BASE_URL}/users`, {
+      const res = await fetch(`${API_BASE_URL}/users/`, {
         headers: { Authorization: `Bearer ${token}` },
       });
       if (!res.ok) throw new Error('Failed to fetch users');

@@ -99,7 +99,7 @@ function SystemUsersList() {
     try {
       const token = localStorage.getItem('token');
       const [usersResponse, companiesResponse] = await Promise.all([
-        axios.get(`${config.API_URL}/users`, {
+        axios.get(`${config.API_URL}/users/`, {
           headers: { Authorization: `Bearer ${token}` },
         }),
         axios.get(`${config.API_URL}/company/`, {
@@ -127,7 +127,7 @@ function SystemUsersList() {
     setIsLoading(true);
     try {
       const token = localStorage.getItem('token');
-      const url = userId ? `${config.API_URL}/users/${userId}` : `${config.API_URL}/users`;
+      const url = userId ? `${config.API_URL}/users/${userId}` : `${config.API_URL}/users/`;
       const method = userId ? 'PUT' : 'POST';
 
       const res = await fetch(url, {
