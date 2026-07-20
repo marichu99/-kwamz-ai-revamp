@@ -1,4 +1,4 @@
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useEffect } from 'react';
 import {
     X,
     ShieldAlert,
@@ -20,6 +20,7 @@ import {
 import axios from 'axios';
 import config from '../../Config';
 import { useToast } from './ToastProvider';
+import { CompanyDropdown } from '../Dashboard/DashboardHeader';
 
 const DATE_RANGES = [
     { value: 'today', label: 'Today' },
@@ -305,6 +306,224 @@ function SplitFindingCard({ finding, index }) {
     );
 }
 
+const TYPE_LABELS = {
+    split_transaction: 'Split Transaction',
+    split_deposit: 'Split Deposit',
+    continuous_rapid_activity: 'Continuous Rapid Activity',
+};
+
+function GenericFindingCard({ finding, index }) {
+    const [expanded, setExpanded] = useState(false);
+    const riskBadge = RISK_BADGE[finding.risk_level] || RISK_BADGE.LOW;
+    const label = TYPE_LABELS[finding.fraud_type] || finding.fraud_type;
+    const agentCompanies = finding.agent_info?.agent_companies || [];
+    const userAgents = finding.agent_info?.user_agents || [];
+    const shortcodes = finding.agent_info?.shortcodes || [];
+
+    return (
+        <div className="border border-slate-200 dark:border-slate-600 rounded-xl overflow-hidden mb-3 shadow-sm">
+            <button
+                onClick={() => setExpanded(e => !e)}
+                className="w-full flex items-center justify-between px-4 py-3 bg-white dark:bg-slate-800 hover:bg-slate-50 dark:hover:bg-slate-750 transition-colors text-left"
+            >
+                <div className="flex items-center gap-3 min-w-0">
+                    <span className="text-xs font-semibold text-slate-400 dark:text-slate-500 w-6 shrink-0">
+                        #{index + 1}
+                    </span>
+                    <span className={`text-xs font-bold px-2 py-0.5 rounded-full shrink-0 ${riskBadge}`}>
+                        {finding.risk_level}
+                    </span>
+                    <span className="text-sm font-semibold text-slate-800 dark:text-white shrink-0">
+                        {label}
+                    </span>
+                    <span className="text-sm text-slate-600 dark:text-slate-300 truncate">
+                        {finding.account_name || (finding.business_shortcode ? `Till ${finding.business_shortcode}` : '—')}
+                    </span>
+                    {finding.account_phone && (
+                        <span className="text-xs text-slate-400 dark:text-slate-500 font-mono shrink-0 hidden sm:block">
+                            {finding.account_phone}
+                        </span>
+                    )}
+                </div>
+                <div className="flex items-center gap-3 shrink-0 ml-3">
+                    <span className="text-sm font-semibold text-slate-700 dark:text-slate-200">
+                        KES {fmt(finding.total_amount)}
+                    </span>
+                    {expanded
+                        ? <ChevronDown className="w-4 h-4 text-slate-400" />
+                        : <ChevronRight className="w-4 h-4 text-slate-400" />}
+                </div>
+            </button>
+
+            {expanded && (
+                <div className="px-4 py-4 bg-white dark:bg-slate-800 border-t border-slate-100 dark:border-slate-700 space-y-4">
+                    {finding.explanation && (
+                        <p className="text-sm text-slate-600 dark:text-slate-300 leading-relaxed px-4 py-3 bg-slate-50 dark:bg-slate-700/60 rounded-lg">
+                            {finding.explanation}
+                        </p>
+                    )}
+
+                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                        <div className="bg-slate-50 dark:bg-slate-700 rounded-lg p-3 text-center">
+                            <p className="text-xs text-slate-500 dark:text-slate-400 mb-1">Transactions</p>
+                            <p className="text-sm font-bold text-slate-800 dark:text-white">
+                                {finding.transaction_count}
+                            </p>
+                        </div>
+                        <div className="bg-red-50 dark:bg-red-900/20 rounded-lg p-3 text-center">
+                            <p className="text-xs text-red-500 dark:text-red-400 mb-1">Total amount</p>
+                            <p className="text-sm font-bold text-slate-800 dark:text-white">
+                                KES {fmt(finding.total_amount)}
+                            </p>
+                        </div>
+                        <div className="bg-amber-50 dark:bg-amber-900/20 rounded-lg p-3 text-center">
+                            <p className="text-xs text-amber-600 dark:text-amber-400 mb-1">
+                                {finding.fraud_type === 'continuous_rapid_activity' ? 'Non-stop for' : 'Within'}
+                            </p>
+                            <p className="text-sm font-bold text-slate-800 dark:text-white">
+                                {finding.span_minutes} min
+                            </p>
+                        </div>
+                        <div className="bg-slate-50 dark:bg-slate-700 rounded-lg p-3 text-center">
+                            <p className="text-xs text-slate-500 dark:text-slate-400 mb-1">Till</p>
+                            <p className="text-sm font-bold text-slate-800 dark:text-white font-mono">
+                                {finding.business_shortcode || '—'}
+                            </p>
+                        </div>
+                    </div>
+
+                    {/* Extra badges */}
+                    <div className="flex flex-wrap gap-x-5 gap-y-1 text-xs text-slate-500 dark:text-slate-400 px-1">
+                        {finding.cap_structuring && (
+                            <span className="flex items-center gap-1 text-red-600 dark:text-red-400 font-semibold">
+                                <AlertTriangle className="w-3 h-3" />
+                                Combined amount exceeds the single-deposit cap
+                            </span>
+                        )}
+                        {finding.unique_parties != null && (
+                            <span className="flex items-center gap-1">
+                                <Users className="w-3 h-3" />
+                                <span className="font-semibold text-slate-700 dark:text-slate-200">
+                                    {finding.unique_parties}
+                                </span>
+                                &nbsp;distinct parties
+                            </span>
+                        )}
+                        {finding.deposit_count != null && (
+                            <span>
+                                {finding.deposit_count} deposits · {finding.withdrawal_count} withdrawals
+                            </span>
+                        )}
+                    </div>
+
+                    {finding.transaction_details?.length > 0 && (
+                        <div>
+                            <p className="text-xs font-semibold text-slate-500 dark:text-slate-400 mb-2 uppercase tracking-wide">
+                                Transactions
+                            </p>
+                            <div className="overflow-x-auto max-h-80 overflow-y-auto rounded-lg border border-slate-100 dark:border-slate-700">
+                                <table className="w-full text-xs border-collapse">
+                                    <thead className="sticky top-0">
+                                        <tr className="bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300">
+                                            <th className="px-3 py-2 text-left font-semibold">Receipt</th>
+                                            <th className="px-3 py-2 text-left font-semibold">Type</th>
+                                            <th className="px-3 py-2 text-right font-semibold">Amount (KES)</th>
+                                            <th className="px-3 py-2 text-left font-semibold">Time</th>
+                                            <th className="px-3 py-2 text-left font-semibold">Party</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        {finding.transaction_details.map((txn, i) => (
+                                            <tr key={i} className="border-t border-slate-100 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-700/40">
+                                                <td className="px-3 py-2 font-mono text-slate-600 dark:text-slate-300 whitespace-nowrap">
+                                                    {txn.receipt_no}
+                                                </td>
+                                                <td className="px-3 py-2">
+                                                    <span className={`px-2 py-0.5 rounded text-xs font-medium ${
+                                                        txn.type === 'Deposit'
+                                                            ? 'bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-300'
+                                                            : 'bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-300'
+                                                    }`}>
+                                                        {txn.type}
+                                                    </span>
+                                                </td>
+                                                <td className="px-3 py-2 text-right font-medium text-slate-800 dark:text-white whitespace-nowrap">
+                                                    {fmt(txn.amount)}
+                                                </td>
+                                                <td className="px-3 py-2 text-slate-500 dark:text-slate-400 whitespace-nowrap">
+                                                    {txn.time}
+                                                </td>
+                                                <td className="px-3 py-2 text-slate-600 dark:text-slate-300">
+                                                    {txn.party_name || txn.party_phone || txn.other_party_info || '—'}
+                                                </td>
+                                            </tr>
+                                        ))}
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                    )}
+
+                    {/* Agent companies */}
+                    {(agentCompanies.length > 0 || shortcodes.length > 0) && (
+                        <div>
+                            <p className="text-xs font-semibold text-slate-500 dark:text-slate-400 mb-2 uppercase tracking-wide flex items-center gap-1">
+                                <Building className="w-3 h-3" /> Agent Companies
+                            </p>
+                            {agentCompanies.length > 0 ? (
+                                <div className="space-y-2">
+                                    {agentCompanies.map((ac, i) => (
+                                        <div key={i} className="bg-slate-50 dark:bg-slate-700 rounded-lg overflow-hidden">
+                                            <div className="flex items-center gap-3 text-sm text-slate-700 dark:text-slate-300 px-3 py-2 flex-wrap">
+                                                <span className="font-semibold">{ac.company_name}</span>
+                                                {ac.short_code && (
+                                                    <span className="text-xs text-slate-400">SC: {ac.short_code}</span>
+                                                )}
+                                                {ac.location && (
+                                                    <span className="text-xs text-slate-400">{ac.location}</span>
+                                                )}
+                                                {ac.fraud_risk_level && (
+                                                    <span className={`ml-auto text-xs font-semibold px-2 py-0.5 rounded-full ${RISK_PILL[ac.fraud_risk_level?.toUpperCase()] || RISK_PILL.LOW}`}>
+                                                        {ac.fraud_risk_level.toLowerCase()}
+                                                    </span>
+                                                )}
+                                            </div>
+                                            {userAgents.length > 0 && (
+                                                <div className="border-t border-slate-200 dark:border-slate-600 px-3 py-2">
+                                                    <p className="text-xs font-medium text-slate-400 dark:text-slate-500 mb-1.5 flex items-center gap-1">
+                                                        <Users className="w-3 h-3" /> User Agents
+                                                    </p>
+                                                    <div className="flex flex-wrap gap-2">
+                                                        {userAgents.map((ua, j) => (
+                                                            <div key={j} className="text-xs bg-blue-50 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300 px-2.5 py-1.5 rounded-lg flex items-center gap-1.5">
+                                                                <span className="font-medium">{ua.name}</span>
+                                                                {ua.phone_number && (
+                                                                    <span className="opacity-70 font-mono">{ua.phone_number}</span>
+                                                                )}
+                                                                {ua.is_authentic === false && (
+                                                                    <span className="text-red-500 font-semibold">· Unverified</span>
+                                                                )}
+                                                            </div>
+                                                        ))}
+                                                    </div>
+                                                </div>
+                                            )}
+                                        </div>
+                                    ))}
+                                </div>
+                            ) : (
+                                <p className="text-xs text-slate-400 dark:text-slate-500">
+                                    Shortcodes: {shortcodes.join(', ')}
+                                </p>
+                            )}
+                        </div>
+                    )}
+                </div>
+            )}
+        </div>
+    );
+}
+
 export default function FraudReportModal({ isOpen, onClose, companyId }) {
     const { showToast } = useToast();
     const [dateRange, setDateRange] = useState('this_month');
@@ -314,6 +533,22 @@ export default function FraudReportModal({ isOpen, onClose, companyId }) {
     const [isLoading, setIsLoading] = useState(false);
     const [isExporting, setIsExporting] = useState(false);
     const [report, setReport] = useState(null);
+    // Companies linked to the logged-in user; null = all companies
+    const [companies, setCompanies] = useState([]);
+    const [selectedCompany, setSelectedCompany] = useState(null);
+
+    const effectiveCompanyId = selectedCompany?.id ?? companyId;
+
+    // Load the user's companies once, when the modal first opens
+    useEffect(() => {
+        if (!isOpen || companies.length > 0) return;
+        const token = localStorage.getItem('token');
+        axios.get(`${config.API_URL}/transactions/user-companies`, {
+            headers: { Authorization: `Bearer ${token}` },
+        })
+            .then(({ data }) => { if (data.success) setCompanies(data.data); })
+            .catch(() => { /* dropdown simply stays hidden */ });
+    }, [isOpen, companies.length]);
 
     const fetchReport = useCallback(async () => {
         setIsLoading(true);
@@ -323,7 +558,7 @@ export default function FraudReportModal({ isOpen, onClose, companyId }) {
             const params = {
                 date_range: dateRange,
                 ...(dateRange === 'custom' && { start_date: customStartDate, end_date: customEndDate }),
-                ...(companyId && { company_id: companyId }),
+                ...(effectiveCompanyId && { company_id: effectiveCompanyId }),
             };
             const res = await axios.get(`${config.API_URL}/transactions/fraud-report`, {
                 headers: { Authorization: `Bearer ${token}` },
@@ -339,7 +574,7 @@ export default function FraudReportModal({ isOpen, onClose, companyId }) {
         } finally {
             setIsLoading(false);
         }
-    }, [dateRange, customStartDate, customEndDate, companyId, showToast]);
+    }, [dateRange, customStartDate, customEndDate, effectiveCompanyId, showToast]);
 
     const exportPdf = useCallback(async () => {
         setIsExporting(true);
@@ -348,7 +583,7 @@ export default function FraudReportModal({ isOpen, onClose, companyId }) {
             const params = {
                 date_range: dateRange,
                 ...(dateRange === 'custom' && { start_date: customStartDate, end_date: customEndDate }),
-                ...(companyId && { company_id: companyId }),
+                ...(effectiveCompanyId && { company_id: effectiveCompanyId }),
             };
             const query = new URLSearchParams(params).toString();
             const res = await fetch(`${config.API_URL}/transactions/fraud-report-pdf?${query}`, {
@@ -368,22 +603,25 @@ export default function FraudReportModal({ isOpen, onClose, companyId }) {
         } finally {
             setIsExporting(false);
         }
-    }, [dateRange, customStartDate, customEndDate, companyId, showToast]);
+    }, [dateRange, customStartDate, customEndDate, effectiveCompanyId, showToast]);
 
     if (!isOpen) return null;
 
-    // Only show split_transaction findings
+    // Show all split-style findings: classic split, split deposits, continuous rapid activity
+    const SHOWN_TYPES = ['split_transaction', 'split_deposit', 'continuous_rapid_activity'];
     const allFindings = report?.findings || [];
-    const findings = allFindings.filter(f => f.fraud_type === 'split_transaction');
+    const findings = allFindings.filter(f => SHOWN_TYPES.includes(f.fraud_type));
     const summary = report?.summary;
 
     // Compute stats from filtered findings
     const highRisk = findings.filter(f => f.risk_level === 'HIGH').length;
     const mediumRisk = findings.filter(f => f.risk_level === 'MEDIUM').length;
     const lowRisk = findings.filter(f => f.risk_level === 'LOW').length;
-    const totalKesAtRisk = findings.reduce((s, f) => s + Number(f.anchor_amount || 0), 0);
-    const avgSplits = findings.length
-        ? (findings.reduce((s, f) => s + Number(f.subsequent_count || 0), 0) / findings.length).toFixed(1)
+    const totalKesAtRisk = findings.reduce(
+        (s, f) => s + Number(f.anchor_amount ?? f.total_amount ?? 0), 0);
+    const splitOnly = findings.filter(f => f.fraud_type === 'split_transaction');
+    const avgSplits = splitOnly.length
+        ? (splitOnly.reduce((s, f) => s + Number(f.subsequent_count || 0), 0) / splitOnly.length).toFixed(1)
         : '—';
     const tillsAffected = new Set(findings.map(f => f.business_shortcode).filter(Boolean)).size;
 
@@ -468,6 +706,15 @@ export default function FraudReportModal({ isOpen, onClose, companyId }) {
                         </>
                     )}
 
+                    {/* Company (scoped to the logged-in user) */}
+                    {companies.length > 0 && (
+                        <CompanyDropdown
+                            companies={companies}
+                            selectedCompany={selectedCompany}
+                            onCompanyChange={setSelectedCompany}
+                        />
+                    )}
+
                     <button
                         onClick={fetchReport}
                         disabled={isLoading || (dateRange === 'custom' && (!customStartDate || !customEndDate))}
@@ -545,10 +792,12 @@ export default function FraudReportModal({ isOpen, onClose, companyId }) {
                                         <p className="text-sm text-slate-600 dark:text-slate-300 leading-relaxed">
                                             A fraudster makes one large deposit at an agent till, then sends multiple
                                             accomplices to withdraw smaller amounts — each below the threshold that would
-                                            trigger a manual review. The combined withdrawals match the deposit closely,
-                                            effectively converting electronic M-Pesa credit into untraceable cash while
-                                            evading transaction monitoring. This is the single most prevalent fraud
-                                            pattern in M-Pesa agent operations.
+                                            trigger a manual review. Related variants flagged here: a single deposit
+                                            broken into several smaller deposits by the same person in quick succession
+                                            (e.g. 50,000 arriving as 20,000 + 20,000 + 10,000), and tills processing
+                                            back-to-back transactions — gaps of 2 minutes or less — continuously for an
+                                            hour or more. All are ways of splitting activity to evade transaction
+                                            monitoring thresholds.
                                         </p>
                                     </div>
                                     <div className="text-right shrink-0">
@@ -622,7 +871,9 @@ export default function FraudReportModal({ isOpen, onClose, companyId }) {
                                         Flagged Incidents — sorted by severity
                                     </p>
                                     {findings.map((finding, i) => (
-                                        <SplitFindingCard key={i} finding={finding} index={i} />
+                                        finding.fraud_type === 'split_transaction'
+                                            ? <SplitFindingCard key={i} finding={finding} index={i} />
+                                            : <GenericFindingCard key={i} finding={finding} index={i} />
                                     ))}
                                 </div>
                             )}

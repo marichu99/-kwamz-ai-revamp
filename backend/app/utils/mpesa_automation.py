@@ -506,6 +506,21 @@ class MpesaScraper:
         except Exception as e:
             logger.error(f"[ERROR] Failed to maximize page: {e}")
         
+    def _go_back_to_children_tab(self, page) -> bool: 
+        
+        """Go back to the Child Organization tab after processing a row."""
+        try:
+            child_org_btn = page.wait_for_selector(
+                "//div[contains(text(),'Children')]",
+                timeout=60000
+            )
+            child_org_btn.click()
+            logger.info("[INFO] Navigated back to 'Child Organization' tab.")
+            page.wait_for_timeout(2000)
+            return True
+        except Exception as e:
+            logger.error(f"[ERROR] Failed to navigate back to 'Child Organization' tab: {e}")
+            return False
     def _navigate_to_child_org_list(self, page) -> None:
 
         """Navigate to the Child Organisation list without starting row processing."""
@@ -3046,6 +3061,146 @@ class MpesaScraper:
             return False
 
 
+    def scrape_head_office_float(self, page: Page) -> bool:
+
+        """
+        Scrapes the Head Office's own FLOAT account — never covered by the
+        per-till float passes.
+        Runs BEFORE any child shortcode is processed, using the exact same flow
+        as each till: open the head office's own detail panel (My Organization),
+        click "Review Transaction", select the Float Account option from the
+        dropdown, then scrape month by month via scrape_180_days_monthly (same
+        shortfall rule — up to 6 months back). Rows are saved as
+        transaction_type='float' under the head office shortcode.
+        """
+        try:
+            logger.info("[INFO] ===== Starting Head Office Float Scraping =====")
+            # Click "Review Transaction"
+            review_btn = page.wait_for_selector(
+                "//div[contains(text(),'Review Transaction')]",
+                timeout=10000
+            )
+            review_btn.click()
+            page.wait_for_timeout(1500)
+
+            # Step 3: Select the Float Account option (same dropdown as tills)
+            if not self.select_account_dropdown(page, "Float Account", arrow_down_count=2):
+                logger.error("[ERROR] Could not select head office Float Account from dropdown")
+                return False
+            time.sleep(1)
+
+            # Step 4: Months back — same shortfall rule the tills use for float.
+            fresh_shortfall = transaction_service.get_last_scraped_per_shortcode()
+            total_months, days = self._get_total_months_by_shortcode_shortfall(
+                str(self.company_shortcode), fresh_shortfall, transaction_type='float'
+            )
+            total_months = int(min(max(int(total_months), 1), 6))
+            logger.info(f"[INFO] Head office float: last scraped {days} day(s) ago — scraping {total_months} month(s) back")
+
+            # Step 5: Month-by-month. Dates + submit use the same monthly selector
+            # as the tills, but the SAVE uses the head-office-tolerant export
+            # (the head office export menu offers fewer options than a till's, so
+            # the till-specific save_table_to_dataframe_download — which demands
+            # 3 Excel options — cannot be reused here).
+            saved_chunks = 0
+            for month_offset in range(total_months):
+                self.close_irritative_dialog_box(page)
+                logger.info(f"\n{'=' * 60}")
+                logger.info(f"Head Office Float - month chunk {month_offset + 1}/{total_months}")
+
+                if not self.select_dates_and_submit_monthly(page, month_offset=month_offset):
+                    self.close_irritative_dialog_box(page)
+                    time.sleep(1)
+                    if not self.select_dates_and_submit_monthly(page, month_offset=month_offset):
+                        logger.error(f"[ERROR] Date selection failed for head office float month {month_offset + 1}")
+                        continue
+                time.sleep(1)
+
+                if not self.does_transaction_exist_for_period_(page=page):
+                    logger.info("[INFO] No head office float transactions for this period — skipping")
+                    continue
+
+                if self._export_and_save_head_office_float(page):
+                    saved_chunks += 1
+
+                if month_offset < total_months - 1:
+                    time.sleep(1)
+
+            logger.info(f"[INFO] ===== Head Office Float Scraping Complete ({saved_chunks}/{total_months} chunk(s) saved) =====")
+            return True
+
+        except Exception as e:
+            logger.error(f"[ERROR] scrape_head_office_float failed: {e}")
+            traceback.print_exc()
+            page.screenshot(path="head_office_float_error.png")
+            self.close_irritative_dialog_box(page)
+            return False
+
+    def _export_and_save_head_office_float(self, page: Page) -> bool:
+
+        """
+        Export the currently-displayed head office float table via Excel and save
+        rows as transaction_type='float' under the head office shortcode.
+        Mirrors the resilient export used by scrape_head_office_commission
+        (tolerates any Excel-option count >= 1), unlike the till exporter which
+        requires exactly the 3rd Excel option.
+        """
+        try:
+            export_trigger = page.locator("div.el-dropdown.padding-export:visible >> span").first
+            export_trigger.wait_for(state="visible", timeout=30000)
+            export_trigger.scroll_into_view_if_needed()
+            export_trigger.hover(force=True, timeout=10_000)
+            time.sleep(3)
+
+            page.wait_for_function(
+                """() => {
+                    const menus = document.querySelectorAll('ul.el-dropdown-menu');
+                    for (const menu of menus) {
+                        const rect = menu.getBoundingClientRect();
+                        if (rect.width > 0 && rect.height > 0 && rect.top >= 0) return true;
+                    }
+                    return false;
+                }""",
+                timeout=40000,
+            )
+
+            all_items = page.locator("ul.el-dropdown-menu li.el-dropdown-menu__item")
+            excel_items = all_items.filter(has_text="Excel")
+            excel_count = excel_items.count()
+            logger.info(f"[EXPORT] Head office float: found {excel_count} Excel option(s)")
+            if excel_count < 1:
+                logger.warning("[EXPORT] No Excel option in head office float export menu — skipping")
+                return False
+
+            # "All Data" is the 3rd option when present; otherwise take the last.
+            target_excel = excel_items.nth(2) if excel_count >= 3 else excel_items.last
+
+            with page.expect_download(timeout=60_000) as dl_info:
+                try:
+                    target_excel.click(force=True, timeout=15_000)
+                except Exception:
+                    target_excel.evaluate("el => el.click()")
+            temp_path = dl_info.value.path()
+
+            df, success = self.update_transactions_from_file(
+                file_path=temp_path,
+                business_shortcode=str(self.company_shortcode),
+                transaction_type="float",
+                company_shortcode=self.company_shortcode,
+                agent_id=None,
+            )
+            if success:
+                logger.info(f"[SUCCESS] Head office float: {len(df) if df is not None else 0} row(s) saved")
+            else:
+                logger.error("[ERROR] Head office float save reported failure")
+            return bool(success)
+
+        except Exception as exp_err:
+            logger.error(f"[ERROR] Head office float export/save failed: {exp_err}")
+            traceback.print_exc()
+            return False
+
+
     def select_dates_and_submit_monthly(self, page: Page, month_offset: int = 0) -> bool:
 
         """
@@ -4016,6 +4171,11 @@ class MpesaScraper:
             logger.error(f"[WARN] Dashboard nav click failed: {_nav_err}")
         self.scrape_head_office_commission(page)
 
+        # Head-office FLOAT: before any child shortcode is processed, open the
+        # head office's own Review Transaction panel, pick the Float option and
+        # scrape month by month — same shortfall-driven flow used for each till.
+        # self.scrape_head_office_float(page)
+
 
     def _run_float_pass(self, page: Page, active_short_codes: Set[str], to_be_rerun: list) -> int:
 
@@ -4099,6 +4259,10 @@ class MpesaScraper:
             self._navigate_to_child_org_list(page)
             self.wait_for_table_load(page)
 
+            self.scrape_head_office_float(page)
+    
+            self._go_back_to_children_tab(page)
+
             total_processed = self._run_float_pass(page, all_shortcodes, to_be_rerun)
             logger.info(f"[SUCCESS] Float pass complete — {total_processed} organizations processed.")
 
@@ -4115,6 +4279,8 @@ class MpesaScraper:
             logger.info("[INFO] Starting priority float pass...")
             self._navigate_to_child_org_list(page)
             self.wait_for_table_load(page)
+            self.scrape_head_office_float(page)
+            self._go_back_to_children_tab(page)
             total_processed = self._run_float_pass(page, priority_short_codes, to_be_rerun)
             logger.info("[INFO] Priority float pass complete.")
 

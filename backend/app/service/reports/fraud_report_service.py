@@ -55,6 +55,16 @@ STRUCT_WINDOW_MINUTES = 180      # 3-hour window
 STRUCT_MIN_TRANSACTIONS = 3      # minimum same-direction transactions
 STRUCT_MIN_TOTAL = 5000.0        # minimum combined amount (KES)
 
+# Split deposit: one person's deposit split into several deposits in quick succession
+SPLITDEP_MAX_GAP_MINUTES = 10    # max gap between consecutive deposits in a chain
+SPLITDEP_MIN_COUNT = 3           # chains of 3+ deposits always qualify
+SPLITDEP_MIN_TOTAL = 10000.0     # minimum combined amount for a 3+ chain (KES)
+SPLITDEP_PAIR_MIN_TOTAL = 250000.0  # 2-deposit chains only qualify above the single-deposit cap
+
+# Continuous rapid activity: till kept busy with back-to-back transactions
+CRA_MAX_GAP_MINUTES = 2          # max gap between consecutive transactions in a chain
+CRA_MIN_DURATION_MINUTES = 60    # chain must run at least this long without a break
+
 # Float cycling (till-level pass-through)
 FLOAT_TOP_UP_REASONS = {
     'Organization Transfer from MMF Account to Float Account via STK',
@@ -137,7 +147,17 @@ class FraudReportService:
         cycling_results = self._detect_float_cycling(txn_dicts, detector)
         logger.info(f"[FraudReport] float_cycling findings: {len(cycling_results)}")
 
-        all_results = split_results + rollover_results + rapid_results + dwr_results + hf_results + struct_results + cycling_results
+        # Split deposit: same person splits one deposit into several rapid deposits
+        splitdep_results = self._detect_split_deposits(txn_dicts, detector)
+        logger.info(f"[FraudReport] split_deposit findings: {len(splitdep_results)}")
+
+        # Continuous rapid activity: till running back-to-back txns for an hour+
+        cra_results = self._detect_continuous_rapid_activity(txn_dicts, detector)
+        logger.info(f"[FraudReport] continuous_rapid_activity findings: {len(cra_results)}")
+
+        all_results = (split_results + rollover_results + rapid_results + dwr_results
+                       + hf_results + struct_results + cycling_results
+                       + splitdep_results + cra_results)
         logger.info(f"[FraudReport] Total findings: {len(all_results)}")
 
         # Assign risk levels
@@ -164,6 +184,8 @@ class FraudReportService:
                 'high_frequency_daily': len(hf_results),
                 'structuring': len(struct_results),
                 'float_cycling': len(cycling_results),
+                'split_deposit': len(splitdep_results),
+                'continuous_rapid_activity': len(cra_results),
                 'high_risk': sum(1 for r in all_results if r.get('risk_level') == 'HIGH'),
                 'medium_risk': sum(1 for r in all_results if r.get('risk_level') == 'MEDIUM'),
                 'low_risk': sum(1 for r in all_results if r.get('risk_level') == 'LOW'),
@@ -962,6 +984,227 @@ class FraudReportService:
         return results
 
     # ------------------------------------------------------------------
+    # Split Deposit: one person's deposit split into several deposits
+    # Catches e.g. a KES 50,000 deposit arriving as 20,000 + 20,000 + 10,000
+    # from the same party in quick succession. A 2-deposit chain only
+    # qualifies when the combined amount exceeds the single-deposit cap
+    # (e.g. 250,000 + 245,216 within a minute — structuring around the cap).
+    # ------------------------------------------------------------------
+    def _detect_split_deposits(self, txn_dicts, detector):
+        deposits = [
+            t for t in txn_dicts
+            if t.get('reason_type') == 'Deposit at Agent Till' and t.get('phone_number')
+        ]
+        logger.info(f"[SPLITDEP] {len(deposits)} deposits with a parsed phone")
+
+        # Deposits at a till record the amount as float leaving the till
+        # (withdrawn); fall back to paid_in for statement variants.
+        def _amount(t):
+            return abs(t.get('withdrawn', 0)) or t.get('paid_in', 0)
+
+        groups = defaultdict(list)
+        for txn in deposits:
+            key = (txn['phone_number'], txn.get('business_shortcode') or '')
+            groups[key].append(txn)
+
+        results = []
+        used_receipts = set()
+
+        for (phone, shortcode), txns in groups.items():
+            if len(txns) < 2:
+                continue
+
+            sorted_txns = sorted(txns, key=lambda x: x['completion_time'])
+
+            # Build chains: consecutive deposits <= SPLITDEP_MAX_GAP_MINUTES apart
+            chain = [sorted_txns[0]]
+            chains = []
+            for txn in sorted_txns[1:]:
+                gap = (txn['completion_time'] - chain[-1]['completion_time']).total_seconds() / 60
+                if gap <= SPLITDEP_MAX_GAP_MINUTES:
+                    chain.append(txn)
+                else:
+                    chains.append(chain)
+                    chain = [txn]
+            chains.append(chain)
+
+            for chain in chains:
+                total = sum(_amount(t) for t in chain)
+                qualifies = (
+                    (len(chain) >= SPLITDEP_MIN_COUNT and total >= SPLITDEP_MIN_TOTAL)
+                    or (len(chain) == 2 and total >= SPLITDEP_PAIR_MIN_TOTAL)
+                )
+                if not qualifies:
+                    continue
+
+                candidate_receipts = {t['receipt_no'] for t in chain}
+                if candidate_receipts & used_receipts:
+                    continue
+                used_receipts |= candidate_receipts
+
+                span_mins = (chain[-1]['completion_time'] - chain[0]['completion_time']).total_seconds() / 60
+                amounts = [_amount(t) for t in chain]
+                cap_structuring = total >= SPLITDEP_PAIR_MIN_TOTAL
+
+                fraud_score = min(40 + len(chain) * 8 + (20 if cap_structuring else 0), 100)
+
+                name = chain[0].get('name')
+                amounts_str = ' + '.join(f"{a:,.0f}" for a in amounts)
+                explanation = (
+                    f"SPLIT DEPOSIT: {name or phone} made {len(chain)} separate deposits "
+                    f"({amounts_str} = KES {total:,.2f}) at shortcode {shortcode} "
+                    f"within {span_mins:.1f} minute(s). "
+                    + (
+                        "The combined amount exceeds the single-deposit limit — the deposit was "
+                        "split to stay under the cap and avoid the scrutiny a single large "
+                        "deposit would attract. "
+                        if cap_structuring else
+                        "One deposit broken into several smaller ones in quick succession "
+                        "suggests deliberate splitting to stay below review thresholds. "
+                    )
+                )
+
+                txn_details = [
+                    {
+                        'receipt_no': t['receipt_no'],
+                        'amount': _amount(t),
+                        'type': 'Deposit',
+                        'time': t['completion_time'].strftime('%Y-%m-%d %H:%M:%S')
+                            if hasattr(t['completion_time'], 'strftime') else str(t['completion_time']),
+                        'party_phone': phone,
+                        'party_name': t.get('name'),
+                        'other_party_info': t.get('other_party_info', ''),
+                        'business_shortcode': shortcode,
+                        'agent_id': t.get('agent_id'),
+                    }
+                    for t in chain
+                ]
+
+                agent_info = detector._extract_agent_info_from_transactions(chain)
+
+                results.append({
+                    'fraud_type': 'split_deposit',
+                    'account_phone': phone,
+                    'account_name': name,
+                    'transaction_count': len(chain),
+                    'total_amount': total,
+                    'span_minutes': round(span_mins, 1),
+                    'cap_structuring': cap_structuring,
+                    'receipt_nos': list(candidate_receipts),
+                    'transaction_details': txn_details,
+                    'explanation': explanation,
+                    'detection_time': datetime.now(),
+                    'fraud_score': fraud_score,
+                    'agent_info': agent_info,
+                    'business_shortcode': shortcode,
+                })
+
+        logger.info(f"[SPLITDEP] {len(results)} findings")
+        return results
+
+    # ------------------------------------------------------------------
+    # Continuous Rapid Activity: a till transacting non-stop
+    # Flags a chain of customer transactions (deposits, withdrawals or both)
+    # at one till where every gap between consecutive transactions is
+    # <= CRA_MAX_GAP_MINUTES and the chain runs for CRA_MIN_DURATION_MINUTES+.
+    # ------------------------------------------------------------------
+    def _detect_continuous_rapid_activity(self, txn_dicts, detector):
+        RELEVANT_REASONS = {
+            'Deposit at Agent Till',
+            'Customer Withdrawal at Agent Till',
+            'Customer Withdrawal at Agent Till with OD',
+        }
+
+        by_shortcode = defaultdict(list)
+        for txn in txn_dicts:
+            if txn.get('reason_type') in RELEVANT_REASONS:
+                sc = txn.get('business_shortcode') or ''
+                if sc:
+                    by_shortcode[sc].append(txn)
+
+        results = []
+
+        for shortcode, txns in by_shortcode.items():
+            sorted_txns = sorted(txns, key=lambda x: x['completion_time'])
+
+            chain = [sorted_txns[0]]
+            chains = []
+            for txn in sorted_txns[1:]:
+                gap = (txn['completion_time'] - chain[-1]['completion_time']).total_seconds() / 60
+                if gap <= CRA_MAX_GAP_MINUTES:
+                    chain.append(txn)
+                else:
+                    chains.append(chain)
+                    chain = [txn]
+            chains.append(chain)
+
+            for chain in chains:
+                if len(chain) < 2:
+                    continue
+                span_mins = (chain[-1]['completion_time'] - chain[0]['completion_time']).total_seconds() / 60
+                if span_mins < CRA_MIN_DURATION_MINUTES:
+                    continue
+
+                deposit_total = sum(abs(t.get('withdrawn', 0)) for t in chain if t.get('reason_type') == 'Deposit at Agent Till')
+                withdrawal_total = sum(t.get('paid_in', 0) for t in chain if t.get('reason_type') != 'Deposit at Agent Till')
+                total = deposit_total + withdrawal_total
+                unique_parties = len({t.get('phone_number') for t in chain if t.get('phone_number')})
+                deposits = sum(1 for t in chain if t.get('reason_type') == 'Deposit at Agent Till')
+                withdrawals = len(chain) - deposits
+
+                fraud_score = min(55 + int(span_mins - CRA_MIN_DURATION_MINUTES) // 15 * 5 + len(chain) // 25 * 5, 100)
+
+                explanation = (
+                    f"CONTINUOUS RAPID ACTIVITY: shortcode {shortcode} processed {len(chain)} "
+                    f"customer transactions ({deposits} deposit(s), {withdrawals} withdrawal(s)) "
+                    f"non-stop for {span_mins:.0f} minute(s) — no gap between consecutive "
+                    f"transactions exceeded {CRA_MAX_GAP_MINUTES} minute(s). "
+                    f"Total volume: KES {total:,.2f} across {unique_parties} distinct part(y/ies). "
+                    f"Sustained machine-gun activity at a till for an hour or more is far above "
+                    f"normal walk-in traffic and indicates coordinated cash movement."
+                )
+
+                txn_details = [
+                    {
+                        'receipt_no': t['receipt_no'],
+                        'amount': abs(t.get('withdrawn', 0)) if t.get('reason_type') == 'Deposit at Agent Till' else t.get('paid_in', 0),
+                        'type': 'Deposit' if t.get('reason_type') == 'Deposit at Agent Till' else 'Withdrawal',
+                        'time': t['completion_time'].strftime('%Y-%m-%d %H:%M:%S')
+                            if hasattr(t['completion_time'], 'strftime') else str(t['completion_time']),
+                        'party_phone': t.get('phone_number'),
+                        'party_name': t.get('name'),
+                        'other_party_info': t.get('other_party_info', ''),
+                        'business_shortcode': shortcode,
+                        'agent_id': t.get('agent_id'),
+                    }
+                    for t in chain
+                ]
+
+                agent_info = detector._extract_agent_info_from_transactions(chain)
+
+                results.append({
+                    'fraud_type': 'continuous_rapid_activity',
+                    'account_phone': None,
+                    'account_name': None,
+                    'transaction_count': len(chain),
+                    'total_amount': total,
+                    'deposit_count': deposits,
+                    'withdrawal_count': withdrawals,
+                    'unique_parties': unique_parties,
+                    'span_minutes': round(span_mins, 1),
+                    'receipt_nos': [t['receipt_no'] for t in chain],
+                    'transaction_details': txn_details,
+                    'explanation': explanation,
+                    'detection_time': datetime.now(),
+                    'fraud_score': fraud_score,
+                    'agent_info': agent_info,
+                    'business_shortcode': shortcode,
+                })
+
+        logger.info(f"[CRA] {len(results)} findings")
+        return results
+
+    # ------------------------------------------------------------------
     # Helpers
     # ------------------------------------------------------------------
     def _fetch_transactions(self, start_dt, end_dt, company_id, company_ids=None):
@@ -1027,6 +1270,8 @@ class FraudReportService:
                 'high_frequency_daily': 0,
                 'structuring': 0,
                 'float_cycling': 0,
+                'split_deposit': 0,
+                'continuous_rapid_activity': 0,
                 'high_risk': 0,
                 'medium_risk': 0,
                 'low_risk': 0,

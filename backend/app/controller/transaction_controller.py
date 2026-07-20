@@ -52,6 +52,10 @@ FRAUD_TYPE_LABELS = {
     'rapid_back_forth':           'Rapid Back & Forth',
     'deposit_withdrawal_recovery':'Deposit-Withdrawal Recovery',
     'high_frequency_daily':       'High Frequency Daily',
+    'structuring':                'Structuring',
+    'float_cycling':              'Float Cycling',
+    'split_deposit':              'Split Deposit',
+    'continuous_rapid_activity':  'Continuous Rapid Activity',
 }
 
 
@@ -589,6 +593,7 @@ def get_transactions():
             'reasonType': request.args.get('reasonType'),
             'transaction_status': request.args.get('transaction_status'),
             'transaction_type': request.args.get('transaction_type', 'float'),
+            'float_scope': request.args.get('float_scope'),
             'search': request.args.get('search', '')
         }
 
@@ -855,7 +860,8 @@ def get_transaction_stats():
             'company_id': request.args.get('company_id', type=int),
             'start_date': request.args.get('start_date'),
             'end_date': request.args.get('end_date'),
-            'transaction_type': request.args.get('transaction_type', 'float')
+            'transaction_type': request.args.get('transaction_type', 'float'),
+            'float_scope': request.args.get('float_scope')
         }
 
         # Remove None values

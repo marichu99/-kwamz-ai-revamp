@@ -286,6 +286,14 @@
     <div class="b-count">{{ report.summary.high_frequency_daily }}</div>
     <div class="b-label">High Frequency Daily</div>
   </div>
+  <div class="breakdown-item">
+    <div class="b-count">{{ report.summary.split_deposit }}</div>
+    <div class="b-label">Split Deposits</div>
+  </div>
+  <div class="breakdown-item">
+    <div class="b-count">{{ report.summary.continuous_rapid_activity }}</div>
+    <div class="b-label">Continuous Rapid Activity</div>
+  </div>
 </div>
 
 {% if report.findings %}
@@ -351,6 +359,44 @@
       <div class="chip chip-purple">
         <div class="chip-label">Recovery{% if finding.overdraw %} ⚠{% endif %}</div>
         <div class="chip-value">{{ finding.recovery_pct }}%</div>
+      </div>
+    </div>
+    {% endif %}
+
+    <!-- Split deposit stat chips -->
+    {% if finding.fraud_type == 'split_deposit' %}
+    <div class="stat-chips">
+      <div class="chip chip-green">
+        <div class="chip-label">{{ finding.transaction_count }} deposits</div>
+        <div class="chip-value">KES {{ "{:,.0f}".format(finding.total_amount or 0) }}</div>
+      </div>
+      <div class="chip">
+        <div class="chip-label">Within</div>
+        <div class="chip-value">{{ finding.span_minutes }} min</div>
+      </div>
+      {% if finding.cap_structuring %}
+      <div class="chip chip-red">
+        <div class="chip-label">Over cap</div>
+        <div class="chip-value">Split above 250K limit</div>
+      </div>
+      {% endif %}
+    </div>
+    {% endif %}
+
+    <!-- Continuous rapid activity stat chips -->
+    {% if finding.fraud_type == 'continuous_rapid_activity' %}
+    <div class="stat-chips">
+      <div class="chip">
+        <div class="chip-label">Transactions</div>
+        <div class="chip-value">{{ finding.transaction_count }}</div>
+      </div>
+      <div class="chip chip-purple">
+        <div class="chip-label">Non-stop for</div>
+        <div class="chip-value">{{ finding.span_minutes }} min</div>
+      </div>
+      <div class="chip">
+        <div class="chip-label">Distinct parties</div>
+        <div class="chip-value">{{ finding.unique_parties }}</div>
       </div>
     </div>
     {% endif %}

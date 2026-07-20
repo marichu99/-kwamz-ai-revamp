@@ -1298,6 +1298,17 @@ class TransactionService:
             if filters.get('transaction_type'):
                 query = query.filter(Transaction.transaction_type == filters['transaction_type'])
 
+            # Head-office vs tills scope: a head-office transaction is one whose
+            # business_shortcode equals its own company's shortcode (the org's
+            # own account rather than a child till).
+            float_scope = filters.get('float_scope')
+            if float_scope in ('head_office', 'tills'):
+                ho_clause = db.session.query(Company.id).filter(
+                    Company.id == Transaction.company_id,
+                    Company.shortcode == Transaction.business_shortcode,
+                ).exists()
+                query = query.filter(ho_clause if float_scope == 'head_office' else ~ho_clause)
+
             if filters.get('transaction_status'):
                 query = query.filter(Transaction.transaction_status.ilike(f"%{filters['transaction_status']}%"))
 
@@ -1388,7 +1399,10 @@ class TransactionService:
             
             if filters.get('transaction_type'):
                 totals_query = totals_query.filter(Transaction.transaction_type == filters['transaction_type'])
-            
+
+            if float_scope in ('head_office', 'tills'):
+                totals_query = totals_query.filter(ho_clause if float_scope == 'head_office' else ~ho_clause)
+
             if filters.get('transaction_status'):
                 totals_query = totals_query.filter(Transaction.transaction_status.ilike(f"%{filters['transaction_status']}%"))
             
@@ -1621,10 +1635,20 @@ class TransactionService:
             if 'reason_type' in filters:
                 conditions.append("reason_type = %s")
                 params.append(filters['reason_type'])
-            
+
             if 'transaction_status' in filters:
                 conditions.append("transaction_status = %s")
                 params.append(filters['transaction_status'])
+
+            # Head-office vs tills scope (see get_transactions)
+            _HO_EXISTS = (
+                "EXISTS (SELECT 1 FROM companies c WHERE c.id = transactions.company_id "
+                "AND c.shortcode = transactions.business_shortcode)"
+            )
+            if filters.get('float_scope') == 'head_office':
+                conditions.append(_HO_EXISTS)
+            elif filters.get('float_scope') == 'tills':
+                conditions.append(f"NOT {_HO_EXISTS}")
             
             # Date filtering
             if 'start_date' in filters:

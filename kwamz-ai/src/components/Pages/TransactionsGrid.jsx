@@ -77,6 +77,8 @@ function TransactionsGrid() {
 
     // Transaction type toggle: 'float' | 'commission'
     const [transactionType, setTransactionType] = useState('float');
+    // Float scope toggle: 'tills' (child tills) | 'head_office' (org's own float account)
+    const [floatScope, setFloatScope] = useState('tills');
 
     const { showToast } = useToast();
     const dropdownRef = useRef(null);
@@ -228,6 +230,7 @@ function TransactionsGrid() {
                 page: currentPage,
                 per_page: pageSize,
                 transaction_type: transactionType,
+                ...(transactionType === 'float' && { float_scope: floatScope }),
                 search: searchTerm,
                 ...filters
             };
@@ -322,6 +325,7 @@ function TransactionsGrid() {
             const token = localStorage.getItem('token');
             const params = {
                 transaction_type: transactionType,
+                ...(transactionType === 'float' && { float_scope: floatScope }),
                 ...filters
             };
 
@@ -350,7 +354,7 @@ function TransactionsGrid() {
             fetchTransactions();
             fetchStats();
         }
-    }, [currentPage, pageSize, filters, transactionType, tillPage, tillPageSize, tillUpdatedAfter, tillViewAll]);
+    }, [currentPage, pageSize, filters, transactionType, floatScope, tillPage, tillPageSize, tillUpdatedAfter, tillViewAll]);
 
     useEffect(() => {
         if (transactionType !== 'commission') return;
@@ -564,6 +568,16 @@ function TransactionsGrid() {
         fetchTransactions();
     };
 
+    // Toggle float scope (child tills vs head office float account)
+    const handleFloatScopeChange = (scope) => {
+        if (scope === floatScope) return;
+        setFloatScope(scope);
+        setCurrentPage(1);
+        setSelectedTransactionIds([]);
+        setExpandedCompanies(new Set());
+        setExpandedBusinesses(new Set());
+    };
+
     // Toggle transaction type
     const toggleTransactionType = () => {
         const newType = transactionType === 'float' ? 'commission' : 'float';
@@ -611,29 +625,59 @@ function TransactionsGrid() {
                         {getTransactionTypeLabel()}
                     </h1>
                     <p className="text-slate-600 dark:text-slate-400 mt-1">
-                        View and manage {transactionType === 'float' ? 'float' : 'commission'} transactions
+                        View and manage {transactionType === 'float'
+                            ? `float transactions — ${floatScope === 'head_office' ? 'head office accounts' : 'agent tills'}`
+                            : 'commission transactions'}
                     </p>
                 </div>
 
-                <button
-                    onClick={toggleTransactionType}
-                    className={`flex items-center space-x-2 py-2 px-4 rounded-xl transition-colors ${transactionType === 'float'
-                        ? 'bg-blue-500 hover:bg-blue-600 text-white'
-                        : 'bg-amber-500 hover:bg-amber-600 text-white'
-                        }`}
-                >
-                    {transactionType === 'float' ? (
-                        <>
-                            <Coins className="w-4 h-4" />
-                            <span>Switch to Commissions</span>
-                        </>
-                    ) : (
-                        <>
-                            <DollarSign className="w-4 h-4" />
-                            <span>Switch to Float</span>
-                        </>
+                <div className="flex items-center gap-3">
+                    {/* Float scope: child tills vs the head office's own float account */}
+                    {transactionType === 'float' && (
+                        <div className="flex items-center bg-slate-100 dark:bg-slate-700 rounded-xl p-1">
+                            <button
+                                onClick={() => handleFloatScopeChange('tills')}
+                                className={`flex items-center space-x-1.5 py-1.5 px-3 rounded-lg text-sm font-medium transition-colors ${floatScope === 'tills'
+                                    ? 'bg-white dark:bg-slate-800 text-blue-600 dark:text-blue-400 shadow'
+                                    : 'text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-200'
+                                    }`}
+                            >
+                                <Store className="w-4 h-4" />
+                                <span>Tills</span>
+                            </button>
+                            <button
+                                onClick={() => handleFloatScopeChange('head_office')}
+                                className={`flex items-center space-x-1.5 py-1.5 px-3 rounded-lg text-sm font-medium transition-colors ${floatScope === 'head_office'
+                                    ? 'bg-white dark:bg-slate-800 text-blue-600 dark:text-blue-400 shadow'
+                                    : 'text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-200'
+                                    }`}
+                            >
+                                <Building className="w-4 h-4" />
+                                <span>Head Office</span>
+                            </button>
+                        </div>
                     )}
-                </button>
+
+                    <button
+                        onClick={toggleTransactionType}
+                        className={`flex items-center space-x-2 py-2 px-4 rounded-xl transition-colors ${transactionType === 'float'
+                            ? 'bg-blue-500 hover:bg-blue-600 text-white'
+                            : 'bg-amber-500 hover:bg-amber-600 text-white'
+                            }`}
+                    >
+                        {transactionType === 'float' ? (
+                            <>
+                                <Coins className="w-4 h-4" />
+                                <span>Switch to Commissions</span>
+                            </>
+                        ) : (
+                            <>
+                                <DollarSign className="w-4 h-4" />
+                                <span>Switch to Float</span>
+                            </>
+                        )}
+                    </button>
+                </div>
             </div>
 
             {/* Stats Summary */}
