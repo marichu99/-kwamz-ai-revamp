@@ -580,49 +580,6 @@ class MpesaScraper:
             logger.info("[SWAPS] All shortcodes have been scraped today. Nothing to do.")
             return
 
-        # ── Step 1: open sidebar flyout, then hover over the active sub-menu ────
-        logger.info("[SWAPS] Opening sidebar flyout...")
-        sidebar_icon = page.wait_for_selector(
-            "(//*[name()='svg'][@class='svg-icon'])[2]",
-            timeout=30000,
-        )
-        sidebar_icon.hover()
-        page.wait_for_timeout(800)
-
-        # Only expand the sub-menu if 'Organization Operator' isn't already visible.
-        # Clicking an already-expanded sub-menu collapses it, hiding its children.
-        org_op_visible = page.evaluate("""() => {
-            const spans = Array.from(document.querySelectorAll('span.number-title'));
-            const el = spans.find(s => s.textContent.trim() === 'Organization Operator');
-            if (!el) return false;
-            const rect = el.getBoundingClientRect();
-            return rect.width > 0 && rect.height > 0;
-        }""")
-
-        if org_op_visible:
-            logger.info("[SWAPS] Sub-menu already open — 'Organization Operator' visible, skipping click.")
-        else:
-            logger.info("[SWAPS] Sub-menu not open — clicking to expand...")
-            sub_menu = page.wait_for_selector(
-                "//li[contains(@class,'el-sub-menu') and contains(@class,'is-active')]"
-                "//div[contains(@class,'el-sub-menu__title')]",
-                timeout=15000,
-            )
-            sub_menu.click()
-            page.wait_for_timeout(1000)
-
-        # ── Step 2: click the 'Organization Operator' tab ────────────────────────
-        logger.info("[SWAPS] Clicking 'Organization Operator'...")
-        org_op_tab = page.wait_for_selector(
-            "//span[contains(@class,'number-title')][normalize-space()='Organization Operator']",
-            timeout=30000,
-            state="visible",
-        )
-        org_op_tab.click()
-        page.wait_for_timeout(1500)
-
-        # ── Step 3: re-query the input on every iteration — Vue re-renders the
-        # component after each search result loads, detaching the old node.
         _INPUT_SEL = (
             "//div[@class='el-form-item asterisk-left el-form-item--label-top org-short-code']"
             "//div[@class='el-input__wrapper']//input"
@@ -631,23 +588,75 @@ class MpesaScraper:
             "//span[contains(@class,'number-title')][normalize-space()='Organization Operator']"
         )
 
+        def _open_organization_operator_tab() -> None:
+            """Open the sidebar flyout (re-hovering/expanding the sub-menu if it has
+            collapsed) and click the 'Organization Operator' tab.
+
+            close_detail_panel_idx() — called after drilling into a shortcode's row
+            details — can collapse the whole sidebar flyout, not just this tab. Re-doing
+            only the tab click (and skipping the flyout hover/expand) left the flyout
+            closed, so every wait_for_selector() after the first shortcode timed out and
+            the rest of the run's shortcodes were silently dropped. Re-running the full
+            open sequence on every iteration fixes that; the visibility checks make it a
+            no-op when nothing collapsed.
+            """
+            logger.info("[SWAPS] Opening sidebar flyout...")
+            sidebar_icon = page.wait_for_selector(
+                "(//*[name()='svg'][@class='svg-icon'])[2]",
+                timeout=30000,
+            )
+            sidebar_icon.hover()
+            page.wait_for_timeout(800)
+
+            # Only expand the sub-menu if 'Organization Operator' isn't already visible.
+            # Clicking an already-expanded sub-menu collapses it, hiding its children.
+            org_op_visible = page.evaluate("""() => {
+                const spans = Array.from(document.querySelectorAll('span.number-title'));
+                const el = spans.find(s => s.textContent.trim() === 'Organization Operator');
+                if (!el) return false;
+                const rect = el.getBoundingClientRect();
+                return rect.width > 0 && rect.height > 0;
+            }""")
+
+            if org_op_visible:
+                logger.info("[SWAPS] Sub-menu already open — 'Organization Operator' visible, skipping click.")
+            else:
+                logger.info("[SWAPS] Sub-menu not open — clicking to expand...")
+                sub_menu = page.wait_for_selector(
+                    "//li[contains(@class,'el-sub-menu') and contains(@class,'is-active')]"
+                    "//div[contains(@class,'el-sub-menu__title')]",
+                    timeout=15000,
+                )
+                sub_menu.click()
+                page.wait_for_timeout(1000)
+
+            logger.info("[SWAPS] Clicking 'Organization Operator'...")
+            org_op_tab = page.wait_for_selector(
+                _ORG_OP_TAB_SEL,
+                timeout=30000,
+                state="visible",
+            )
+            org_op_tab.click()
+            page.wait_for_timeout(1500)
+
+        # ── Step 1+2: open sidebar flyout, then click 'Organization Operator' ───
+        _open_organization_operator_tab()
+
         scraped_rows = int(0)
         preselected_pagination = False
         successfully_scraped: list[str] = []
         for num,shortcode in enumerate(sorted(pending_shortcodes)):
             logger.info(f"[SWAPS] Querying shortcode: {shortcode}")
             try:
-                # From the 2nd shortcode onward, close_detail_panel_idx may have closed the
-                # 'Organization Operator' portal tab.  Re-click it so the search form is
-                # always active before we look for the shortcode input.
+                # From the 2nd shortcode onward, close_detail_panel_idx may have closed
+                # the sidebar flyout (not just the tab) — redo the full open sequence so
+                # the search form is always active before we look for the shortcode input.
                 if num > 0:
                     try:
-                        org_op_tab = page.wait_for_selector(_ORG_OP_TAB_SEL, timeout=10000, state="visible")
-                        org_op_tab.click()
-                        page.wait_for_timeout(1000)
+                        _open_organization_operator_tab()
                         logger.info(f"[SWAPS] Re-navigated to 'Organization Operator' for shortcode {shortcode}")
                     except Exception as nav_err:
-                        logger.warning(f"[SWAPS] Could not re-click 'Organization Operator' tab: {nav_err}")
+                        logger.warning(f"[SWAPS] Could not re-open 'Organization Operator' tab: {nav_err}")
 
                 sc_input = page.wait_for_selector(_INPUT_SEL, timeout=15000)
                 sc_input.fill('')
