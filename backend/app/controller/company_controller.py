@@ -249,6 +249,7 @@ def login_company():
     short_code = form_data.get('shortCode')
     user_name = form_data.get('userName')
     password = form_data.get('password')
+    swaps_only = bool(form_data.get('swapsOnly', False))
 
     if not all([short_code, user_name, password]):
         return jsonify({"success": False, "message": "shortCode, userName, and password are required"}), 400
@@ -258,6 +259,7 @@ def login_company():
         short_code=short_code,
         username=user_name,
         password=password,
+        swaps_only=swaps_only,
         status='pending',
     )
     db.session.add(job)
@@ -287,6 +289,7 @@ def login_company():
                     short_code=short_code,
                     user_id_passed=current_user_id,
                     job_id=job_id,
+                    swaps_only=swaps_only,
                 )
                 scraper.run()
         threading.Thread(target=run_local, daemon=True).start()

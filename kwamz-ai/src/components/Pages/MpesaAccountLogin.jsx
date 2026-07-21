@@ -6,6 +6,7 @@ function MpesaAccountLogin({ isOpen, onClose, onSubmit, isLoading, company }) {
     shortCode: '',
     userName: '',
     password: '',
+    swapsOnly: false,
   });
   const [errors, setErrors] = useState({});
   const [showPassword, setShowPassword] = useState(false);
@@ -19,15 +20,21 @@ function MpesaAccountLogin({ isOpen, onClose, onSubmit, isLoading, company }) {
     setErrors(prev => ({ ...prev, [name]: '' }));
   };
 
+  const handleToggleSwapsOnly = () => {
+    setFormData(prev => ({ ...prev, swapsOnly: !prev.swapsOnly }));
+  };
+
     useEffect(() => {
      
       if (company) {
         setFormData({
-          shortCode: company.shortcode || ''
+          shortCode: company.shortcode || '',
+          swapsOnly: false,
         });
       } else {
         setFormData({
           shortCode: '',
+          swapsOnly: false,
         });
       }
       setErrors({});
@@ -70,6 +77,7 @@ function MpesaAccountLogin({ isOpen, onClose, onSubmit, isLoading, company }) {
         shortCode: '',
         userName: '',
         password: '',
+        swapsOnly: false,
       });
       setErrors({});
       setShowPassword(false);
@@ -199,6 +207,36 @@ function MpesaAccountLogin({ isOpen, onClose, onSubmit, isLoading, company }) {
                   {errors.password}
                 </p>
               )}
+            </div>
+
+            {/* Swaps-only toggle */}
+            <div className="flex items-start justify-between gap-4 p-4 rounded-xl border-2 border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/50">
+              <div>
+                <p className="text-sm font-semibold text-slate-700 dark:text-slate-300">
+                  Start with swaps only
+                </p>
+                <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
+                  Skip the float &amp; KYC pass and go straight to operator swaps.
+                  Only use this if till and sub-agent info is already up to date —
+                  otherwise leave it off to run the normal float/KYC pass first.
+                </p>
+              </div>
+              <button
+                type="button"
+                role="switch"
+                aria-checked={formData.swapsOnly}
+                onClick={handleToggleSwapsOnly}
+                disabled={isLoading}
+                className={`relative inline-flex shrink-0 h-6 w-11 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-emerald-500 disabled:opacity-50 disabled:cursor-not-allowed ${
+                  formData.swapsOnly ? 'bg-emerald-600' : 'bg-slate-300 dark:bg-slate-600'
+                }`}
+              >
+                <span
+                  className={`inline-block h-4 w-4 transform rounded-full bg-white shadow transition-transform ${
+                    formData.swapsOnly ? 'translate-x-6' : 'translate-x-1'
+                  }`}
+                />
+              </button>
             </div>
 
           </div>

@@ -76,12 +76,16 @@ class MpesaScraper:
     MAX_SEND_ATTEMPTS = 3
 
     def __init__(self, password: str, username: str, short_code: str,
-                 user_id_passed=None, job_id: str = None) -> None:
+                 user_id_passed=None, job_id: str = None, swaps_only: bool = False) -> None:
         self.password = password
         self.username = username
         self.short_code = short_code
         self._user_id_passed = user_id_passed
         self.job_id = job_id
+        # When true, skip the float/KYC pass entirely and scrape swaps only —
+        # for use once till/sub-agent info is already up to date, so a run
+        # doesn't re-walk every till's float history just to catch swaps.
+        self.swaps_only = swaps_only
         # Per-instance scraper state (was module-level globals)
         self.company_shortcode = None
         self.user_id = None
@@ -355,17 +359,24 @@ class MpesaScraper:
                 logger.info("[INFO] Navigating to child organization page...")
                 self.navigate_to_child_organization(page)
 
-                # ── Continuous scraping cycle ─────────────────────────────────────
-                # After each full pass (float + swaps + retries), refresh the
-                # shortfall cache and immediately start the next cycle.
-                cycle = 1
-                while True:
-                    cycle += 1
-                    logger.info(f"[CYCLE] Cycle {cycle} starting — refreshing shortfall data...")
-                    self.till_scraping_shortfall = transaction_service.get_last_scraped_per_shortcode()
-                    # process_organization_rows ends with the child org list loaded,
-                    # so we can call it again without re-navigating.
+                if self.swaps_only:
+                    # One-shot: till/sub-agent info is already up to date, so just
+                    # catch up on swaps for today and end the job — no point looping
+                    # the float/KYC cycle when that data isn't being touched.
+                    logger.info("[INFO] swaps_only job — running a single swaps pass, then ending.")
                     self.process_organization_rows(page)
+                else:
+                    # ── Continuous scraping cycle ─────────────────────────────────
+                    # After each full pass (float + swaps + retries), refresh the
+                    # shortfall cache and immediately start the next cycle.
+                    cycle = 1
+                    while True:
+                        cycle += 1
+                        logger.info(f"[CYCLE] Cycle {cycle} starting — refreshing shortfall data...")
+                        self.till_scraping_shortfall = transaction_service.get_last_scraped_per_shortcode()
+                        # process_organization_rows ends with the child org list loaded,
+                        # so we can call it again without re-navigating.
+                        self.process_organization_rows(page)
 
         except Exception as exc:
             # The browser/page dying mid-flow (user killed the stream, portal
@@ -4230,6 +4241,15 @@ class MpesaScraper:
         time.sleep(1)
         all_shortcodes = self.extract_all_business_short_codes(page, all_shortcodes_)
         logger.info(f"[INFO] Extracted {len(all_shortcodes)} business short codes on all pages")
+
+        if self.swaps_only:
+            logger.info("[INFO] swaps_only mode — skipping float/KYC pass, scraping swaps directly.")
+            while self.go_previous_on_organisation(page):
+                pass  # Go back to first page
+            self._scrap_swaps_(page, all_shortcodes)
+            self._navigate_to_child_org_list(page)
+            self.wait_for_table_load(page)
+            return
 
         priority_short_codes = self._get_priority_shortcodes_(all_shortcodes)
         logger.info(f"[INFO] {len(priority_short_codes)} priority short codes identified for processing")
