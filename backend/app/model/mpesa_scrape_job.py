@@ -14,7 +14,7 @@ class MpesaScrapeJob(db.Model):
     status = db.Column(db.String(20), nullable=False, default='pending')  # pending/running/completed/failed
     # When true, skip the float/KYC pass and scrape swaps directly — for use once
     # till/sub-agent info is already up to date, so the run doesn't redo it.
-    swaps_only = db.Column(db.Boolean, nullable=False, default=False)
+    swaps_first = db.Column(db.Boolean, nullable=False, default=False)
     error_message = db.Column(db.Text, nullable=True)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     started_at = db.Column(db.DateTime, nullable=True)

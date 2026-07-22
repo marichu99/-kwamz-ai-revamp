@@ -76,7 +76,7 @@ class MpesaScraper:
     MAX_SEND_ATTEMPTS = 3
 
     def __init__(self, password: str, username: str, short_code: str,
-                 user_id_passed=None, job_id: str = None, swaps_only: bool = False) -> None:
+                 user_id_passed=None, job_id: str = None, swaps_first: bool = False) -> None:
         self.password = password
         self.username = username
         self.short_code = short_code
@@ -85,7 +85,7 @@ class MpesaScraper:
         # When true, skip the float/KYC pass entirely and scrape swaps only —
         # for use once till/sub-agent info is already up to date, so a run
         # doesn't re-walk every till's float history just to catch swaps.
-        self.swaps_only = swaps_only
+        self.swaps_first = swaps_first
         # Per-instance scraper state (was module-level globals)
         self.company_shortcode = None
         self.user_id = None
@@ -359,24 +359,17 @@ class MpesaScraper:
                 logger.info("[INFO] Navigating to child organization page...")
                 self.navigate_to_child_organization(page)
 
-                if self.swaps_only:
-                    # One-shot: till/sub-agent info is already up to date, so just
-                    # catch up on swaps for today and end the job — no point looping
-                    # the float/KYC cycle when that data isn't being touched.
-                    logger.info("[INFO] swaps_only job — running a single swaps pass, then ending.")
+                # ── Continuous scraping cycle ─────────────────────────────────
+                # After each full pass (float + swaps + retries), refresh the
+                # shortfall cache and immediately start the next cycle.
+                cycle = 1
+                while True:
+                    cycle += 1
+                    logger.info(f"[CYCLE] Cycle {cycle} starting — refreshing shortfall data...")
+                    self.till_scraping_shortfall = transaction_service.get_last_scraped_per_shortcode()
+                    # process_organization_rows ends with the child org list loaded,
+                    # so we can call it again without re-navigating.
                     self.process_organization_rows(page)
-                else:
-                    # ── Continuous scraping cycle ─────────────────────────────────
-                    # After each full pass (float + swaps + retries), refresh the
-                    # shortfall cache and immediately start the next cycle.
-                    cycle = 1
-                    while True:
-                        cycle += 1
-                        logger.info(f"[CYCLE] Cycle {cycle} starting — refreshing shortfall data...")
-                        self.till_scraping_shortfall = transaction_service.get_last_scraped_per_shortcode()
-                        # process_organization_rows ends with the child org list loaded,
-                        # so we can call it again without re-navigating.
-                        self.process_organization_rows(page)
 
         except Exception as exc:
             # The browser/page dying mid-flow (user killed the stream, portal
@@ -591,10 +584,11 @@ class MpesaScraper:
             logger.info("[SWAPS] All shortcodes have been scraped today. Nothing to do.")
             return
 
-        _INPUT_SEL = (
-            "//div[@class='el-form-item asterisk-left el-form-item--label-top org-short-code']"
-            "//div[@class='el-input__wrapper']//input"
-        )
+        # Match on the stable 'org-short-code' class only — Element UI appends
+        # 'is-success'/'is-error' to the wrapper div's class once the field has been
+        # through a validation cycle (i.e. after the first search), which permanently
+        # breaks an exact @class= match from the 2nd shortcode onward.
+        _INPUT_SEL = "(//div[contains(@class,'org-short-code')]//input)[1]"
         _ORG_OP_TAB_SEL = (
             "//span[contains(@class,'number-title')][normalize-space()='Organization Operator']"
         )
@@ -659,17 +653,20 @@ class MpesaScraper:
         for num,shortcode in enumerate(sorted(pending_shortcodes)):
             logger.info(f"[SWAPS] Querying shortcode: {shortcode}")
             try:
-                # From the 2nd shortcode onward, close_detail_panel_idx may have closed
-                # the sidebar flyout (not just the tab) — redo the full open sequence so
-                # the search form is always active before we look for the shortcode input.
-                if num > 0:
-                    try:
-                        _open_organization_operator_tab()
-                        logger.info(f"[SWAPS] Re-navigated to 'Organization Operator' for shortcode {shortcode}")
-                    except Exception as nav_err:
-                        logger.warning(f"[SWAPS] Could not re-open 'Organization Operator' tab: {nav_err}")
+                # Reuse the already-open search form across shortcodes instead of
+                # re-navigating every iteration — re-clicking the sidebar tab opens a
+                # fresh portal tab even when one is already active, and doing that on
+                # every shortcode floods the tab strip faster than close_detail_panel_idx()
+                # (which closes tabs by hardcoded position) can keep up with, eventually
+                # burying the real search tab. Only re-open when the input is actually gone
+                # (e.g. a row drill-down left a detail tab on top of it).
+                try:
+                    sc_input = page.wait_for_selector(_INPUT_SEL, timeout=5000)
+                except Exception:
+                    logger.info(f"[SWAPS] Search input not visible for {shortcode} — re-opening 'Organization Operator' tab...")
+                    _open_organization_operator_tab()
+                    sc_input = page.wait_for_selector(_INPUT_SEL, timeout=15000)
 
-                sc_input = page.wait_for_selector(_INPUT_SEL, timeout=15000)
                 sc_input.fill('')
                 sc_input.fill(shortcode)
                 page.wait_for_timeout(500)
@@ -4237,26 +4234,23 @@ class MpesaScraper:
         total_processed = 0
         to_be_rerun: list[int] = []
         self.close_irritative_dialog_box(page)
-        all_shortcodes_: Set[str] = set()
-        time.sleep(1)
-        all_shortcodes = self.extract_all_business_short_codes(page, all_shortcodes_)
-        logger.info(f"[INFO] Extracted {len(all_shortcodes)} business short codes on all pages")
 
-        if self.swaps_only:
-            logger.info("[INFO] swaps_only mode — skipping float/KYC pass, scraping swaps directly.")
-            while self.go_previous_on_organisation(page):
-                pass  # Go back to first page
-            self._scrap_swaps_(page, all_shortcodes)
+        if self.swaps_first:
+            # Till/sub-agent info is already up to date — skip the live float/KYC
+            # extraction pass entirely (it walks the whole paginated child org list)
+            # and scrape swaps directly against whatever shortcodes are already on
+            # record in AgentCompany.
+            db_shortcodes = self._get_db_scraped_shortcodes_()
+            logger.info(f"[INFO] swaps_first: {len(db_shortcodes)} shortcode(s) loaded from DB — skipping live extraction")
+            self._scrap_swaps_(page, db_shortcodes)
             self._navigate_to_child_org_list(page)
             self.wait_for_table_load(page)
             return
 
-        priority_short_codes = self._get_priority_shortcodes_(all_shortcodes)
-        logger.info(f"[INFO] {len(priority_short_codes)} priority short codes identified for processing")
-        has_priority_codes = bool(priority_short_codes)
-
-        while self.go_previous_on_organisation(page):
-            pass  # Go back to first page
+        all_shortcodes_: Set[str] = set()
+        time.sleep(1)
+        all_shortcodes = self.extract_all_business_short_codes(page, all_shortcodes_)
+        logger.info(f"[INFO] Extracted {len(all_shortcodes)} business short codes on all pages")
 
         def _do_swaps_then_return(label: str) -> None:
             """Scrape swaps (dedup skips already-done shortcodes), then navigate back to child org list."""
@@ -4265,6 +4259,13 @@ class MpesaScraper:
             logger.info(f"[INFO] [{label}] Swaps done. Navigating back to Child Organisation list...")
             self._navigate_to_child_org_list(page)
             self.wait_for_table_load(page)
+
+        priority_short_codes = self._get_priority_shortcodes_(all_shortcodes)
+        logger.info(f"[INFO] {len(priority_short_codes)} priority short codes identified for processing")
+        has_priority_codes = bool(priority_short_codes)
+
+        while self.go_previous_on_organisation(page):
+            pass  # Go back to first page
 
         def _do_retries(label: str) -> None:
             """Run retry pass if anything failed, then scrape swaps and return to child org list."""
@@ -4412,6 +4413,31 @@ class MpesaScraper:
             self.extract_all_business_short_codes(page, short_codes)
 
         return short_codes
+
+    def _get_db_scraped_shortcodes_(self) -> Set[str]:
+
+        """
+        Return every shortcode whose agent info has already been scraped into
+        AgentCompany (i.e. last_scraped_at is set). Used by swaps_first to source
+        the shortcode list from the DB instead of a live float/KYC extraction pass.
+        """
+        from app.model.agentcompany import AgentCompany
+        from app import db
+
+        rows = db.session.query(
+            AgentCompany.short_code,
+            AgentCompany.business_short_code,
+            AgentCompany.agentcompany_code,
+        ).filter(
+            AgentCompany.last_scraped_at.isnot(None)
+        ).all()
+
+        codes: Set[str] = set()
+        for row in rows:
+            for code in (row.short_code, row.business_short_code, row.agentcompany_code):
+                if code:
+                    codes.add(code)
+        return codes
 
     def _get_stale_scrape_shortcodes_(self, all_shortcodes: Set[str], stale_days: int = 30) -> Set[str]:
 

@@ -213,7 +213,7 @@ function MpesaAccountLogin({ isOpen, onClose, onSubmit, isLoading, company }) {
             <div className="flex items-start justify-between gap-4 p-4 rounded-xl border-2 border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/50">
               <div>
                 <p className="text-sm font-semibold text-slate-700 dark:text-slate-300">
-                  Start with swaps only
+                  Start with swaps first
                 </p>
                 <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
                   Skip the float &amp; KYC pass and go straight to operator swaps.

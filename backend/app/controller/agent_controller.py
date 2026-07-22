@@ -86,7 +86,7 @@ def get_pending_job():
             'username': job.username,
             'password': job.password,
             'user_id': job.user_id,
-            'swaps_only': job.swaps_only,
+            'swaps_first': job.swaps_first,
         }
     }), 200
 
