@@ -4236,16 +4236,18 @@ class MpesaScraper:
         self.close_irritative_dialog_box(page)
 
         if self.swaps_first:
-            # Till/sub-agent info is already up to date — skip the live float/KYC
-            # extraction pass entirely (it walks the whole paginated child org list)
-            # and scrape swaps directly against whatever shortcodes are already on
-            # record in AgentCompany.
+            # Till/sub-agent info is already up to date — scrape swaps against
+            # whatever shortcodes are already on record in AgentCompany first
+            # (skipping the live extraction pass for this step), then fall
+            # through into the normal float/KYC pass below. Once today's swaps
+            # are already logged as done this is a fast no-op, so this must NOT
+            # return early — doing so left the run spinning empty cycles forever
+            # instead of ever getting to the float pass.
             db_shortcodes = self._get_db_scraped_shortcodes_()
-            logger.info(f"[INFO] swaps_first: {len(db_shortcodes)} shortcode(s) loaded from DB — skipping live extraction")
+            logger.info(f"[INFO] swaps_first: {len(db_shortcodes)} shortcode(s) loaded from DB for swaps")
             self._scrap_swaps_(page, db_shortcodes)
             self._navigate_to_child_org_list(page)
             self.wait_for_table_load(page)
-            return
 
         all_shortcodes_: Set[str] = set()
         time.sleep(1)
@@ -4418,12 +4420,25 @@ class MpesaScraper:
 
         """
         Return every shortcode whose agent info has already been scraped into
-        AgentCompany (i.e. last_scraped_at is set) for the currently logged-in
-        company. Used by swaps_first to source the shortcode list from the DB
-        instead of a live float/KYC extraction pass.
+        AgentCompany (i.e. last_scraped_at is set) for the company currently
+        logged into (self.company_shortcode) — a user can own more than one
+        company, so scoping by user_id alone would leak other companies'
+        shortcodes into this run. Used by swaps_first to source the shortcode
+        list from the DB instead of a live float/KYC extraction pass.
         """
         from app.model.agentcompany import AgentCompany
+        from app.model.company import Company
         from app import db
+
+        company = Company.query.filter_by(
+            shortcode=self.company_shortcode, user_id=self.user_id
+        ).first()
+        if not company:
+            logger.warning(
+                f"[SWAPS] No Company found for shortcode={self.company_shortcode} "
+                f"(user_id={self.user_id}) — swaps_first has nothing to scrape"
+            )
+            return set()
 
         rows = db.session.query(
             AgentCompany.short_code,
@@ -4431,7 +4446,7 @@ class MpesaScraper:
             AgentCompany.agentcompany_code,
         ).filter(
             AgentCompany.last_scraped_at.isnot(None),
-            AgentCompany.user_id == self.user_id,
+            AgentCompany.company_id == company.id,
         ).all()
 
         codes: Set[str] = set()
