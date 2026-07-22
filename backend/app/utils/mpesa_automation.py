@@ -4418,8 +4418,9 @@ class MpesaScraper:
 
         """
         Return every shortcode whose agent info has already been scraped into
-        AgentCompany (i.e. last_scraped_at is set). Used by swaps_first to source
-        the shortcode list from the DB instead of a live float/KYC extraction pass.
+        AgentCompany (i.e. last_scraped_at is set) for the currently logged-in
+        company. Used by swaps_first to source the shortcode list from the DB
+        instead of a live float/KYC extraction pass.
         """
         from app.model.agentcompany import AgentCompany
         from app import db
@@ -4429,7 +4430,8 @@ class MpesaScraper:
             AgentCompany.business_short_code,
             AgentCompany.agentcompany_code,
         ).filter(
-            AgentCompany.last_scraped_at.isnot(None)
+            AgentCompany.last_scraped_at.isnot(None),
+            AgentCompany.user_id == self.user_id,
         ).all()
 
         codes: Set[str] = set()
