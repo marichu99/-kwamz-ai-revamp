@@ -60,7 +60,11 @@ STRUCT_MIN_TOTAL = 5000.0        # minimum combined amount (KES)
 SPLITDEP_MAX_GAP_MINUTES = 10    # max gap between consecutive deposits in a chain
 SPLITDEP_MIN_COUNT = 3           # chains of 3+ deposits always qualify
 SPLITDEP_MIN_TOTAL = 10000.0     # minimum combined amount for a 3+ chain (KES)
-SPLITDEP_PAIR_MIN_TOTAL = 250000.0  # 2-deposit chains only qualify above the single-deposit cap
+SINGLE_DEPOSIT_CAP = 250000.0    # platform's per-transaction deposit limit — a deposit at
+                                  # or above this is a legitimate max-out, never split evidence
+SPLITDEP_PAIR_MIN_TOTAL = SINGLE_DEPOSIT_CAP  # 2-deposit chains (both members already
+                                  # sub-cap) only qualify once their combined total reaches
+                                  # the cap — i.e. they were kept under the cap on purpose
 
 # Continuous rapid activity: till kept busy with back-to-back transactions
 CRA_MAX_GAP_MINUTES = 2          # max gap between consecutive transactions in a chain
@@ -996,21 +1000,37 @@ class FraudReportService:
     # ------------------------------------------------------------------
     # Split Deposit: one person's deposit split into several deposits
     # Catches e.g. a KES 50,000 deposit arriving as 20,000 + 20,000 + 10,000
-    # from the same party in quick succession. A 2-deposit chain only
-    # qualifies when the combined amount exceeds the single-deposit cap
-    # (e.g. 250,000 + 245,216 within a minute — structuring around the cap).
+    # from the same party in quick succession. Deposits at or above the
+    # single-deposit cap (SINGLE_DEPOSIT_CAP) are excluded up front — moving
+    # more than the cap requires multiple deposits by construction, so a
+    # full-cap deposit is never itself evidence of splitting. A 2-deposit
+    # chain (both members already sub-cap) only qualifies when their combined
+    # amount reaches the cap (e.g. 200,000 + 150,000 within a minute —
+    # structuring to stay under the cap on each individual deposit).
     # ------------------------------------------------------------------
     def _detect_split_deposits(self, txn_dicts, detector):
         deposits = [
             t for t in txn_dicts
             if t.get('reason_type') == 'Deposit at Agent Till' and t.get('phone_number')
         ]
-        logger.info(f"[SPLITDEP] {len(deposits)} deposits with a parsed phone")
 
         # Deposits at a till record the amount as float leaving the till
         # (withdrawn); fall back to paid_in for statement variants.
         def _amount(t):
             return abs(t.get('withdrawn', 0)) or t.get('paid_in', 0)
+
+        # A deposit at or above the single-transaction cap is a legitimate
+        # max-out, not evidence of splitting — moving more than the cap
+        # requires multiple deposits by construction (the platform won't allow
+        # a single deposit above it), so e.g. 250,000 followed by another
+        # deposit must never itself be flagged. Only amounts strictly below
+        # the cap are eligible to form a split chain.
+        pre_filter_count = len(deposits)
+        deposits = [t for t in deposits if _amount(t) < SINGLE_DEPOSIT_CAP]
+        logger.info(
+            f"[SPLITDEP] {len(deposits)} sub-cap deposit(s) with a parsed phone "
+            f"({pre_filter_count - len(deposits)} at/above the {SINGLE_DEPOSIT_CAP:,.0f} cap excluded)"
+        )
 
         groups = defaultdict(list)
         for txn in deposits:
