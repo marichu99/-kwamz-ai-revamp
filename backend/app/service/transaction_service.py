@@ -5407,8 +5407,16 @@ class TransactionService:
                 for a in agents:
                     agent_name_map[a.business_short_code] = a.company_name
 
-            data = [
-                {
+            data = []
+            for r in rows:
+                company_shortcode = r.company.shortcode if r.company else None
+                agent_company_name = agent_name_map.get(r.business_shortcode)
+                if not agent_company_name and company_shortcode and r.business_shortcode == company_shortcode:
+                    # Transaction's shortcode matches the company's own shortcode (not a
+                    # sub-agent till) — this is the head office's own till, not represented
+                    # in AgentCompany, so it would otherwise render with no name at all.
+                    agent_company_name = 'Head Office'
+                data.append({
                     'id': r.id,
                     'receipt_no': r.receipt_no,
                     'completion_time': r.completion_time.isoformat() if r.completion_time else None,
@@ -5418,12 +5426,10 @@ class TransactionService:
                     'currency': r.currency,
                     'transaction_status': r.transaction_status,
                     'business_shortcode': r.business_shortcode,
-                    'agent_company_name': agent_name_map.get(r.business_shortcode),
+                    'agent_company_name': agent_company_name,
                     'company_name': r.company.company_name if r.company else None,
-                    'company_shortcode': r.company.shortcode if r.company else None,
-                }
-                for r in rows
-            ]
+                    'company_shortcode': company_shortcode,
+                })
             return {'success': True, 'data': data, 'total': len(data)}
         except Exception as e:
             logger.error(f"Error fetching clawbacks: {e}", exc_info=True)
