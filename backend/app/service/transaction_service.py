@@ -5157,6 +5157,76 @@ class TransactionService:
                         'volume': float(row['deposits'] or 0) + float(row['withdrawals'] or 0)
                     })
 
+                # ============ MMF COMMISSION TRANSFER TRENDS ============
+                # Monthly total of "Transfer of Commission to MMF" transactions,
+                # mirrors the "Previous Period" MMF figure on the commissions card
+                # but as a 12-month time series for the selected company (or all).
+                mmf_trend_query = f"""
+                    SELECT
+                        TO_CHAR(completion_time, 'YYYY-MM') as month,
+                        TO_CHAR(completion_time, 'Mon') as month_name,
+                        COALESCE(SUM(ABS(COALESCE(withdrawn, 0))), 0) as amount
+                    FROM transactions
+                    WHERE {where_clause}
+                    AND transaction_type = 'commission'
+                    AND reason_type LIKE %s
+                    AND completion_time >= NOW() - INTERVAL '12 months'
+                    GROUP BY TO_CHAR(completion_time, 'YYYY-MM'), TO_CHAR(completion_time, 'Mon')
+                    ORDER BY month ASC
+                """
+                cursor.execute(mmf_trend_query, params + ['%Transfer of Commission to MMF%'])
+                mmf_trend_result = cursor.fetchall()
+
+                mmf_transfer_trends = []
+                for row in mmf_trend_result:
+                    mmf_transfer_trends.append({
+                        'name': row['month_name'],
+                        'month': row['month'],
+                        'amount': float(row['amount'] or 0)
+                    })
+
+                mmf_transfer_growth = 0
+                if len(mmf_transfer_trends) >= 2:
+                    mmf_transfer_growth = calc_growth(
+                        mmf_transfer_trends[-1]['amount'], mmf_transfer_trends[-2]['amount']
+                    )
+
+                # ============ COMMISSION ROLLUP TRENDS ============
+                # Monthly total of "Aggregator Commission roll-up to Commission Held
+                # Account" transactions (head-office rollup), same source as the
+                # Monthly Commission Rollup report (receipt_no NOT LIKE 'COMM-%' AND
+                # reason_type ILIKE '%roll%') as a 12-month time series.
+                rollup_trend_query = f"""
+                    SELECT
+                        TO_CHAR(completion_time, 'YYYY-MM') as month,
+                        TO_CHAR(completion_time, 'Mon') as month_name,
+                        COALESCE(SUM(ABS(COALESCE(withdrawn, 0))), 0) as amount
+                    FROM transactions
+                    WHERE {where_clause}
+                    AND transaction_type = 'commission'
+                    AND receipt_no NOT LIKE 'COMM-%%'
+                    AND reason_type ILIKE %s
+                    AND completion_time >= NOW() - INTERVAL '12 months'
+                    GROUP BY TO_CHAR(completion_time, 'YYYY-MM'), TO_CHAR(completion_time, 'Mon')
+                    ORDER BY month ASC
+                """
+                cursor.execute(rollup_trend_query, params + ['%roll%'])
+                rollup_trend_result = cursor.fetchall()
+
+                commission_rollup_trends = []
+                for row in rollup_trend_result:
+                    commission_rollup_trends.append({
+                        'name': row['month_name'],
+                        'month': row['month'],
+                        'amount': float(row['amount'] or 0)
+                    })
+
+                commission_rollup_growth = 0
+                if len(commission_rollup_trends) >= 2:
+                    commission_rollup_growth = calc_growth(
+                        commission_rollup_trends[-1]['amount'], commission_rollup_trends[-2]['amount']
+                    )
+
                 # ============ TRANSACTION TYPE DISTRIBUTION ============
                 # Shows distribution by reason_type for float transactions
                 distribution_query = f"""
@@ -5340,6 +5410,10 @@ class TransactionService:
                     'data': {
                         'kpis': kpi_data,
                         'monthly_trends': monthly_trends,
+                        'mmf_transfer_trends': mmf_transfer_trends,
+                        'mmf_transfer_growth': mmf_transfer_growth,
+                        'commission_rollup_trends': commission_rollup_trends,
+                        'commission_rollup_growth': commission_rollup_growth,
                         'daily_trends': daily_trends,
                         'type_distribution': type_distribution,
                         'recent_transactions': recent_transactions,

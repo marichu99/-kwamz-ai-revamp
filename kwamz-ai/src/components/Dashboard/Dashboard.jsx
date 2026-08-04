@@ -2,6 +2,8 @@ import React, { useState, useEffect, useCallback } from 'react';
 import StatsGrid from './StatsGrid';
 import DashboardHeader from './DashboardHeader';
 import RevenueChart from './RevenueChart';
+import CommissionTransferChart from './CommissionTransferChart';
+import CommissionRollupChart from './CommissionRollupChart';
 import TrafficSourcesChart from './TrafficSourcesChart';
 import OrdersChart from './OrdersChart';
 import RecentActivity from './RecentActivity';
@@ -145,6 +147,19 @@ function Dashboard({ currentPage, setCurrentPage }) {
           return (
             <>
               <StatsGrid kpis={analyticsData?.kpis} isLoading={isLoading} isOnboarding={isOnboarding} commissionBalance={commissionBalance} selectedCompany={selectedCompany} />
+
+              <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
+                <CommissionTransferChart
+                  data={analyticsData?.mmf_transfer_trends || []}
+                  growth={analyticsData?.mmf_transfer_growth || 0}
+                  isOnboarding={isOnboarding}
+                />
+                <CommissionRollupChart
+                  data={analyticsData?.commission_rollup_trends || []}
+                  growth={analyticsData?.commission_rollup_growth || 0}
+                  isOnboarding={isOnboarding}
+                />
+              </div>
 
               <div className="grid grid-cols-1 xl:grid-cols-3 gap-6">
                 <RevenueChart
