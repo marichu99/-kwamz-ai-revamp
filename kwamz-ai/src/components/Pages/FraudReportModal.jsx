@@ -310,6 +310,7 @@ const TYPE_LABELS = {
     split_transaction: 'Split Transaction',
     split_deposit: 'Split Deposit',
     continuous_rapid_activity: 'Continuous Rapid Activity',
+    fast_reversal: 'Fast Full Reversal',
 };
 
 function GenericFindingCard({ finding, index }) {
@@ -607,8 +608,9 @@ export default function FraudReportModal({ isOpen, onClose, companyId }) {
 
     if (!isOpen) return null;
 
-    // Show all split-style findings: classic split, split deposits, continuous rapid activity
-    const SHOWN_TYPES = ['split_transaction', 'split_deposit', 'continuous_rapid_activity'];
+    // Show all split-style findings: classic split, split deposits, continuous rapid activity,
+    // and fast full reversals (the closest capturable proxy for commission clawback causes)
+    const SHOWN_TYPES = ['split_transaction', 'split_deposit', 'continuous_rapid_activity', 'fast_reversal'];
     const allFindings = report?.findings || [];
     const findings = allFindings.filter(f => SHOWN_TYPES.includes(f.fraud_type));
     const summary = report?.summary;

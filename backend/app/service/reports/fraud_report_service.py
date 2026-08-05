@@ -70,6 +70,17 @@ SPLITDEP_PAIR_MIN_TOTAL = SINGLE_DEPOSIT_CAP  # 2-deposit chains (both members a
 CRA_MAX_GAP_MINUTES = 2          # max gap between consecutive transactions in a chain
 CRA_MIN_DURATION_MINUTES = 60    # chain must run at least this long without a break
 
+# Fast full reversal: a deposit reversed for its exact amount shortly after.
+# Calibrated against production data: ~68% of all matched deposit reversals
+# settle in under 2 minutes — that's M-Pesa auto-correcting failed/duplicate
+# requests, not a fraud signal, so it's excluded. The 2-30 minute band is a
+# much smaller, cleaner set (e.g. a KES 250,000 deposit reversed in under
+# 5 minutes) that looks like a deliberate reversal rather than a system retry.
+FASTREV_MIN_AMOUNT = 3000.0       # minimum deposit amount to consider (KES)
+FASTREV_MIN_GAP_MINUTES = 2       # below this = M-Pesa auto-correction, not flagged
+FASTREV_MAX_GAP_MINUTES = 30      # above this it's no longer a "fast" reversal
+FASTREV_LOOKAHEAD_HOURS = 24      # how far ahead to search for a matching reversal
+
 # Float cycling (till-level pass-through)
 FLOAT_TOP_UP_REASONS = {
     'Organization Transfer from MMF Account to Float Account via STK',
@@ -160,9 +171,13 @@ class FraudReportService:
         cra_results = self._detect_continuous_rapid_activity(txn_dicts, detector)
         logger.info(f"[FraudReport] continuous_rapid_activity findings: {len(cra_results)}")
 
+        # Fast full reversal: deposit reversed for its exact amount shortly after
+        fastrev_results = self._detect_fast_reversals(txn_dicts, detector)
+        logger.info(f"[FraudReport] fast_reversal findings: {len(fastrev_results)}")
+
         all_results = (split_results + rollover_results + rapid_results + dwr_results
                        + hf_results + struct_results + cycling_results
-                       + splitdep_results + cra_results)
+                       + splitdep_results + cra_results + fastrev_results)
         logger.info(f"[FraudReport] Total findings: {len(all_results)}")
 
         # Assign risk levels
@@ -191,6 +206,7 @@ class FraudReportService:
                 'float_cycling': len(cycling_results),
                 'split_deposit': len(splitdep_results),
                 'continuous_rapid_activity': len(cra_results),
+                'fast_reversal': len(fastrev_results),
                 'high_risk': sum(1 for r in all_results if r.get('risk_level') == 'HIGH'),
                 'medium_risk': sum(1 for r in all_results if r.get('risk_level') == 'MEDIUM'),
                 'low_risk': sum(1 for r in all_results if r.get('risk_level') == 'LOW'),
@@ -1235,6 +1251,146 @@ class FraudReportService:
         return results
 
     # ------------------------------------------------------------------
+    # Fast Full Reversal: a deposit reversed for its exact amount, by the
+    # same phone at the same shortcode, 2-30 minutes later.
+    #
+    # Every "Commission Clawback" line M-Pesa sends us is unlabeled
+    # boilerplate — no reference to which transaction it's clawing back.
+    # But cross-referencing recent clawback batches against the float ledger
+    # showed a repeatable pattern: a large deposit gets fully reversed on the
+    # same till roughly a day before the till's next clawback lands. This
+    # detector surfaces that reversal moment itself — it's the closest
+    # capturable proxy for "why" a clawback happened, and a fast full
+    # reversal is a legitimate anomaly on its own even when no clawback
+    # follows.
+    #
+    # The under-2-minute band is deliberately excluded: ~68% of all matched
+    # deposit reversals in production settle in under 2 minutes, which is
+    # M-Pesa auto-correcting a failed or duplicate request, not a person
+    # reversing a settled transaction.
+    # ------------------------------------------------------------------
+    def _detect_fast_reversals(self, txn_dicts, detector):
+        DEPOSIT_REASON = 'Deposit at Agent Till'
+        REVERSAL_REASONS = {'Deposit at Agent Till Reversal via API', 'Deposit Reversal'}
+
+        deposits = [
+            t for t in txn_dicts
+            if t.get('reason_type') == DEPOSIT_REASON and t.get('phone_number')
+            and abs(t.get('withdrawn', 0)) >= FASTREV_MIN_AMOUNT
+        ]
+        reversals = [
+            t for t in txn_dicts
+            if t.get('reason_type') in REVERSAL_REASONS and t.get('phone_number')
+        ]
+        logger.info(f"[FASTREV] {len(deposits)} eligible deposits, {len(reversals)} reversal txns")
+
+        reversal_groups = defaultdict(list)
+        for r in reversals:
+            key = (r['phone_number'], r.get('business_shortcode') or '')
+            reversal_groups[key].append(r)
+        for key in reversal_groups:
+            reversal_groups[key].sort(key=lambda x: x['completion_time'])
+
+        results = []
+        used_receipts = set()
+        lookahead = timedelta(hours=FASTREV_LOOKAHEAD_HOURS)
+
+        for dep in sorted(deposits, key=lambda x: x['completion_time']):
+            if dep['receipt_no'] in used_receipts:
+                continue
+
+            dep_amount = abs(dep.get('withdrawn', 0))
+            key = (dep['phone_number'], dep.get('business_shortcode') or '')
+
+            match = None
+            for r in reversal_groups.get(key, []):
+                if r['receipt_no'] in used_receipts or r['receipt_no'] == dep['receipt_no']:
+                    continue
+                if abs(r.get('paid_in', 0) - dep_amount) >= 0.01:
+                    continue
+                gap = (r['completion_time'] - dep['completion_time']).total_seconds() / 60
+                if gap < FASTREV_MIN_GAP_MINUTES:
+                    continue
+                if gap > FASTREV_MAX_GAP_MINUTES:
+                    if r['completion_time'] - dep['completion_time'] > lookahead:
+                        break
+                    continue
+                match = r
+                break
+
+            if not match:
+                continue
+
+            used_receipts.add(dep['receipt_no'])
+            used_receipts.add(match['receipt_no'])
+
+            gap_minutes = (match['completion_time'] - dep['completion_time']).total_seconds() / 60
+            name = dep.get('name') or dep['phone_number']
+            shortcode = dep.get('business_shortcode') or ''
+
+            # Bigger amount + faster (but non-instant) reversal = higher risk
+            fraud_score = min(45 + int(dep_amount // 20000) * 5 + max(0, 15 - int(gap_minutes)), 100)
+
+            explanation = (
+                f"FAST FULL REVERSAL: {name} deposited KES {dep_amount:,.2f} (receipt {dep['receipt_no']}) "
+                f"at shortcode {shortcode}, then had the exact same amount reversed "
+                f"{gap_minutes:.1f} minute(s) later (receipt {match['receipt_no']}). "
+                f"A full-value reversal this fast falls outside the sub-2-minute window where M-Pesa "
+                f"auto-corrects failed or duplicate requests, so this looks like a deliberate reversal — "
+                f"worth checking for staged deposit volume, commission gaming, or a disputed transaction."
+            )
+
+            txn_details = [
+                {
+                    'receipt_no': dep['receipt_no'],
+                    'amount': dep_amount,
+                    'type': 'Deposit',
+                    'time': dep['completion_time'].strftime('%Y-%m-%d %H:%M:%S')
+                        if hasattr(dep['completion_time'], 'strftime') else str(dep['completion_time']),
+                    'party_phone': dep['phone_number'],
+                    'party_name': dep.get('name'),
+                    'other_party_info': dep.get('other_party_info', ''),
+                    'business_shortcode': shortcode,
+                    'agent_id': dep.get('agent_id'),
+                },
+                {
+                    'receipt_no': match['receipt_no'],
+                    'amount': match.get('paid_in', 0),
+                    'type': 'Reversal',
+                    'time': match['completion_time'].strftime('%Y-%m-%d %H:%M:%S')
+                        if hasattr(match['completion_time'], 'strftime') else str(match['completion_time']),
+                    'party_phone': match.get('phone_number'),
+                    'party_name': match.get('name'),
+                    'other_party_info': match.get('other_party_info', ''),
+                    'business_shortcode': shortcode,
+                    'agent_id': match.get('agent_id'),
+                },
+            ]
+
+            agent_info = detector._extract_agent_info_from_transactions([dep, match])
+
+            results.append({
+                'fraud_type': 'fast_reversal',
+                'account_phone': dep['phone_number'],
+                'account_name': dep.get('name'),
+                'transaction_count': 2,
+                'total_amount': dep_amount,
+                'deposit_amount': dep_amount,
+                'span_minutes': round(gap_minutes, 1),
+                'receipt_nos': [dep['receipt_no'], match['receipt_no']],
+                'transaction_details': txn_details,
+                'explanation': explanation,
+                'detection_time': datetime.now(),
+                'fraud_score': fraud_score,
+                'agent_info': agent_info,
+                'business_shortcode': shortcode,
+            })
+
+        results.sort(key=lambda r: r['deposit_amount'], reverse=True)
+        logger.info(f"[FASTREV] {len(results)} findings")
+        return results
+
+    # ------------------------------------------------------------------
     # Helpers
     # ------------------------------------------------------------------
     def _fetch_transactions(self, start_dt, end_dt, company_id, company_ids=None):
@@ -1302,6 +1458,7 @@ class FraudReportService:
                 'float_cycling': 0,
                 'split_deposit': 0,
                 'continuous_rapid_activity': 0,
+                'fast_reversal': 0,
                 'high_risk': 0,
                 'medium_risk': 0,
                 'low_risk': 0,
