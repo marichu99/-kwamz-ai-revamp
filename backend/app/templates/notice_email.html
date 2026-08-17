@@ -1,0 +1,172 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{{ subject }}</title>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;500;600;700&display=swap');
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Poppins', sans-serif;
+            background-color: #faf7fc;
+            margin: 0;
+            padding: 20px;
+            color: #333333;
+        }
+
+        .container {
+            background-color: #ffffff;
+            max-width: 560px;
+            margin: 30px auto;
+            border-radius: 20px;
+            overflow: hidden;
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.1);
+        }
+
+        .header {
+            background: linear-gradient(135deg, #ff00cc 0%, #cc00ff 50%, #9900ff 100%);
+            padding: 30px;
+            color: white;
+            text-align: center;
+        }
+
+        .logo {
+            font-size: 28px;
+            font-weight: 700;
+            margin-bottom: 10px;
+            letter-spacing: 1px;
+        }
+
+        .tagline {
+            font-size: 16px;
+            opacity: 0.9;
+            font-weight: 300;
+        }
+
+        .content {
+            padding: 30px;
+        }
+
+        .title {
+            font-size: 20px;
+            font-weight: 600;
+            color: #333;
+            margin-bottom: 20px;
+        }
+
+        .message {
+            color: #666;
+            line-height: 1.6;
+            margin-bottom: 20px;
+        }
+
+        .details-box {
+            background: #f9f7ff;
+            border-radius: 12px;
+            border-left: 4px solid #cc00ff;
+            padding: 18px 20px;
+            margin: 20px 0;
+        }
+
+        .details-row {
+            display: flex;
+            justify-content: space-between;
+            padding: 6px 0;
+            font-size: 14px;
+        }
+
+        .details-row + .details-row {
+            border-top: 1px solid #eee;
+        }
+
+        .details-label {
+            color: #666;
+        }
+
+        .details-value {
+            color: #333;
+            font-weight: 600;
+            text-align: right;
+        }
+
+        .button {
+            display: block;
+            width: 100%;
+            background: linear-gradient(135deg, #ff00cc 0%, #cc00ff 100%);
+            color: white;
+            text-align: center;
+            padding: 16px;
+            border-radius: 50px;
+            text-decoration: none;
+            font-weight: 600;
+            font-size: 16px;
+            margin: 30px 0;
+        }
+
+        .footer {
+            background: #f5f5f5;
+            padding: 20px;
+            text-align: center;
+            color: #666;
+            font-size: 12px;
+        }
+
+        @media (max-width: 600px) {
+            .container {
+                margin: 15px;
+                border-radius: 15px;
+            }
+
+            .header, .content {
+                padding: 20px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <div class="logo">Kwamz-AI</div>
+            <div class="tagline">{{ tagline or 'System Notification' }}</div>
+        </div>
+
+        <div class="content">
+            <p class="title">{{ title or subject }}</p>
+
+            {% for paragraph in paragraphs %}
+            <p class="message">{{ paragraph }}</p>
+            {% endfor %}
+
+            {% if details %}
+            <div class="details-box">
+                {% for label, value in details %}
+                <div class="details-row">
+                    <span class="details-label">{{ label }}</span>
+                    <span class="details-value">{{ value }}</span>
+                </div>
+                {% endfor %}
+            </div>
+            {% endif %}
+
+            {% if cta_url %}
+            <a href="{{ cta_url }}" class="button">{{ cta_label or 'Open Dashboard' }}</a>
+            {% endif %}
+        </div>
+
+        <div class="footer">
+            <p>&copy; {{ year }} Kwamz-AI. All rights reserved.</p>
+            <p style="font-size: 11px; margin-top: 15px; color: #999;">
+                This is an automated message. Please do not reply to this email.<br>
+                Our mailing address is: support@kwamz-ai.com
+            </p>
+        </div>
+    </div>
+</body>
+</html>

@@ -207,10 +207,85 @@ def send_welcome_pack_email(recipient_email, recipient_name, role, company_data,
         return False
 
 
-def send_email_notification(subject, body, recipient_email):
-    """Send a plain text email notification."""
+def send_owner_welcome_email(user_email, username):
+    """Send welcome email to a newly signed-up marketplace/company owner."""
     try:
-        html = f"<pre>{body}</pre>"
+        html_content = render_template(
+            'owner_welcome_email.html',
+            username=username,
+            year=datetime.now(timezone.utc).year,
+            dashboard_url=DASHBOARD_URL,
+            terms_url="https://kwamz-ai.com/terms",
+        )
+        return _send_email(
+            f"Welcome to Kwamz-AI, {username}!",
+            html_content,
+            user_email,
+        )
+    except Exception as e:
+        logger.warning(f"Failed to send owner welcome email: {str(e)}")
+        return False
+
+
+def send_ownership_claim_result_email(recipient_email, company_name, approved):
+    """Notify a claimant that an admin approved or rejected their ownership claim."""
+    try:
+        html_content = render_template(
+            'ownership_claim_result_email.html',
+            company_name=company_name,
+            approved=approved,
+            dashboard_url=DASHBOARD_URL,
+            support_email="support@kwamz-ai.com",
+            year=datetime.now(timezone.utc).year,
+        )
+        subject = f"Your ownership claim for {company_name} was {'approved' if approved else 'not approved'}"
+        return _send_email(subject, html_content, recipient_email)
+    except Exception as e:
+        logger.warning(f"Failed to send ownership claim result email: {str(e)}")
+        return False
+
+
+def send_marketplace_bid_notification_email(recipient_email, kind, company_name, amount, message=None):
+    """
+    Notify a marketplace participant about bid activity.
+    kind: 'new_bid' | 'counter' | 'accepted' | 'rejected'
+    """
+    try:
+        html_content = render_template(
+            'marketplace_bid_notification_email.html',
+            kind=kind,
+            company_name=company_name,
+            amount=amount,
+            message=message,
+            dashboard_url=DASHBOARD_URL,
+            year=datetime.now(timezone.utc).year,
+        )
+        subject_map = {
+            'new_bid': f"New offer received on {company_name}",
+            'counter': f"Counter-offer on {company_name}",
+            'accepted': f"Your offer on {company_name} was accepted",
+            'rejected': f"Your offer on {company_name} was declined",
+        }
+        subject = subject_map.get(kind, f"Marketplace update: {company_name}")
+        return _send_email(subject, html_content, recipient_email)
+    except Exception as e:
+        logger.warning(f"Failed to send marketplace bid notification email: {str(e)}")
+        return False
+
+
+def send_email_notification(subject, body, recipient_email):
+    """Send a templated email notification from a plain text body."""
+    try:
+        paragraphs = [p.strip() for p in body.split("\n\n") if p.strip()]
+        html = render_template(
+            'notice_email.html',
+            subject=subject,
+            title=subject,
+            paragraphs=paragraphs,
+            details=None,
+            cta_url=None,
+            year=datetime.now(timezone.utc).year,
+        )
         return _send_email(subject, html, recipient_email)
     except Exception as e:
         logger.warning(f"Error sending email: {e}")
@@ -306,22 +381,24 @@ def send_session_timeout_email(recipient_email: str) -> bool:
     """Send session timeout notification email."""
     try:
         subject = f"Session Timed Out - Action Required ({datetime.now().strftime('%d/%m/%Y')})"
-        body = (
-            "Hello,\n\n"
-            "This is to inform you that your current session has timed out due to inactivity "
-            "or session expiry.\n\n"
-            "For security reasons, the system automatically ends sessions after a defined "
-            "period. As a result, you are no longer authenticated and cannot continue with "
-            "the current session.\n\n"
-            "Please log out (if applicable) and log in again to start a new session and "
-            "continue using the system.\n\n"
-            "If you continue to experience this issue after re-logging in, kindly contact "
-            "the support team for assistance.\n\n"
-            "Thank you for your understanding.\n\n"
-            "Kind regards,\n"
-            "System Administration Team"
+        html = render_template(
+            'notice_email.html',
+            subject=subject,
+            title="Your session has timed out",
+            tagline="Security Notification",
+            paragraphs=[
+                "This is to inform you that your current session has timed out due to inactivity or session expiry.",
+                "For security reasons, the system automatically ends sessions after a defined period. As a result, "
+                "you are no longer authenticated and cannot continue with the current session.",
+                "Please log out (if applicable) and log in again to start a new session and continue using the system.",
+                "If you continue to experience this issue after re-logging in, kindly contact the support team for assistance.",
+            ],
+            details=None,
+            cta_url=DASHBOARD_URL,
+            cta_label="Log In Again",
+            year=datetime.now(timezone.utc).year,
         )
-        return _send_email(subject, f"<pre>{body}</pre>", recipient_email)
+        return _send_email(subject, html, recipient_email)
     except Exception as e:
         logger.warning(f"Failed to send session timeout email: {str(e)}")
         return False
@@ -331,20 +408,29 @@ def send_not_active_short_code_(recipient_email: str, business_name: str, busine
     """Send notification about non-active company."""
     try:
         subject = f"Detection of Non Active Company - Action Required ({datetime.now().strftime('%d/%m/%Y')})"
-        body = f"""Hello,
-
-This is to inform you that the agent {business_name} business with shortcode {business_short_code} and company shortcode {company_code} is of the status {status}.
-
-It is standard procedure to inform you that the agent is not active as at {datetime.now().strftime('%d/%m/%Y %H:%M:%S')}.
-
-Please ignore this if the necessary measures have been put in place about this specific agent.
-
-Thank you for your support.
-
-Kind regards,
-System Administration Team"""
-
-        return _send_email(subject, f"<pre>{body}</pre>", recipient_email)
+        html = render_template(
+            'notice_email.html',
+            subject=subject,
+            title="Non-active company detected",
+            tagline="Monitoring Alert",
+            paragraphs=[
+                f"This is to inform you that the agent {business_name} business with shortcode {business_short_code} "
+                f"and company shortcode {company_code} is of the status {status}.",
+                f"It is standard procedure to inform you that the agent is not active as at "
+                f"{datetime.now().strftime('%d/%m/%Y %H:%M:%S')}.",
+                "Please ignore this if the necessary measures have been put in place about this specific agent.",
+            ],
+            details=[
+                ("Business Name", business_name),
+                ("Shortcode", business_short_code),
+                ("Company Code", company_code),
+                ("Status", status),
+            ],
+            cta_url=DASHBOARD_URL,
+            cta_label="View Dashboard",
+            year=datetime.now(timezone.utc).year,
+        )
+        return _send_email(subject, html, recipient_email)
     except Exception as e:
         logger.warning(f"Failed to send notification email: {str(e)}")
         return False
